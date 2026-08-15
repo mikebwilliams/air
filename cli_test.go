@@ -29,6 +29,7 @@ func TestCLIInitScanAndQueries(t *testing.T) {
 		}
 		content, _ := json.Marshal(output)
 		return JSONResponse(t, map[string]any{
+			"usage": chatUsage(100, 25, 20, 5),
 			"choices": []any{map[string]any{
 				"message":       map[string]any{"role": "assistant", "content": string(content)},
 				"finish_reason": "stop",
@@ -36,9 +37,12 @@ func TestCLIInitScanAndQueries(t *testing.T) {
 		}), nil
 	})}
 	values := map[string]string{
-		"AIR_MODEL":    "test-model",
-		"AIR_BASE_URL": "https://model.example/v1",
-		"AIR_API_KEY":  "secret",
+		"AIR_MODEL":                        "test-model",
+		"AIR_BASE_URL":                     "https://model.example/v1",
+		"AIR_API_KEY":                      "secret",
+		"AIR_INPUT_USD_PER_MILLION":        "10",
+		"AIR_CACHED_INPUT_USD_PER_MILLION": "1",
+		"AIR_OUTPUT_USD_PER_MILLION":       "20",
 	}
 	environment := cliEnvironment{
 		Cwd:        directory,
@@ -78,6 +82,8 @@ func TestCLIInitScanAndQueries(t *testing.T) {
 		t.Fatalf("show: %v", err)
 	}
 	if !strings.Contains(stdout.String(), "Model: test-model") ||
+		!strings.Contains(stdout.String(), "Tokens: 120 total (100 input, 25 cached input, 20 output, 5 reasoning output)") ||
+		!strings.Contains(stdout.String(), "Estimated cost: $0.001175 USD") ||
 		!strings.Contains(stdout.String(), "Reviewed app.txt.") ||
 		!strings.Contains(stdout.String(), "#1 warning") {
 		t.Fatalf("show output:\n%s", stdout.String())
@@ -139,7 +145,9 @@ func TestCLIScanDefaultsToCodex(t *testing.T) {
 		t.Fatalf("show: %v", err)
 	}
 	if !strings.Contains(stdout.String(), "Model: test-codex-model") ||
-		!strings.Contains(stdout.String(), "Reasoning effort: low") {
+		!strings.Contains(stdout.String(), "Reasoning effort: low") ||
+		!strings.Contains(stdout.String(), "Tokens: 15 total (10 input, 4 cached input, 5 output, 2 reasoning output)") ||
+		!strings.Contains(stdout.String(), "Estimated cost: unavailable") {
 		t.Fatalf("show output lacks review identity:\n%s", stdout.String())
 	}
 }

@@ -154,7 +154,12 @@ CREATE TABLE commits (
     reasoning_effort TEXT,
     prompt_version  TEXT,
     summary         TEXT,
-    raw_response    TEXT
+    raw_response    TEXT,
+    input_tokens            INTEGER,
+    cached_input_tokens     INTEGER,
+    output_tokens           INTEGER,
+    reasoning_output_tokens INTEGER,
+    estimated_cost_microusd INTEGER
 );
 ```
 
@@ -173,9 +178,23 @@ Fields:
 - `summary`: short human-readable review log; null for a skipped commit.
 - `raw_response`: complete raw model response for debugging and
   reproducibility; null for a skipped commit.
+- `input_tokens`: total input tokens reported by the reviewer, including
+  cached input tokens; null for a skipped commit.
+- `cached_input_tokens`: cached subset of `input_tokens`; null for a skipped
+  commit.
+- `output_tokens`: total output tokens reported by the reviewer, including
+  reasoning output tokens; null for a skipped commit.
+- `reasoning_output_tokens`: reasoning subset of `output_tokens`; null for a
+  skipped commit.
+- `estimated_cost_microusd`: optional estimated cost rounded to millionths of
+  a US dollar; null when pricing was not configured or for a skipped commit.
 
 A skipped commit remains in the table so later scans do not retry it
 automatically.
+
+Token usage and estimated cost are properties of the single stored review for
+a commit. If a future rescan replaces that review, it replaces these values as
+well; usage is not accumulated and no separate accounting history is kept.
 
 ### 5.3 `findings`
 
@@ -766,6 +785,9 @@ AIR_BASE_URL
 AIR_API_KEY
 AIR_API_KEY_ENV
 OPENAI_API_KEY
+AIR_INPUT_USD_PER_MILLION
+AIR_CACHED_INPUT_USD_PER_MILLION
+AIR_OUTPUT_USD_PER_MILLION
 ```
 
 `AIR_REVIEWER` defaults to `codex`. `AIR_CODEX_BIN` defaults to `codex`, and
@@ -787,6 +809,9 @@ The corresponding scan flags are:
 --codex-timeout
 --base-url
 --api-key-env
+--input-usd-per-million
+--cached-input-usd-per-million
+--output-usd-per-million
 ```
 
 The `http` reviewer remains as an explicit fallback. For that backend,
@@ -794,6 +819,29 @@ The `http` reviewer remains as an explicit fallback. For that backend,
 name a different key variable; and `OPENAI_API_KEY` is the final key fallback.
 The HTTP reviewer requires `AIR_MODEL` and an API key and uses an
 OpenAI-compatible `/chat/completions` endpoint with function tool calls.
+
+Both reviewers must report token usage. AIR records input, cached-input,
+output, and reasoning-output counts for every reviewed commit. HTTP usage is
+summed across all tool-call and repair rounds for that commit. A Codex JSONL
+review uses the usage in its final `turn.completed` event.
+
+Neither backend reports an authoritative monetary charge. In particular,
+Codex authenticated through a ChatGPT account consumes plan limits or credits,
+not a distinct per-run USD bill. AIR therefore estimates USD cost only when
+all three rates are explicitly configured through:
+
+```text
+AIR_INPUT_USD_PER_MILLION
+AIR_CACHED_INPUT_USD_PER_MILLION
+AIR_OUTPUT_USD_PER_MILLION
+```
+
+The three corresponding flags are listed above. Cost is calculated as
+uncached input at the input rate, cached input at the cached-input rate, and
+all output at the output rate. Reasoning output is already included in output
+and is not added again. Prices are not hard-coded because they vary by model,
+account arrangement, and time. Without a complete set of rates, cost remains
+null and `air show` reports it as unavailable.
 
 No model-specific behavior is embedded into the database schema. A Codex
 review records the exact supplied model identifier and reasoning effort. The

@@ -110,7 +110,7 @@ func TestCodexHelperProcess(t *testing.T) {
 		os.Exit(96)
 	}
 	fmt.Fprintln(os.Stdout, `{"type":"thread.started","thread_id":"test"}`)
-	fmt.Fprintln(os.Stdout, `{"type":"turn.completed","usage":{"input_tokens":10,"output_tokens":5}}`)
+	fmt.Fprintln(os.Stdout, `{"type":"turn.completed","usage":{"input_tokens":10,"cached_input_tokens":4,"output_tokens":5,"reasoning_output_tokens":2}}`)
 	os.Exit(0)
 }
 
@@ -202,9 +202,33 @@ func TestCodexReviewerRunsReadOnlyEphemeralCommitReview(t *testing.T) {
 	if !strings.Contains(result.RawResponse, `"turn.completed"`) {
 		t.Fatalf("raw response = %q", result.RawResponse)
 	}
+	if result.Usage == nil || *result.Usage != (TokenUsage{10, 4, 5, 2}) {
+		t.Fatalf("usage = %+v", result.Usage)
+	}
 	entries, err := os.ReadDir(temporaryRoot)
 	if err != nil || len(entries) != 0 {
 		t.Fatalf("temporary files remain: %v, %v", entries, err)
+	}
+}
+
+func TestParseCodexTokenUsageUsesLatestCompletedTurn(t *testing.T) {
+	usage, err := parseCodexTokenUsage([]byte(strings.Join([]string{
+		`{"type":"thread.started","thread_id":"test"}`,
+		`{"type":"turn.completed","usage":{"input_tokens":10,"cached_input_tokens":4,"output_tokens":5,"reasoning_output_tokens":2}}`,
+		`{"type":"turn.completed","usage":{"input_tokens":20,"cached_input_tokens":8,"output_tokens":7,"reasoning_output_tokens":3}}`,
+	}, "\n")))
+	if err != nil {
+		t.Fatalf("parseCodexTokenUsage: %v", err)
+	}
+	if usage != (TokenUsage{20, 8, 7, 3}) {
+		t.Fatalf("usage = %+v", usage)
+	}
+}
+
+func TestParseCodexTokenUsageRequiresCompletedTurn(t *testing.T) {
+	_, err := parseCodexTokenUsage([]byte(`{"type":"thread.started","thread_id":"test"}`))
+	if err == nil || !strings.Contains(err.Error(), "no turn.completed token usage") {
+		t.Fatalf("parse error = %v", err)
 	}
 }
 

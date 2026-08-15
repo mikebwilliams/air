@@ -44,6 +44,7 @@ func TestHTTPReviewerUsesReadOnlyToolAndParsesResult(t *testing.T) {
 		}
 		if callCount == 1 {
 			return JSONResponse(t, map[string]any{
+				"usage": chatUsage(100, 40, 15, 5),
 				"choices": []any{map[string]any{
 					"message": map[string]any{
 						"role":    "assistant",
@@ -84,6 +85,7 @@ func TestHTTPReviewerUsesReadOnlyToolAndParsesResult(t *testing.T) {
 		}
 		content, _ := json.Marshal(final)
 		return JSONResponse(t, map[string]any{
+			"usage": chatUsage(80, 20, 10, 2),
 			"choices": []any{map[string]any{
 				"message": map[string]any{
 					"role":    "assistant",
@@ -114,6 +116,9 @@ func TestHTTPReviewerUsesReadOnlyToolAndParsesResult(t *testing.T) {
 	}
 	if len(result.Output.NewFindings) != 1 || result.Output.NewFindings[0].Title != "state regression" {
 		t.Fatalf("unexpected output: %+v", result.Output)
+	}
+	if result.Usage == nil || *result.Usage != (TokenUsage{180, 60, 25, 7}) {
+		t.Fatalf("usage = %+v", result.Usage)
 	}
 	var transcript []json.RawMessage
 	if err := json.Unmarshal([]byte(result.RawResponse), &transcript); err != nil || len(transcript) != 2 {
@@ -164,6 +169,7 @@ func TestHTTPReviewerRepairsInvalidFindingResolution(t *testing.T) {
 		content, _ := json.Marshal(responses[callCount])
 		callCount++
 		return JSONResponse(t, map[string]any{
+			"usage": chatUsage(50, 10, 8, 2),
 			"choices": []any{map[string]any{
 				"message":       map[string]any{"role": "assistant", "content": string(content)},
 				"finish_reason": "stop",
@@ -226,5 +232,18 @@ func JSONResponse(t *testing.T, value any) *http.Response {
 		StatusCode: http.StatusOK,
 		Header:     make(http.Header),
 		Body:       io.NopCloser(bytes.NewReader(data)),
+	}
+}
+
+func chatUsage(prompt, cached, completion, reasoning int64) map[string]any {
+	return map[string]any{
+		"prompt_tokens":     prompt,
+		"completion_tokens": completion,
+		"prompt_tokens_details": map[string]any{
+			"cached_tokens": cached,
+		},
+		"completion_tokens_details": map[string]any{
+			"reasoning_tokens": reasoning,
+		},
 	}
 }

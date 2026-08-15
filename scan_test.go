@@ -52,6 +52,7 @@ func TestScanRepositoryLifecycleSkipsAndResume(t *testing.T) {
 					Summary:          "Reviewed the bug.",
 				},
 				RawResponse: "[]",
+				Usage:       &TokenUsage{InputTokens: 10, OutputTokens: 2},
 			}, nil
 		case 2:
 			if input.Commit.SHA != second || len(input.OpenFindings) != 1 {
@@ -67,6 +68,7 @@ func TestScanRepositoryLifecycleSkipsAndResume(t *testing.T) {
 					Summary: "Reviewed the fix.",
 				},
 				RawResponse: "[]",
+				Usage:       &TokenUsage{InputTokens: 12, OutputTokens: 3},
 			}, nil
 		default:
 			t.Fatalf("unexpected reviewer call %d", len(reviewer.calls))
@@ -239,5 +241,6 @@ func cleanReview(summary string) ReviewResult {
 			Summary:          summary,
 		},
 		RawResponse: "[]",
+		Usage:       &TokenUsage{InputTokens: 10, OutputTokens: 2},
 	}
 }

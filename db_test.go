@@ -33,6 +33,13 @@ func TestStoreFindingLifecycleAndCleanupForeignKeys(t *testing.T) {
 			Summary:          "Reviewed the state transition.",
 		},
 		RawResponse: "{\"response\":\"a\"}",
+		Usage: &TokenUsage{
+			InputTokens:           100,
+			CachedInputTokens:     40,
+			OutputTokens:          20,
+			ReasoningOutputTokens: 5,
+		},
+		EstimatedCostMicrousd: int64Pointer(37),
 	}, now)
 	if err != nil {
 		t.Fatalf("ApplyReview A: %v", err)
@@ -46,6 +53,12 @@ func TestStoreFindingLifecycleAndCleanupForeignKeys(t *testing.T) {
 	}
 	if record.Model != "test-model" || record.ReasoningEffort != "low" {
 		t.Fatalf("review identity = model %q, effort %q", record.Model, record.ReasoningEffort)
+	}
+	if record.Usage == nil || *record.Usage != (TokenUsage{100, 40, 20, 5}) {
+		t.Fatalf("review usage = %+v", record.Usage)
+	}
+	if record.EstimatedCostMicrousd == nil || *record.EstimatedCostMicrousd != 37 {
+		t.Fatalf("estimated cost = %v", record.EstimatedCostMicrousd)
 	}
 	open, err := store.OpenFindings(ctx)
 	if err != nil || len(open) != 1 {
@@ -63,6 +76,7 @@ func TestStoreFindingLifecycleAndCleanupForeignKeys(t *testing.T) {
 			Summary: "Reviewed the fix.",
 		},
 		RawResponse: "{\"response\":\"b\"}",
+		Usage:       &TokenUsage{InputTokens: 80, OutputTokens: 10},
 	}, now.Add(time.Minute))
 	if err != nil {
 		t.Fatalf("ApplyReview B: %v", err)
@@ -121,6 +135,7 @@ func TestApplyReviewRollsBackWholeCommit(t *testing.T) {
 			Summary: "Invalid mixed update.",
 		},
 		RawResponse: "{}",
+		Usage:       &TokenUsage{InputTokens: 1, OutputTokens: 1},
 	}, time.Now())
 	if err == nil {
 		t.Fatal("ApplyReview unexpectedly succeeded")

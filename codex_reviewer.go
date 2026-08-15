@@ -1,8 +1,10 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -142,6 +144,13 @@ func (r *CodexReviewer) Review(ctx context.Context, input ReviewInput) (ReviewRe
 	if err := validateReviewOutput(output, allowedResolutions); err != nil {
 		return ReviewResult{}, fmt.Errorf("validate Codex result: %w", err)
 	}
+	if stdout.exceeded {
+		return ReviewResult{}, errors.New("Codex transcript exceeded the limit before token usage could be recorded")
+	}
+	usage, err := parseCodexTokenUsage(stdout.data.Bytes())
+	if err != nil {
+		return ReviewResult{}, err
+	}
 
 	return ReviewResult{
 		Output: output,
@@ -149,7 +158,58 @@ func (r *CodexReviewer) Review(ctx context.Context, input ReviewInput) (ReviewRe
 			data:     stdout.data.Bytes(),
 			exceeded: stdout.exceeded,
 		}),
+		Usage: &usage,
 	}, nil
+}
+
+func parseCodexTokenUsage(transcript []byte) (TokenUsage, error) {
+	type wireTokenUsage struct {
+		InputTokens           int64 `json:"input_tokens"`
+		CachedInputTokens     int64 `json:"cached_input_tokens"`
+		OutputTokens          int64 `json:"output_tokens"`
+		ReasoningOutputTokens int64 `json:"reasoning_output_tokens"`
+	}
+	type wireEvent struct {
+		Type  string          `json:"type"`
+		Usage *wireTokenUsage `json:"usage"`
+	}
+
+	var latest *TokenUsage
+	scanner := bufio.NewScanner(bytes.NewReader(transcript))
+	scanner.Buffer(make([]byte, 64*1024), maxCodexTranscriptBytes)
+	for scanner.Scan() {
+		line := bytes.TrimSpace(scanner.Bytes())
+		if len(line) == 0 {
+			continue
+		}
+		var event wireEvent
+		if err := json.Unmarshal(line, &event); err != nil {
+			return TokenUsage{}, fmt.Errorf("decode Codex JSON event: %w", err)
+		}
+		if event.Type != "turn.completed" {
+			continue
+		}
+		if event.Usage == nil {
+			return TokenUsage{}, errors.New("Codex turn.completed event omitted token usage")
+		}
+		candidate := TokenUsage{
+			InputTokens:           event.Usage.InputTokens,
+			CachedInputTokens:     event.Usage.CachedInputTokens,
+			OutputTokens:          event.Usage.OutputTokens,
+			ReasoningOutputTokens: event.Usage.ReasoningOutputTokens,
+		}
+		if err := validateTokenUsage(candidate); err != nil {
+			return TokenUsage{}, fmt.Errorf("invalid Codex token usage: %w", err)
+		}
+		latest = &candidate
+	}
+	if err := scanner.Err(); err != nil {
+		return TokenUsage{}, fmt.Errorf("read Codex JSON events: %w", err)
+	}
+	if latest == nil {
+		return TokenUsage{}, errors.New("Codex output contained no turn.completed token usage")
+	}
+	return *latest, nil
 }
 
 func readLimitedFile(filename string, maximum int64) ([]byte, error) {

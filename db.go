@@ -35,10 +35,25 @@ CREATE TABLE commits (
     prompt_version  TEXT,
     summary         TEXT,
     raw_response    TEXT,
+	input_tokens            INTEGER CHECK(input_tokens IS NULL OR input_tokens >= 0),
+	cached_input_tokens     INTEGER CHECK(cached_input_tokens IS NULL OR cached_input_tokens >= 0),
+	output_tokens           INTEGER CHECK(output_tokens IS NULL OR output_tokens >= 0),
+	reasoning_output_tokens INTEGER CHECK(reasoning_output_tokens IS NULL OR reasoning_output_tokens >= 0),
+	estimated_cost_microusd INTEGER CHECK(estimated_cost_microusd IS NULL OR estimated_cost_microusd >= 0),
     CHECK(
         (status = 'reviewed' AND skip_reason IS NULL) OR
         (status = 'skipped' AND skip_reason IS NOT NULL)
-    )
+	),
+	CHECK(
+		(status = 'reviewed' AND input_tokens IS NOT NULL AND
+		 cached_input_tokens IS NOT NULL AND output_tokens IS NOT NULL AND
+		 reasoning_output_tokens IS NOT NULL) OR
+		(status = 'skipped' AND input_tokens IS NULL AND
+		 cached_input_tokens IS NULL AND output_tokens IS NULL AND
+		 reasoning_output_tokens IS NULL AND estimated_cost_microusd IS NULL)
+	),
+	CHECK(cached_input_tokens IS NULL OR cached_input_tokens <= input_tokens),
+	CHECK(reasoning_output_tokens IS NULL OR reasoning_output_tokens <= output_tokens)
 );
 
 CREATE TABLE findings (
@@ -311,6 +326,15 @@ func (s *Store) ApplyReview(
 	if strings.TrimSpace(identity.Model) == "" {
 		return nil, errors.New("review model must not be empty")
 	}
+	if result.Usage == nil {
+		return nil, errors.New("review token usage must be present")
+	}
+	if err := validateTokenUsage(*result.Usage); err != nil {
+		return nil, fmt.Errorf("invalid review token usage: %w", err)
+	}
+	if result.EstimatedCostMicrousd != nil && *result.EstimatedCostMicrousd < 0 {
+		return nil, errors.New("estimated review cost must not be negative")
+	}
 	if err := validateReviewOutput(result.Output, nil); err != nil {
 		return nil, err
 	}
@@ -323,8 +347,10 @@ func (s *Store) ApplyReview(
 	_, err = tx.ExecContext(ctx, `
         INSERT INTO commits(
             sha, parent_sha, processed_at, status, model, reasoning_effort,
-            prompt_version, summary, raw_response
-        ) VALUES(?, ?, ?, 'reviewed', ?, NULLIF(?, ''), ?, ?, ?)`,
+            prompt_version, summary, raw_response, input_tokens,
+			cached_input_tokens, output_tokens, reasoning_output_tokens,
+			estimated_cost_microusd
+        ) VALUES(?, ?, ?, 'reviewed', ?, NULLIF(?, ''), ?, ?, ?, ?, ?, ?, ?, ?)`,
 		metadata.SHA,
 		metadata.ParentSHA,
 		formatTime(now),
@@ -333,6 +359,11 @@ func (s *Store) ApplyReview(
 		promptVersion,
 		result.Output.Summary,
 		result.RawResponse,
+		result.Usage.InputTokens,
+		result.Usage.CachedInputTokens,
+		result.Usage.OutputTokens,
+		result.Usage.ReasoningOutputTokens,
+		nullableInt64(result.EstimatedCostMicrousd),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("record review for %s: %w", shortSHA(metadata.SHA), err)
@@ -404,6 +435,8 @@ func (s *Store) Commit(ctx context.Context, sha string) (CommitRecord, error) {
         SELECT
             c.sha, c.parent_sha, c.processed_at, c.status, c.skip_reason,
             c.model, c.reasoning_effort, c.prompt_version, c.summary, c.raw_response,
+			c.input_tokens, c.cached_input_tokens, c.output_tokens,
+			c.reasoning_output_tokens, c.estimated_cost_microusd,
             (SELECT COUNT(*) FROM findings f WHERE f.introduced_sha = c.sha),
             (SELECT COUNT(*) FROM findings f WHERE f.resolved_sha = c.sha)
         FROM commits c WHERE c.sha = ?`, sha)
@@ -422,6 +455,8 @@ func (s *Store) Log(ctx context.Context) ([]CommitRecord, error) {
         SELECT
             c.sha, c.parent_sha, c.processed_at, c.status, c.skip_reason,
             c.model, c.reasoning_effort, c.prompt_version, c.summary, c.raw_response,
+			c.input_tokens, c.cached_input_tokens, c.output_tokens,
+			c.reasoning_output_tokens, c.estimated_cost_microusd,
             (SELECT COUNT(*) FROM findings f WHERE f.introduced_sha = c.sha),
             (SELECT COUNT(*) FROM findings f WHERE f.resolved_sha = c.sha)
         FROM commits c ORDER BY c.processed_at DESC, c.sha DESC`)
@@ -451,6 +486,7 @@ func scanCommitRecord(row rowScanner) (CommitRecord, error) {
 	var record CommitRecord
 	var processedAt string
 	var parent, skipReason, model, effort, version, summary, raw sql.NullString
+	var inputTokens, cachedInputTokens, outputTokens, reasoningOutputTokens, estimatedCost sql.NullInt64
 	err := row.Scan(
 		&record.SHA,
 		&parent,
@@ -462,6 +498,11 @@ func scanCommitRecord(row rowScanner) (CommitRecord, error) {
 		&version,
 		&summary,
 		&raw,
+		&inputTokens,
+		&cachedInputTokens,
+		&outputTokens,
+		&reasoningOutputTokens,
+		&estimatedCost,
 		&record.NewCount,
 		&record.ResolvedCount,
 	)
@@ -475,6 +516,17 @@ func scanCommitRecord(row rowScanner) (CommitRecord, error) {
 	record.PromptVersion = version.String
 	record.Summary = summary.String
 	record.RawResponse = raw.String
+	if inputTokens.Valid && cachedInputTokens.Valid && outputTokens.Valid && reasoningOutputTokens.Valid {
+		record.Usage = &TokenUsage{
+			InputTokens:           inputTokens.Int64,
+			CachedInputTokens:     cachedInputTokens.Int64,
+			OutputTokens:          outputTokens.Int64,
+			ReasoningOutputTokens: reasoningOutputTokens.Int64,
+		}
+	}
+	if estimatedCost.Valid {
+		record.EstimatedCostMicrousd = int64Pointer(estimatedCost.Int64)
+	}
 	record.ProcessedAt, err = time.Parse(time.RFC3339Nano, processedAt)
 	if err != nil {
 		return CommitRecord{}, fmt.Errorf("parse processed timestamp: %w", err)
@@ -531,6 +583,17 @@ func nullableInt(value *int) any {
 		return nil
 	}
 	return *value
+}
+
+func nullableInt64(value *int64) any {
+	if value == nil {
+		return nil
+	}
+	return *value
+}
+
+func int64Pointer(value int64) *int64 {
+	return &value
 }
 
 func stringPointer(value string) *string {

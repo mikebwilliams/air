@@ -72,6 +72,16 @@ type chatResponse struct {
 		Message string `json:"message"`
 		Type    string `json:"type"`
 	} `json:"error,omitempty"`
+	Usage *struct {
+		PromptTokens     int64 `json:"prompt_tokens"`
+		CompletionTokens int64 `json:"completion_tokens"`
+		PromptDetails    struct {
+			CachedTokens int64 `json:"cached_tokens"`
+		} `json:"prompt_tokens_details"`
+		CompletionDetails struct {
+			ReasoningTokens int64 `json:"reasoning_tokens"`
+		} `json:"completion_tokens_details"`
+	} `json:"usage"`
 }
 
 func (r *HTTPReviewer) Review(ctx context.Context, input ReviewInput) (ReviewResult, error) {
@@ -108,6 +118,7 @@ func (r *HTTPReviewer) Review(ctx context.Context, input ReviewInput) (ReviewRes
 		client = &http.Client{Timeout: 2 * time.Minute}
 	}
 	var rawResponses []json.RawMessage
+	var totalUsage TokenUsage
 	repairAttempted := false
 
 	for round := 0; round < maxRounds; round++ {
@@ -116,6 +127,19 @@ func (r *HTTPReviewer) Review(ctx context.Context, input ReviewInput) (ReviewRes
 			return ReviewResult{}, err
 		}
 		rawResponses = append(rawResponses, append(json.RawMessage(nil), raw...))
+		if response.Usage == nil {
+			return ReviewResult{}, errors.New("model response omitted token usage")
+		}
+		responseUsage := TokenUsage{
+			InputTokens:           response.Usage.PromptTokens,
+			CachedInputTokens:     response.Usage.PromptDetails.CachedTokens,
+			OutputTokens:          response.Usage.CompletionTokens,
+			ReasoningOutputTokens: response.Usage.CompletionDetails.ReasoningTokens,
+		}
+		totalUsage, err = addTokenUsage(totalUsage, responseUsage)
+		if err != nil {
+			return ReviewResult{}, fmt.Errorf("invalid model token usage: %w", err)
+		}
 		if len(response.Choices) == 0 {
 			return ReviewResult{}, errors.New("model response contained no choices")
 		}
@@ -152,7 +176,7 @@ func (r *HTTPReviewer) Review(ctx context.Context, input ReviewInput) (ReviewRes
 			if marshalErr != nil {
 				return ReviewResult{}, fmt.Errorf("encode raw model responses: %w", marshalErr)
 			}
-			return ReviewResult{Output: output, RawResponse: string(rawTranscript)}, nil
+			return ReviewResult{Output: output, RawResponse: string(rawTranscript), Usage: &totalUsage}, nil
 		}
 		if repairAttempted {
 			return ReviewResult{}, fmt.Errorf("invalid model output after repair: %w", err)

@@ -118,6 +118,9 @@ func runScan(ctx context.Context, args []string, environment cliEnvironment) err
 	}
 	baseURL := flags.String("base-url", baseURLDefault, "OpenAI-compatible API base URL")
 	apiKeyEnv := flags.String("api-key-env", environment.Getenv("AIR_API_KEY_ENV"), "environment variable containing the API key")
+	inputPrice := flags.String("input-usd-per-million", environment.Getenv("AIR_INPUT_USD_PER_MILLION"), "estimated USD price per million uncached input tokens")
+	cachedInputPrice := flags.String("cached-input-usd-per-million", environment.Getenv("AIR_CACHED_INPUT_USD_PER_MILLION"), "estimated USD price per million cached input tokens")
+	outputPrice := flags.String("output-usd-per-million", environment.Getenv("AIR_OUTPUT_USD_PER_MILLION"), "estimated USD price per million output tokens")
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
@@ -129,6 +132,10 @@ func runScan(ctx context.Context, args []string, environment cliEnvironment) err
 	}
 	if *limit < 0 {
 		return errors.New("--limit must not be negative")
+	}
+	pricing, err := parsePricing(*inputPrice, *cachedInputPrice, *outputPrice)
+	if err != nil {
+		return err
 	}
 	revisionRange := ""
 	if flags.NArg() == 1 {
@@ -189,6 +196,7 @@ func runScan(ctx context.Context, args []string, environment cliEnvironment) err
 	return scanRepository(ctx, repository, store, scanOptions{
 		RevisionRange: revisionRange,
 		Limit:         *limit,
+		Pricing:       pricing,
 		Output:        environment.Stdout,
 		Now:           environment.Now,
 		NewReviewer:   factory,
@@ -289,6 +297,22 @@ func runShow(ctx context.Context, args []string, environment cliEnvironment) err
 	fmt.Fprintf(environment.Stdout, "\nModel: %s\n", record.Model)
 	if record.ReasoningEffort != "" {
 		fmt.Fprintf(environment.Stdout, "Reasoning effort: %s\n", record.ReasoningEffort)
+	}
+	if record.Usage != nil {
+		fmt.Fprintf(
+			environment.Stdout,
+			"Tokens: %d total (%d input, %d cached input, %d output, %d reasoning output)\n",
+			totalTokens(*record.Usage),
+			record.Usage.InputTokens,
+			record.Usage.CachedInputTokens,
+			record.Usage.OutputTokens,
+			record.Usage.ReasoningOutputTokens,
+		)
+	}
+	if record.EstimatedCostMicrousd == nil {
+		fmt.Fprintln(environment.Stdout, "Estimated cost: unavailable (no pricing configured)")
+	} else {
+		fmt.Fprintf(environment.Stdout, "Estimated cost: $%.6f USD\n", float64(*record.EstimatedCostMicrousd)/1_000_000)
 	}
 	introduced, err := store.FindingsIntroducedBy(ctx, sha)
 	if err != nil {
@@ -399,5 +423,9 @@ Reviewer environment:
   AIR_BASE_URL       HTTP reviewer base URL (default: https://api.openai.com/v1)
   AIR_API_KEY        HTTP reviewer API key
   AIR_API_KEY_ENV    Name of another environment variable containing the API key
-  OPENAI_API_KEY     Fallback HTTP reviewer API key`)
+  OPENAI_API_KEY     Fallback HTTP reviewer API key
+  AIR_INPUT_USD_PER_MILLION
+  AIR_CACHED_INPUT_USD_PER_MILLION
+  AIR_OUTPUT_USD_PER_MILLION
+                     Optional prices used together for per-review USD estimates`)
 }

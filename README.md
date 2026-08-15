@@ -66,6 +66,24 @@ AIR passes both values explicitly to Codex and records them on every reviewed
 commit. The timeout applies independently to each commit and defaults to ten
 minutes. AIR does not read or copy Codex credentials.
 
+AIR records input, cached-input, output, and reasoning-output token counts from
+each review. Codex does not report a monetary charge, and a ChatGPT-account run
+does not have an authoritative per-run USD cost. To also store a USD estimate,
+configure all three current per-million-token prices:
+
+```bash
+export AIR_INPUT_USD_PER_MILLION=1.25
+export AIR_CACHED_INPUT_USD_PER_MILLION=0.125
+export AIR_OUTPUT_USD_PER_MILLION=10
+```
+
+The corresponding flags are `--input-usd-per-million`,
+`--cached-input-usd-per-million`, and `--output-usd-per-million`. These rates
+are deliberately supplied by the user rather than hard-coded, because model
+prices change. Cached tokens are removed from regular input before the two
+input rates are applied. Reasoning tokens are included in output tokens and are
+not charged twice. Without rates, the cost is stored as unknown.
+
 The original OpenAI-compatible HTTP reviewer remains available as an explicit
 fallback:
 
@@ -123,7 +141,8 @@ air show HEAD
 air finding 17
 ```
 
-`air show` includes the model and reasoning effort used for that commit.
+`air show` includes the model, reasoning effort, token usage, and estimated
+cost used for that commit.
 
 Run `air help` for the concise command reference.
 
