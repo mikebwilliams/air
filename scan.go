@@ -11,6 +11,7 @@ type reviewerFactory func() (Reviewer, ReviewIdentity, error)
 
 type scanOptions struct {
 	RevisionRange string
+	Limit         int
 	Output        io.Writer
 	Now           func() time.Time
 	NewReviewer   reviewerFactory
@@ -22,6 +23,9 @@ func scanRepository(
 	store *Store,
 	options scanOptions,
 ) error {
+	if options.Limit < 0 {
+		return fmt.Errorf("scan limit must not be negative")
+	}
 	lock, err := acquireScanLock(repository.LockPath())
 	if err != nil {
 		return err
@@ -53,6 +57,9 @@ func scanRepository(
 		if _, exists := processed[sha]; !exists {
 			remaining = append(remaining, sha)
 		}
+	}
+	if options.Limit > 0 && len(remaining) > options.Limit {
+		remaining = remaining[:options.Limit]
 	}
 	if len(remaining) == 0 {
 		fmt.Fprintln(options.Output, "No unprocessed commits.")

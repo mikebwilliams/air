@@ -310,6 +310,15 @@ air scan
 If 1,000 commits are eligible and 600 have already been processed, only the
 remaining commits are processed.
 
+One invocation may be bounded to the oldest `N` currently unprocessed commits:
+
+```bash
+air scan --limit N
+```
+
+The default is `--limit 0`, meaning unlimited. Commits recorded as skipped
+count toward the limit because they are processed for resumability.
+
 ## 8. Commit Review
 
 For each commit, use its first parent and obtain at minimum:

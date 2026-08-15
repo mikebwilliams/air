@@ -96,6 +96,15 @@ Review every unprocessed commit between the baseline and local `master`:
 air scan
 ```
 
+Process at most ten of those commits in this invocation:
+
+```bash
+air scan --limit 10
+```
+
+`--limit 0` is the default and means unlimited. The limit counts commits
+processed by AIR, including commits recorded as skipped.
+
 Review an explicit, possibly disjoint range:
 
 ```bash

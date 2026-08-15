@@ -94,6 +94,7 @@ func runScan(ctx context.Context, args []string, environment cliEnvironment) err
 		reviewerDefault = "codex"
 	}
 	reviewerName := flags.String("reviewer", reviewerDefault, "review backend: codex or http")
+	limit := flags.Int("limit", 0, "maximum commits to process; zero means unlimited")
 	model := flags.String("model", environment.Getenv("AIR_MODEL"), "model identifier")
 	effort := flags.String("effort", environment.Getenv("AIR_REASONING_EFFORT"), "Codex reasoning effort")
 	codexBinaryDefault := environment.Getenv("AIR_CODEX_BIN")
@@ -125,6 +126,9 @@ func runScan(ctx context.Context, args []string, environment cliEnvironment) err
 	}
 	if *codexTimeout <= 0 {
 		return errors.New("--codex-timeout must be positive")
+	}
+	if *limit < 0 {
+		return errors.New("--limit must not be negative")
 	}
 	revisionRange := ""
 	if flags.NArg() == 1 {
@@ -184,6 +188,7 @@ func runScan(ctx context.Context, args []string, environment cliEnvironment) err
 	}
 	return scanRepository(ctx, repository, store, scanOptions{
 		RevisionRange: revisionRange,
+		Limit:         *limit,
 		Output:        environment.Stdout,
 		Now:           environment.Now,
 		NewReviewer:   factory,
@@ -377,7 +382,7 @@ func printUsage(output io.Writer) {
 
 Usage:
   air init <commit-ish>
-  air scan [--reviewer codex|http] --model MODEL [--effort EFFORT] [<from>..<to>]
+  air scan [--limit N] [--reviewer codex|http] --model MODEL [--effort EFFORT] [<from>..<to>]
   air status
   air log
   air show <commit-ish>

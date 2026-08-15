@@ -178,6 +178,59 @@ func TestScanStopsAtFailureAndRetriesFailedCommit(t *testing.T) {
 	}
 }
 
+func TestScanLimitProcessesOldestCommitsAndResumes(t *testing.T) {
+	ctx := context.Background()
+	repository, directory := newTestGitRepository(t)
+	base := testCommitFile(t, directory, "app.txt", []byte("base\n"), "base")
+	first := testCommitFile(t, directory, "app.txt", []byte("first\n"), "first")
+	second := testCommitFile(t, directory, "app.txt", []byte("second\n"), "second")
+	third := testCommitFile(t, directory, "app.txt", []byte("third\n"), "third")
+	store, err := CreateStore(ctx, repository.DatabasePath(), base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	reviewer := &fakeReviewer{review: func(input ReviewInput) (ReviewResult, error) {
+		return cleanReview("Reviewed " + shortSHA(input.Commit.SHA) + "."), nil
+	}}
+	newReviewer := func() (Reviewer, ReviewIdentity, error) {
+		return reviewer, ReviewIdentity{Model: "fake-model", ReasoningEffort: "low"}, nil
+	}
+	if err := scanRepository(ctx, repository, store, scanOptions{
+		Limit:       2,
+		Output:      &bytes.Buffer{},
+		NewReviewer: newReviewer,
+	}); err != nil {
+		t.Fatalf("limited scan: %v", err)
+	}
+	if len(reviewer.calls) != 2 || reviewer.calls[0].Commit.SHA != first || reviewer.calls[1].Commit.SHA != second {
+		t.Fatalf("reviewed commits = %+v", reviewer.calls)
+	}
+	if _, err := store.Commit(ctx, third); err == nil {
+		t.Fatal("third commit was processed despite the limit")
+	}
+
+	if err := scanRepository(ctx, repository, store, scanOptions{
+		Limit:       2,
+		Output:      &bytes.Buffer{},
+		NewReviewer: newReviewer,
+	}); err != nil {
+		t.Fatalf("resumed scan: %v", err)
+	}
+	if len(reviewer.calls) != 3 || reviewer.calls[2].Commit.SHA != third {
+		t.Fatalf("reviewed commits after resume = %+v", reviewer.calls)
+	}
+}
+
+func TestScanRejectsNegativeLimit(t *testing.T) {
+	repository, _ := newTestGitRepository(t)
+	err := scanRepository(context.Background(), repository, nil, scanOptions{Limit: -1})
+	if err == nil || !strings.Contains(err.Error(), "limit must not be negative") {
+		t.Fatalf("scan error = %v", err)
+	}
+}
+
 func cleanReview(summary string) ReviewResult {
 	return ReviewResult{
 		Output: ReviewOutput{
