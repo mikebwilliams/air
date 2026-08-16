@@ -1,12 +1,15 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"errors"
 	"flag"
 	"fmt"
 	"io"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -38,6 +41,10 @@ func runCLI(ctx context.Context, args []string, environment cliEnvironment) erro
 		return runScan(ctx, args[1:], environment)
 	case "pending":
 		return runPending(ctx, args[1:], environment)
+	case "clean":
+		return runClean(ctx, args[1:], environment)
+	case "reset":
+		return runReset(ctx, args[1:], environment)
 	case "config":
 		return runConfig(ctx, args[1:], environment)
 	case "status":
@@ -469,6 +476,123 @@ func runPending(ctx context.Context, args []string, environment cliEnvironment) 
 	})
 }
 
+func runClean(ctx context.Context, args []string, environment cliEnvironment) error {
+	flags := newFlagSet("clean", environment.Stderr)
+	dryRun := flags.Bool("dry-run", false, "show stale commits without deleting them")
+	if err := flags.Parse(args); err != nil {
+		return err
+	}
+	if flags.NArg() != 0 {
+		return errors.New("usage: air clean [--dry-run]")
+	}
+	repository, store, closeStore, err := openRepositoryStore(ctx, environment.Cwd)
+	if err != nil {
+		return err
+	}
+	defer closeStore()
+	lock, err := acquireScanLock(repository.LockPath())
+	if err != nil {
+		return err
+	}
+	defer lock.Close()
+	history, err := repository.MasterHistory(ctx)
+	if err != nil {
+		return err
+	}
+	present := make(map[string]struct{}, len(history))
+	for _, sha := range history {
+		present[sha] = struct{}{}
+	}
+	stored, err := store.CommitSHAs(ctx)
+	if err != nil {
+		return err
+	}
+	stale := make([]string, 0)
+	for _, sha := range stored {
+		if _, exists := present[sha]; !exists {
+			stale = append(stale, sha)
+		}
+	}
+	if len(stale) == 0 {
+		fmt.Fprintln(environment.Stdout, "No stale commits.")
+		return nil
+	}
+	verb := "remove"
+	if *dryRun {
+		verb = "would remove"
+	}
+	for _, sha := range stale {
+		fmt.Fprintf(environment.Stdout, "%s  %s\n", shortSHA(sha), verb)
+	}
+	if *dryRun {
+		fmt.Fprintf(environment.Stdout, "Would remove %d stale commits.\n", len(stale))
+		return nil
+	}
+	deleted, err := store.DeleteCommits(ctx, stale)
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(environment.Stdout, "Removed %d stale commits.\n", deleted)
+	return nil
+}
+
+func runReset(ctx context.Context, args []string, environment cliEnvironment) error {
+	flags := newFlagSet("reset", environment.Stderr)
+	force := flags.Bool("force", false, "delete all AIR state without prompting")
+	if err := flags.Parse(args); err != nil {
+		return err
+	}
+	if flags.NArg() != 0 {
+		return errors.New("usage: air reset [--force]")
+	}
+	repository, err := DiscoverGitRepository(ctx, environment.Cwd)
+	if err != nil {
+		return err
+	}
+	stateDirectory := repository.StateDirectory()
+	if filepath.Dir(stateDirectory) != repository.CommonDir || filepath.Base(stateDirectory) != "air" {
+		return errors.New("refusing to reset an unexpected AIR state path")
+	}
+	info, err := os.Stat(stateDirectory)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			fmt.Fprintln(environment.Stdout, "AIR is not initialized.")
+			return nil
+		}
+		return fmt.Errorf("inspect AIR state directory: %w", err)
+	}
+	if !info.IsDir() {
+		return fmt.Errorf("AIR state path is not a directory: %s", stateDirectory)
+	}
+	if !*force {
+		if environment.Stdin == nil {
+			return errors.New("standard input is unavailable; pass --force to reset")
+		}
+		fmt.Fprintf(environment.Stdout, "Delete all AIR state in %s? [y/N] ", stateDirectory)
+		response, err := bufio.NewReader(environment.Stdin).ReadString('\n')
+		if err != nil && !errors.Is(err, io.EOF) {
+			return fmt.Errorf("read reset confirmation: %w", err)
+		}
+		response = strings.ToLower(strings.TrimSpace(response))
+		if response != "y" && response != "yes" {
+			fmt.Fprintln(environment.Stdout, "Reset cancelled.")
+			return nil
+		}
+	}
+	lock, err := acquireScanLock(repository.LockPath())
+	if err != nil {
+		return err
+	}
+	if err := lock.Close(); err != nil {
+		return fmt.Errorf("release AIR reset lock: %w", err)
+	}
+	if err := os.RemoveAll(stateDirectory); err != nil {
+		return fmt.Errorf("remove AIR state directory: %w", err)
+	}
+	fmt.Fprintf(environment.Stdout, "Removed %s\n", stateDirectory)
+	return nil
+}
+
 func runStatus(ctx context.Context, args []string, environment cliEnvironment) error {
 	if len(args) != 0 {
 		return errors.New("usage: air status")
@@ -871,6 +995,8 @@ Usage:
   air scan [flags] [<from>..<to>]
   air pending [--limit N] [<from>..<to>]
   air rescan <commit-ish> [flags]
+  air clean [--dry-run]
+  air reset [--force]
   air config <get|set|unset|list> ...
   air status
   air log

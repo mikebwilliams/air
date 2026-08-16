@@ -56,11 +56,15 @@ func runDiscoveryGit(ctx context.Context, dir string, args ...string) (string, e
 }
 
 func (r *GitRepository) DatabasePath() string {
-	return filepath.Join(r.CommonDir, "air", "reviews.sqlite")
+	return filepath.Join(r.StateDirectory(), "reviews.sqlite")
 }
 
 func (r *GitRepository) LockPath() string {
-	return filepath.Join(r.CommonDir, "air", "scan.lock")
+	return filepath.Join(r.StateDirectory(), "scan.lock")
+}
+
+func (r *GitRepository) StateDirectory() string {
+	return filepath.Join(r.CommonDir, "air")
 }
 
 func (r *GitRepository) ResolveCommit(ctx context.Context, revision string) (string, error) {

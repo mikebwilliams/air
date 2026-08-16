@@ -996,8 +996,7 @@ Scanning does not delete or automatically reconcile those records. Until they
 are cleaned, stale findings may remain visible in `status` and may be supplied
 to reviews.
 
-The initial implementation may defer cleanup. A later maintenance command
-should provide:
+The maintenance command is:
 
 ```bash
 air clean
@@ -1022,8 +1021,13 @@ actions:
   null, reopening that finding;
 - the stale commit record is deleted.
 
-A future implementation may also provide `air clean --dry-run` to list the
-records that would be removed.
+`air clean --dry-run` lists the same ordered set without changing the database.
+Both modes hold the repository scan lock while comparing Git and SQLite state.
+
+`air reset` removes the entire `<git-common-dir>/air` directory after displaying
+the exact path and receiving interactive confirmation. `--force` is the
+explicit non-interactive override. Reset first acquires and releases the scan
+lock so it refuses to race an active scan.
 
 Automatic history reconciliation is not required initially.
 

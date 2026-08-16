@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"os"
 	"strconv"
 	"strings"
 	"testing"
@@ -502,6 +503,101 @@ func TestCLIPendingAndScanDryRun(t *testing.T) {
 	defer store.Close()
 	if _, err := store.Commit(ctx, head); err == nil {
 		t.Fatal("dry-run commit was recorded")
+	}
+}
+
+func TestCLICleanPrunesCommitsOutsideMaster(t *testing.T) {
+	ctx := context.Background()
+	repository, directory := newTestGitRepository(t)
+	base := testCommitFile(t, directory, "base.txt", []byte("base\n"), "base")
+	testGit(t, directory, "switch", "-c", "discarded")
+	stale := testCommitFile(t, directory, "stale.txt", []byte("stale\n"), "stale")
+	testGit(t, directory, "switch", "master")
+	live := testCommitFile(t, directory, "live.txt", []byte("live\n"), "live")
+	var stdout bytes.Buffer
+	environment := cliEnvironment{
+		Cwd: directory, Stdin: strings.NewReader(""), Stdout: &stdout, Stderr: &bytes.Buffer{},
+		Getenv: func(string) string { return "" },
+	}
+	if err := runCLI(ctx, []string{"init", base}, environment); err != nil {
+		t.Fatal(err)
+	}
+	store, err := OpenStore(ctx, repository.DatabasePath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	staleReview := cleanReview("Stale review.")
+	staleReview.Output.NewFindings = []NewFinding{{
+		Severity: "warning", Title: "stale finding", Description: "Should cascade with stale history.",
+	}}
+	if _, err := store.ApplyReview(ctx, CommitMetadata{SHA: stale, ParentSHA: base},
+		ReviewIdentity{Model: modelByName("test-model")}, staleReview, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.ApplyReview(ctx, CommitMetadata{SHA: live, ParentSHA: base},
+		ReviewIdentity{Model: modelByName("test-model")}, cleanReview("Live review."), time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	stdout.Reset()
+	if err := runCLI(ctx, []string{"clean", "--dry-run"}, environment); err != nil {
+		t.Fatalf("clean dry run: %v", err)
+	}
+	if !strings.Contains(stdout.String(), shortSHA(stale)+"  would remove") ||
+		strings.Contains(stdout.String(), shortSHA(live)) {
+		t.Fatalf("clean dry-run output:\n%s", stdout.String())
+	}
+	stdout.Reset()
+	if err := runCLI(ctx, []string{"clean"}, environment); err != nil {
+		t.Fatalf("clean: %v", err)
+	}
+	store, err = OpenStore(ctx, repository.DatabasePath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	if _, err := store.Commit(ctx, stale); err == nil {
+		t.Fatal("stale commit survived clean")
+	}
+	if _, err := store.Commit(ctx, live); err != nil {
+		t.Fatalf("master commit was removed: %v", err)
+	}
+	if open, err := store.OpenFindings(ctx); err != nil || len(open) != 0 {
+		t.Fatalf("stale findings survived clean: %+v, %v", open, err)
+	}
+}
+
+func TestCLIResetRequiresConfirmationAndRemovesStateDirectory(t *testing.T) {
+	ctx := context.Background()
+	repository, directory := newTestGitRepository(t)
+	base := testCommitFile(t, directory, "app.txt", []byte("base\n"), "base")
+	var stdout bytes.Buffer
+	environment := cliEnvironment{
+		Cwd: directory, Stdin: strings.NewReader("no\n"), Stdout: &stdout, Stderr: &bytes.Buffer{},
+		Getenv: func(string) string { return "" },
+	}
+	if err := runCLI(ctx, []string{"init", base}, environment); err != nil {
+		t.Fatal(err)
+	}
+	stdout.Reset()
+	if err := runCLI(ctx, []string{"reset"}, environment); err != nil {
+		t.Fatalf("cancel reset: %v", err)
+	}
+	if !strings.Contains(stdout.String(), "Reset cancelled") {
+		t.Fatalf("cancel output = %q", stdout.String())
+	}
+	if _, err := os.Stat(repository.DatabasePath()); err != nil {
+		t.Fatalf("cancelled reset removed database: %v", err)
+	}
+	stdout.Reset()
+	if err := runCLI(ctx, []string{"reset", "--force"}, environment); err != nil {
+		t.Fatalf("forced reset: %v", err)
+	}
+	if _, err := os.Stat(repository.StateDirectory()); !os.IsNotExist(err) {
+		t.Fatalf("state directory remains after reset: %v", err)
 	}
 }
 

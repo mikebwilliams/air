@@ -361,6 +361,53 @@ func (s *Store) ProcessedSHAs(ctx context.Context) (map[string]struct{}, error) 
 	return result, nil
 }
 
+func (s *Store) CommitSHAs(ctx context.Context) ([]string, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT sha FROM commits ORDER BY sha`)
+	if err != nil {
+		return nil, fmt.Errorf("list stored commits: %w", err)
+	}
+	defer rows.Close()
+	var result []string
+	for rows.Next() {
+		var sha string
+		if err := rows.Scan(&sha); err != nil {
+			return nil, fmt.Errorf("list stored commits: %w", err)
+		}
+		result = append(result, sha)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("list stored commits: %w", err)
+	}
+	return result, nil
+}
+
+func (s *Store) DeleteCommits(ctx context.Context, shas []string) (int, error) {
+	if len(shas) == 0 {
+		return 0, nil
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, fmt.Errorf("delete stale commits: %w", err)
+	}
+	defer tx.Rollback()
+	deleted := 0
+	for _, sha := range shas {
+		result, err := tx.ExecContext(ctx, `DELETE FROM commits WHERE sha = ?`, sha)
+		if err != nil {
+			return 0, fmt.Errorf("delete stale commit %s: %w", shortSHA(sha), err)
+		}
+		count, err := result.RowsAffected()
+		if err != nil {
+			return 0, fmt.Errorf("count deleted commit %s: %w", shortSHA(sha), err)
+		}
+		deleted += int(count)
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, fmt.Errorf("delete stale commits: %w", err)
+	}
+	return deleted, nil
+}
+
 func (s *Store) OpenFindings(ctx context.Context) ([]Finding, error) {
 	return s.queryFindings(ctx, `
 		SELECT id, introduced_sha, resolved_sha, dismissed_at, dismiss_reason,

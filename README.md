@@ -186,6 +186,23 @@ air scan --dry-run
 Both commands list commits in processing order as `review` or `skip` and print
 a summary. `air pending` also accepts `--limit` and an explicit range.
 
+After master history is rewritten, preview and remove stored commits that no
+longer occur on its first-parent history:
+
+```bash
+air clean --dry-run
+air clean
+```
+
+To discard the entire repository-specific AIR database and configuration:
+
+```bash
+air reset
+```
+
+`reset` shows the exact `.git/air` directory and requires confirmation.
+Automation may use `air reset --force`.
+
 Process at most ten of those commits in this invocation:
 
 ```bash
