@@ -233,6 +233,53 @@ func TestScanRejectsNegativeLimit(t *testing.T) {
 	}
 }
 
+func TestForcedScanCreatesReviewAttemptAndExcludesSameCommitFindings(t *testing.T) {
+	ctx := context.Background()
+	repository, directory := newTestGitRepository(t)
+	base := testCommitFile(t, directory, "app.txt", []byte("base\n"), "base")
+	head := testCommitFile(t, directory, "app.txt", []byte("changed\n"), "change")
+	store, err := CreateStore(ctx, repository.DatabasePath(), base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	firstReviewer := &fakeReviewer{review: func(input ReviewInput) (ReviewResult, error) {
+		result := cleanReview("Initial review.")
+		result.Output.NewFindings = []NewFinding{{
+			Severity: "warning", Title: "initial finding", Description: "Initial review finding.",
+		}}
+		return result, nil
+	}}
+	if err := scanRepository(ctx, repository, store, scanOptions{
+		Output: &bytes.Buffer{},
+		NewReviewer: func() (Reviewer, ReviewIdentity, error) {
+			return firstReviewer, ReviewIdentity{Model: modelByName("first-model"), ReasoningEffort: "low"}, nil
+		},
+	}); err != nil {
+		t.Fatalf("initial scan: %v", err)
+	}
+	secondReviewer := &fakeReviewer{review: func(input ReviewInput) (ReviewResult, error) {
+		if len(input.OpenFindings) != 0 {
+			t.Fatalf("rescan received findings introduced by the same commit: %+v", input.OpenFindings)
+		}
+		return cleanReview("High-effort review."), nil
+	}}
+	if err := scanRepository(ctx, repository, store, scanOptions{
+		Commits: []string{head},
+		Force:   true,
+		Output:  &bytes.Buffer{},
+		NewReviewer: func() (Reviewer, ReviewIdentity, error) {
+			return secondReviewer, ReviewIdentity{Model: modelByName("second-model"), ReasoningEffort: "xhigh"}, nil
+		},
+	}); err != nil {
+		t.Fatalf("forced scan: %v", err)
+	}
+	attempts, err := store.ReviewAttempts(ctx, head)
+	if err != nil || len(attempts) != 2 || attempts[1].Model != "second-model" || !attempts[1].Current {
+		t.Fatalf("review attempts = %+v, %v", attempts, err)
+	}
+}
+
 func cleanReview(summary string) ReviewResult {
 	return ReviewResult{
 		Output: ReviewOutput{

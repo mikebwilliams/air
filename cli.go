@@ -47,7 +47,7 @@ func runCLI(ctx context.Context, args []string, environment cliEnvironment) erro
 	case "finding":
 		return runFinding(ctx, args[1:], environment)
 	case "rescan":
-		return errors.New("rescan is deferred and is not implemented in AIR 0.1")
+		return runRescan(ctx, args[1:], environment)
 	default:
 		return fmt.Errorf("unknown command %q; run air help", args[0])
 	}
@@ -260,7 +260,22 @@ func unknownSettingError(key string) error {
 }
 
 func runScan(ctx context.Context, args []string, environment cliEnvironment) error {
-	flags := newFlagSet("scan", environment.Stderr)
+	return runScanCommand(ctx, args, environment, false)
+}
+
+func runRescan(ctx context.Context, args []string, environment cliEnvironment) error {
+	if len(args) > 1 && !strings.HasPrefix(args[0], "-") {
+		args = append(append([]string(nil), args[1:]...), args[0])
+	}
+	return runScanCommand(ctx, args, environment, true)
+}
+
+func runScanCommand(ctx context.Context, args []string, environment cliEnvironment, rescan bool) error {
+	commandName := "scan"
+	if rescan {
+		commandName = "rescan"
+	}
+	flags := newFlagSet(commandName, environment.Stderr)
 	reviewerFlag := flags.String("reviewer", "", "review backend: codex or http")
 	limit := flags.Int("limit", 0, "maximum commits to process; zero means unlimited")
 	modelFlag := flags.String("model", "", "model identifier")
@@ -274,14 +289,21 @@ func runScan(ctx context.Context, args []string, environment cliEnvironment) err
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
-	if flags.NArg() > 1 {
+	if rescan {
+		if flags.NArg() != 1 {
+			return errors.New("usage: air rescan [flags] <commit-ish>")
+		}
+		if *limit != 0 {
+			return errors.New("--limit is not valid with air rescan")
+		}
+	} else if flags.NArg() > 1 {
 		return errors.New("usage: air scan [flags] [<from>..<to>]")
 	}
 	if *limit < 0 {
 		return errors.New("--limit must not be negative")
 	}
 	revisionRange := ""
-	if flags.NArg() == 1 {
+	if !rescan && flags.NArg() == 1 {
 		revisionRange = flags.Arg(0)
 	}
 	repository, err := DiscoverGitRepository(ctx, environment.Cwd)
@@ -293,6 +315,28 @@ func runScan(ctx context.Context, args []string, environment cliEnvironment) err
 		return err
 	}
 	defer store.Close()
+	var explicitCommits []string
+	if rescan {
+		sha, err := repository.ResolveCommit(ctx, flags.Arg(0))
+		if err != nil {
+			return err
+		}
+		onMaster, err := repository.IsOnMasterFirstParent(ctx, sha)
+		if err != nil {
+			return err
+		}
+		if !onMaster {
+			return fmt.Errorf("commit %s is not on the first-parent history of master", shortSHA(sha))
+		}
+		record, err := store.Commit(ctx, sha)
+		if err != nil {
+			return err
+		}
+		if record.Status != "reviewed" {
+			return fmt.Errorf("commit %s was skipped and has no review to rescan", shortSHA(sha))
+		}
+		explicitCommits = []string{sha}
+	}
 	setFlags := visitedFlagNames(flags)
 	resolve := func(key, commandLineValue string) (resolvedSetting, error) {
 		setting, _ := settingByKey(key)
@@ -380,6 +424,8 @@ func runScan(ctx context.Context, args []string, environment cliEnvironment) err
 	}
 	return scanRepository(ctx, repository, store, scanOptions{
 		RevisionRange: revisionRange,
+		Commits:       explicitCommits,
+		Force:         rescan,
 		Limit:         *limit,
 		Output:        environment.Stdout,
 		Now:           environment.Now,
@@ -442,15 +488,25 @@ func runLog(ctx context.Context, args []string, environment cliEnvironment) erro
 }
 
 func runShow(ctx context.Context, args []string, environment cliEnvironment) error {
-	if len(args) != 1 {
-		return errors.New("usage: air show <commit-ish>")
+	if len(args) == 0 {
+		return errors.New("usage: air show <commit-ish> [--reviews | --review N]")
+	}
+	revision := args[0]
+	flags := newFlagSet("show", environment.Stderr)
+	listReviews := flags.Bool("reviews", false, "list all retained review attempts")
+	reviewNumber := flags.Int("review", 0, "show one retained review attempt")
+	if err := flags.Parse(args[1:]); err != nil {
+		return err
+	}
+	if flags.NArg() != 0 || (*listReviews && *reviewNumber != 0) || *reviewNumber < 0 {
+		return errors.New("usage: air show <commit-ish> [--reviews | --review N]")
 	}
 	repository, store, closeStore, err := openRepositoryStore(ctx, environment.Cwd)
 	if err != nil {
 		return err
 	}
 	defer closeStore()
-	sha, err := repository.ResolveCommit(ctx, args[0])
+	sha, err := repository.ResolveCommit(ctx, revision)
 	if err != nil {
 		return err
 	}
@@ -465,49 +521,41 @@ func runShow(ctx context.Context, args []string, environment cliEnvironment) err
 	}
 	fmt.Fprintf(environment.Stdout, "%s %s\n", shortSHA(sha), subject)
 	if record.Status == "skipped" {
+		if *listReviews || *reviewNumber != 0 {
+			return fmt.Errorf("commit %s was skipped and has no review attempts", shortSHA(sha))
+		}
 		fmt.Fprintf(environment.Stdout, "\nSkipped: %s\n", record.SkipReason)
 		return nil
 	}
-	fmt.Fprintf(environment.Stdout, "\nModel: %s\n", record.Model)
-	if record.ReasoningEffort != "" {
-		fmt.Fprintf(environment.Stdout, "Reasoning effort: %s\n", record.ReasoningEffort)
+	if *reviewNumber != 0 {
+		attempt, err := store.ReviewAttempt(ctx, sha, *reviewNumber)
+		if err != nil {
+			return err
+		}
+		current := ""
+		if attempt.Current {
+			current = " (current)"
+		}
+		fmt.Fprintf(environment.Stdout, "\nReview attempt #%d%s\n", attempt.Number, current)
+		printReviewAccounting(environment.Stdout, attempt.Model, attempt.ReasoningEffort,
+			&attempt.Usage, attempt.EstimatedCostMicrousd, attempt.EstimatedCostMaxMicrousd,
+			attempt.CostContext, attempt.CostComplete)
+		introduced, err := store.FindingsIntroducedByReview(ctx, attempt.ID)
+		if err != nil {
+			return err
+		}
+		resolved, err := store.FindingsResolvedByReview(ctx, attempt.ID)
+		if err != nil {
+			return err
+		}
+		printReviewResult(environment.Stdout, introduced, resolved, attempt.Summary)
+		return nil
 	}
-	if record.Usage != nil {
-		fmt.Fprintf(environment.Stdout, "Tokens: %d total (%d input, %d cached input, ",
-			totalTokens(*record.Usage),
-			record.Usage.InputTokens,
-			record.Usage.CachedInputTokens,
-		)
-		if record.Usage.CacheWriteTokens == nil {
-			fmt.Fprint(environment.Stdout, "unknown cache writes, ")
-		} else {
-			fmt.Fprintf(environment.Stdout, "%d cache writes, ", *record.Usage.CacheWriteTokens)
-		}
-		fmt.Fprintf(environment.Stdout, "%d output, %d reasoning output)\n",
-			record.Usage.OutputTokens, record.Usage.ReasoningOutputTokens)
-	}
-	if record.EstimatedCostMicrousd == nil {
-		fmt.Fprintln(environment.Stdout, "Estimated cost: unavailable (model pricing unknown)")
-	} else {
-		minimum := float64(*record.EstimatedCostMicrousd) / 1_000_000
-		maximum := minimum
-		if record.EstimatedCostMaxMicrousd != nil {
-			maximum = float64(*record.EstimatedCostMaxMicrousd) / 1_000_000
-		}
-		if minimum == maximum {
-			fmt.Fprintf(environment.Stdout, "Estimated cost: $%.6f USD", minimum)
-		} else {
-			fmt.Fprintf(environment.Stdout, "Estimated cost: $%.6f–$%.6f USD", minimum, maximum)
-		}
-		if record.CostContext != "" {
-			fmt.Fprintf(environment.Stdout, " (%s context", record.CostContext)
-			if !record.CostComplete {
-				fmt.Fprint(environment.Stdout, "; cache writes unreported")
-			}
-			fmt.Fprint(environment.Stdout, ")")
-		}
-		fmt.Fprintln(environment.Stdout)
-	}
+
+	fmt.Fprintln(environment.Stdout)
+	printReviewAccounting(environment.Stdout, record.Model, record.ReasoningEffort,
+		record.Usage, record.EstimatedCostMicrousd, record.EstimatedCostMaxMicrousd,
+		record.CostContext, record.CostComplete)
 	introduced, err := store.FindingsIntroducedBy(ctx, sha)
 	if err != nil {
 		return err
@@ -516,12 +564,83 @@ func runShow(ctx context.Context, args []string, environment cliEnvironment) err
 	if err != nil {
 		return err
 	}
-	fmt.Fprintln(environment.Stdout, "\nNew findings:")
-	printFindingList(environment.Stdout, introduced)
-	fmt.Fprintln(environment.Stdout, "\nResolved:")
-	printFindingList(environment.Stdout, resolved)
-	fmt.Fprintf(environment.Stdout, "\nReview:\n  %s\n", record.Summary)
+	printReviewResult(environment.Stdout, introduced, resolved, record.Summary)
+	if *listReviews {
+		attempts, err := store.ReviewAttempts(ctx, sha)
+		if err != nil {
+			return err
+		}
+		fmt.Fprintln(environment.Stdout, "\nReview attempts:")
+		for _, attempt := range attempts {
+			current := ""
+			if attempt.Current {
+				current = " current"
+			}
+			effort := ""
+			if attempt.ReasoningEffort != "" {
+				effort = "/" + attempt.ReasoningEffort
+			}
+			fmt.Fprintf(environment.Stdout, "  #%d  %s  %s%s  %d new, %d resolved%s\n",
+				attempt.Number, attempt.ReviewedAt.Format(time.RFC3339), attempt.Model, effort,
+				attempt.NewCount, attempt.ResolvedCount, current)
+		}
+	}
 	return nil
+}
+
+func printReviewAccounting(
+	output io.Writer,
+	model, reasoningEffort string,
+	usage *TokenUsage,
+	minimumCost, maximumCost *int64,
+	costContext string,
+	costComplete bool,
+) {
+	fmt.Fprintf(output, "Model: %s\n", model)
+	if reasoningEffort != "" {
+		fmt.Fprintf(output, "Reasoning effort: %s\n", reasoningEffort)
+	}
+	if usage != nil {
+		fmt.Fprintf(output, "Tokens: %d total (%d input, %d cached input, ",
+			totalTokens(*usage), usage.InputTokens, usage.CachedInputTokens)
+		if usage.CacheWriteTokens == nil {
+			fmt.Fprint(output, "unknown cache writes, ")
+		} else {
+			fmt.Fprintf(output, "%d cache writes, ", *usage.CacheWriteTokens)
+		}
+		fmt.Fprintf(output, "%d output, %d reasoning output)\n",
+			usage.OutputTokens, usage.ReasoningOutputTokens)
+	}
+	if minimumCost == nil {
+		fmt.Fprintln(output, "Estimated cost: unavailable (model pricing unknown)")
+		return
+	}
+	minimum := float64(*minimumCost) / 1_000_000
+	maximum := minimum
+	if maximumCost != nil {
+		maximum = float64(*maximumCost) / 1_000_000
+	}
+	if minimum == maximum {
+		fmt.Fprintf(output, "Estimated cost: $%.6f USD", minimum)
+	} else {
+		fmt.Fprintf(output, "Estimated cost: $%.6f–$%.6f USD", minimum, maximum)
+	}
+	if costContext != "" {
+		fmt.Fprintf(output, " (%s context", costContext)
+		if !costComplete {
+			fmt.Fprint(output, "; cache writes unreported")
+		}
+		fmt.Fprint(output, ")")
+	}
+	fmt.Fprintln(output)
+}
+
+func printReviewResult(output io.Writer, introduced, resolved []Finding, summary string) {
+	fmt.Fprintln(output, "\nNew findings:")
+	printFindingList(output, introduced)
+	fmt.Fprintln(output, "\nResolved:")
+	printFindingList(output, resolved)
+	fmt.Fprintf(output, "\nReview:\n  %s\n", summary)
 }
 
 func runFinding(ctx context.Context, args []string, environment cliEnvironment) error {
@@ -609,10 +728,11 @@ func printUsage(output io.Writer) {
 Usage:
   air init <commit-ish>
   air scan [flags] [<from>..<to>]
+  air rescan <commit-ish> [flags]
   air config <get|set|unset|list> ...
   air status
   air log
-  air show <commit-ish>
+  air show <commit-ish> [--reviews | --review N]
   air finding <id>
 
 Reviewer configuration precedence:

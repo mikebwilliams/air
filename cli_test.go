@@ -352,6 +352,56 @@ func TestCLIConfigGetUnsetAndValidation(t *testing.T) {
 	}
 }
 
+func TestCLIRescanAndReviewAttemptDisplay(t *testing.T) {
+	ctx := context.Background()
+	_, directory := newTestGitRepository(t)
+	base := testCommitFile(t, directory, "app.txt", []byte("base\n"), "base")
+	head := testCommitFile(t, directory, "app.txt", []byte("changed\n"), "change")
+	command, _ := newCodexTestCommand(t, ReviewOutput{
+		NewFindings:      []NewFinding{},
+		ResolvedFindings: []ResolvedFinding{},
+		Summary:          "Retained review.",
+	}, "")
+	var stdout bytes.Buffer
+	environment := cliEnvironment{
+		Cwd:          directory,
+		Stdout:       &stdout,
+		Stderr:       &bytes.Buffer{},
+		Getenv:       func(string) string { return "" },
+		CodexCommand: command,
+		Now:          func() time.Time { return time.Date(2026, 8, 16, 12, 0, 0, 0, time.UTC) },
+	}
+	if err := runCLI(ctx, []string{"init", base}, environment); err != nil {
+		t.Fatalf("init: %v", err)
+	}
+	if err := runCLI(ctx, []string{"scan", "--model", "first-model", "--effort", "low"}, environment); err != nil {
+		t.Fatalf("scan: %v", err)
+	}
+	if err := runCLI(ctx, []string{"rescan", head, "--model", "second-model", "--effort", "xhigh"}, environment); err != nil {
+		t.Fatalf("rescan: %v", err)
+	}
+
+	stdout.Reset()
+	if err := runCLI(ctx, []string{"show", head, "--reviews"}, environment); err != nil {
+		t.Fatalf("show reviews: %v", err)
+	}
+	if !strings.Contains(stdout.String(), "Review attempts:") ||
+		!strings.Contains(stdout.String(), "#1") || !strings.Contains(stdout.String(), "first-model/low") ||
+		!strings.Contains(stdout.String(), "#2") || !strings.Contains(stdout.String(), "second-model/xhigh") ||
+		!strings.Contains(stdout.String(), "current") {
+		t.Fatalf("review list output:\n%s", stdout.String())
+	}
+	stdout.Reset()
+	if err := runCLI(ctx, []string{"show", head, "--review", "1"}, environment); err != nil {
+		t.Fatalf("show first review: %v", err)
+	}
+	if !strings.Contains(stdout.String(), "Review attempt #1") ||
+		!strings.Contains(stdout.String(), "Model: first-model") ||
+		strings.Contains(stdout.String(), "Model: second-model") {
+		t.Fatalf("first review output:\n%s", stdout.String())
+	}
+}
+
 func TestCLICodexRequiresExplicitReviewIdentity(t *testing.T) {
 	ctx := context.Background()
 	_, directory := newTestGitRepository(t)

@@ -194,17 +194,31 @@ air scan v1.1.0..v1.2.0
 The lower endpoint is excluded and the upper endpoint is included. Both must
 be on `master`'s first-parent history.
 
+Review an already reviewed commit again with a different model or effort:
+
+```bash
+air rescan HEAD --model gpt-5.6-sol --effort xhigh
+```
+
+The current commit record is replaced by the latest result, while every review
+attempt retains its model, effort, prompt version, token usage, cost, summary,
+and raw response. Finding updates are conservative and additive: rescanning
+does not silently delete findings created by an earlier attempt.
+
 Inspect results:
 
 ```bash
 air status
 air log
 air show HEAD
+air show HEAD --reviews
+air show HEAD --review 1
 air finding 17
 ```
 
 `air show` includes the model, reasoning effort, token usage, and estimated
-cost used for that commit.
+cost used for that commit. `--reviews` lists retained attempts, and `--review N`
+shows the findings and accounting recorded by one attempt.
 
 Run `air help` for the concise command reference.
 

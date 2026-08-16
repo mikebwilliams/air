@@ -277,6 +277,70 @@ func TestUnknownModelPersistsUnknownPricingAndCost(t *testing.T) {
 	}
 }
 
+func TestReviewAttemptsRetainHistoryAndCurrentReview(t *testing.T) {
+	ctx := context.Background()
+	store, err := CreateStore(ctx, filepath.Join(t.TempDir(), "air.sqlite"), strings.Repeat("0", 40))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	metadata := testMetadata("f", "0")
+	firstTime := time.Date(2026, 8, 16, 10, 0, 0, 0, time.UTC)
+	first := cleanReview("First review.")
+	first.Output.NewFindings = []NewFinding{{
+		Severity: "warning", Title: "first finding", Description: "Found by the first review.",
+	}}
+	firstIDs, err := store.ApplyReview(ctx, metadata,
+		ReviewIdentity{Model: modelByName("first-model"), ReasoningEffort: "low"}, first, firstTime)
+	if err != nil {
+		t.Fatalf("first ApplyReview: %v", err)
+	}
+	secondTime := firstTime.Add(time.Hour)
+	second := cleanReview("Second review.")
+	second.Output.NewFindings = []NewFinding{{
+		Severity: "error", Title: "second finding", Description: "Found by the second review.",
+	}}
+	secondIDs, err := store.ApplyReview(ctx, metadata,
+		ReviewIdentity{Model: modelByName("second-model"), ReasoningEffort: "xhigh"}, second, secondTime)
+	if err != nil {
+		t.Fatalf("second ApplyReview: %v", err)
+	}
+	if len(firstIDs) != 1 || len(secondIDs) != 1 || firstIDs[0] == secondIDs[0] {
+		t.Fatalf("finding IDs = %v then %v", firstIDs, secondIDs)
+	}
+
+	record, err := store.Commit(ctx, metadata.SHA)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if record.Model != "second-model" || record.ReasoningEffort != "xhigh" ||
+		record.Summary != "Second review." || record.NewCount != 1 {
+		t.Fatalf("current review = %+v", record)
+	}
+	attempts, err := store.ReviewAttempts(ctx, metadata.SHA)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(attempts) != 2 || attempts[0].Number != 1 || attempts[0].Current ||
+		attempts[0].Model != "first-model" || attempts[0].Summary != "First review." ||
+		attempts[1].Number != 2 || !attempts[1].Current || attempts[1].Model != "second-model" ||
+		!attempts[1].ReviewedAt.Equal(secondTime) {
+		t.Fatalf("review attempts = %+v", attempts)
+	}
+	firstFindings, err := store.FindingsIntroducedByReview(ctx, attempts[0].ID)
+	if err != nil || len(firstFindings) != 1 || firstFindings[0].ID != firstIDs[0] {
+		t.Fatalf("first attempt findings = %+v, %v", firstFindings, err)
+	}
+	secondFindings, err := store.FindingsIntroducedBy(ctx, metadata.SHA)
+	if err != nil || len(secondFindings) != 1 || secondFindings[0].ID != secondIDs[0] {
+		t.Fatalf("current findings = %+v, %v", secondFindings, err)
+	}
+	open, err := store.OpenFindings(ctx)
+	if err != nil || len(open) != 2 {
+		t.Fatalf("conservative open findings = %+v, %v", open, err)
+	}
+}
+
 func testMetadata(shaCharacter, parentCharacter string) CommitMetadata {
 	return CommitMetadata{
 		SHA:       strings.Repeat(shaCharacter, 40),

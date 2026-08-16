@@ -11,6 +11,8 @@ type reviewerFactory func() (Reviewer, ReviewIdentity, error)
 
 type scanOptions struct {
 	RevisionRange string
+	Commits       []string
+	Force         bool
 	Limit         int
 	Output        io.Writer
 	Now           func() time.Time
@@ -32,8 +34,10 @@ func scanRepository(
 	}
 	defer lock.Close()
 
-	var commits []string
-	if options.RevisionRange == "" {
+	commits := append([]string(nil), options.Commits...)
+	if len(commits) > 0 {
+		// Explicit commits are already resolved and validated by the caller.
+	} else if options.RevisionRange == "" {
 		startSHA, err := store.Config(ctx, "start_sha")
 		if err != nil {
 			return err
@@ -48,14 +52,17 @@ func scanRepository(
 			return err
 		}
 	}
-	processed, err := store.ProcessedSHAs(ctx)
-	if err != nil {
-		return err
-	}
-	remaining := make([]string, 0, len(commits))
-	for _, sha := range commits {
-		if _, exists := processed[sha]; !exists {
-			remaining = append(remaining, sha)
+	remaining := commits
+	if !options.Force {
+		processed, err := store.ProcessedSHAs(ctx)
+		if err != nil {
+			return err
+		}
+		remaining = make([]string, 0, len(commits))
+		for _, sha := range commits {
+			if _, exists := processed[sha]; !exists {
+				remaining = append(remaining, sha)
+			}
 		}
 	}
 	if options.Limit > 0 && len(remaining) > options.Limit {
@@ -94,6 +101,9 @@ func scanRepository(
 			skipReason = "empty diff"
 		}
 		if skipReason != "" {
+			if options.Force {
+				return fmt.Errorf("cannot rescan commit %s: %s", shortSHA(sha), skipReason)
+			}
 			if err := store.InsertSkipped(ctx, metadata, skipReason, now()); err != nil {
 				return err
 			}
@@ -110,7 +120,12 @@ func scanRepository(
 				return err
 			}
 		}
-		openFindings, err := store.OpenFindings(ctx)
+		var openFindings []Finding
+		if options.Force {
+			openFindings, err = store.OpenFindingsExcludingCommit(ctx, sha)
+		} else {
+			openFindings, err = store.OpenFindings(ctx)
+		}
 		if err != nil {
 			return err
 		}

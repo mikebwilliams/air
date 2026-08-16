@@ -40,6 +40,26 @@ type CommitRecord struct {
 	ResolvedCount            int
 }
 
+type ReviewAttempt struct {
+	ID                       int64
+	Number                   int
+	CommitSHA                string
+	ReviewedAt               time.Time
+	Model                    string
+	ReasoningEffort          string
+	PromptVersion            string
+	Summary                  string
+	RawResponse              string
+	Usage                    TokenUsage
+	EstimatedCostMicrousd    *int64
+	EstimatedCostMaxMicrousd *int64
+	CostContext              string
+	CostComplete             bool
+	NewCount                 int
+	ResolvedCount            int
+	Current                  bool
+}
+
 type ReviewIdentity struct {
 	Model           Model
 	ReasoningEffort string

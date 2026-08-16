@@ -273,16 +273,25 @@ Fields:
 A skipped commit remains in the table so later scans do not retry it
 automatically.
 
-Token usage and estimated cost are properties of the single stored review for
-a commit. If a future rescan replaces that review, it replaces these values as
-well; usage is not accumulated and no separate accounting history is kept.
+These review fields describe the current attempt. A rescan overwrites them but
+also appends the same values to `review_attempts`, so ordinary queries remain
+simple without losing historical accounting.
 
-### 5.4 `findings`
+### 5.4 `review_attempts`
+
+`review_attempts` contains one immutable row for every successful model call.
+It stores the commit SHA, review timestamp, model, effort, prompt version, raw
+response, summary, all token and cost fields, and the attempt's new/resolved
+finding counts. Rows are ordered by their integer ID within a commit; the last
+row is current and must match the denormalized review fields on `commits`.
+
+### 5.5 `findings`
 
 ```sql
 CREATE TABLE findings (
     id              INTEGER PRIMARY KEY,
     introduced_sha  TEXT NOT NULL,
+	introduced_review_id INTEGER NOT NULL,
     resolved_sha    TEXT,
     severity        TEXT NOT NULL,
     title           TEXT NOT NULL,
@@ -291,7 +300,8 @@ CREATE TABLE findings (
     line            INTEGER,
     symbol          TEXT,
 
-    FOREIGN KEY(introduced_sha) REFERENCES commits(sha) ON DELETE CASCADE,
+	FOREIGN KEY(introduced_sha) REFERENCES commits(sha) ON DELETE CASCADE,
+	FOREIGN KEY(introduced_review_id) REFERENCES review_attempts(id) ON DELETE CASCADE,
     FOREIGN KEY(resolved_sha) REFERENCES commits(sha) ON DELETE SET NULL
 );
 ```
@@ -306,17 +316,20 @@ error
 
 Severity should describe likely impact, not model confidence.
 
-### 5.5 `finding_events`
+### 5.6 `finding_events`
 
 ```sql
 CREATE TABLE finding_events (
     id          INTEGER PRIMARY KEY,
     finding_id  INTEGER NOT NULL,
-    sha         TEXT NOT NULL,
+	review_id   INTEGER,
+	sha         TEXT,
     action      TEXT NOT NULL,
     note        TEXT,
+	created_at  TEXT NOT NULL,
 
     FOREIGN KEY(finding_id) REFERENCES findings(id) ON DELETE CASCADE,
+	FOREIGN KEY(review_id) REFERENCES review_attempts(id) ON DELETE CASCADE,
     FOREIGN KEY(sha) REFERENCES commits(sha) ON DELETE CASCADE
 );
 ```
@@ -833,19 +846,24 @@ These commands are not part of version 0.1. When implemented, manual actions
 should create corresponding `finding_events` and define how the acting commit
 is recorded.
 
-### Deferred rescan
+### Rescan
 
 ```bash
 air rescan <commit-ish>
 ```
 
-Rescanning behavior should be conservative.
+Rescanning behavior is conservative. The latest attempt replaces the review
+fields on the commit row and becomes the current review, while an immutable
+`review_attempts` row retains every attempt's model, reasoning effort, prompt
+version, response, usage, cost, and finding counts. Findings and resolutions
+are attributed to their attempt; prior findings are never silently deleted.
+When building rescan context, AIR excludes open findings introduced by the same
+target commit so the new attempt independently checks that change.
 
-The previous raw review should remain recoverable either through event history or a future review-history table if needed.
-
-Rescan is not part of version 0.1. Until review history and lifecycle
-reconciliation are implemented, `air rescan` should reject the request without
-changing the database.
+```bash
+air show <commit-ish> --reviews
+air show <commit-ish> --review 2
+```
 
 ## 19. Reviewer Configuration
 
@@ -1099,8 +1117,9 @@ Version 0.1 should implement only:
 - repository-level scan locking;
 - atomic restartable processing.
 
-Everything else, including `clean`, manual lifecycle overrides, and rescan,
-should be deferred until actual usage demonstrates a need.
+The subsequent proof-of-concept increments add retained rescans, cleanup,
+manual lifecycle overrides, reporting, and automation output without expanding
+AIR beyond the first-parent history of `master`.
 
 ## 27. Core Invariants
 

@@ -19,7 +19,7 @@ type Store struct {
 	db *sql.DB
 }
 
-const schemaVersion = 2
+const schemaVersion = 3
 
 const schemaSQL = `
 CREATE TABLE config (
@@ -113,10 +113,48 @@ CREATE TABLE commits (
 	)
 );
 
+CREATE TABLE review_attempts (
+	id                          INTEGER PRIMARY KEY,
+	commit_sha                  TEXT NOT NULL,
+	reviewed_at                 TEXT NOT NULL,
+	model                       TEXT NOT NULL,
+	reasoning_effort            TEXT,
+	prompt_version              TEXT NOT NULL,
+	summary                     TEXT NOT NULL,
+	raw_response                TEXT NOT NULL,
+	input_tokens                INTEGER NOT NULL CHECK(input_tokens >= 0),
+	cached_input_tokens         INTEGER NOT NULL CHECK(cached_input_tokens >= 0),
+	cache_write_tokens          INTEGER CHECK(cache_write_tokens IS NULL OR cache_write_tokens >= 0),
+	output_tokens               INTEGER NOT NULL CHECK(output_tokens >= 0),
+	reasoning_output_tokens     INTEGER NOT NULL CHECK(reasoning_output_tokens >= 0),
+	estimated_cost_microusd     INTEGER CHECK(estimated_cost_microusd IS NULL OR estimated_cost_microusd >= 0),
+	estimated_cost_max_microusd INTEGER CHECK(estimated_cost_max_microusd IS NULL OR estimated_cost_max_microusd >= 0),
+	cost_context                TEXT CHECK(cost_context IS NULL OR cost_context IN ('short', 'long')),
+	cost_complete               INTEGER CHECK(cost_complete IS NULL OR cost_complete IN (0, 1)),
+	new_count                   INTEGER NOT NULL DEFAULT 0 CHECK(new_count >= 0),
+	resolved_count              INTEGER NOT NULL DEFAULT 0 CHECK(resolved_count >= 0),
+
+	FOREIGN KEY(commit_sha) REFERENCES commits(sha) ON DELETE CASCADE,
+	FOREIGN KEY(model) REFERENCES models(name),
+	CHECK(cached_input_tokens <= input_tokens),
+	CHECK(cache_write_tokens IS NULL OR cached_input_tokens + cache_write_tokens <= input_tokens),
+	CHECK(reasoning_output_tokens <= output_tokens),
+	CHECK(
+		(estimated_cost_microusd IS NULL AND estimated_cost_max_microusd IS NULL AND
+		 cost_context IS NULL AND cost_complete IS NULL) OR
+		(estimated_cost_microusd IS NOT NULL AND estimated_cost_max_microusd IS NOT NULL AND
+		 estimated_cost_microusd <= estimated_cost_max_microusd AND
+		 cost_context IS NOT NULL AND cost_complete IS NOT NULL)
+	)
+);
+
 CREATE TABLE findings (
     id              INTEGER PRIMARY KEY,
     introduced_sha  TEXT NOT NULL,
+	introduced_review_id INTEGER NOT NULL,
     resolved_sha    TEXT,
+	dismissed_at      TEXT,
+	dismiss_reason    TEXT,
     severity        TEXT NOT NULL CHECK(severity IN ('info', 'warning', 'error')),
     title           TEXT NOT NULL,
     description     TEXT NOT NULL,
@@ -125,23 +163,31 @@ CREATE TABLE findings (
     symbol          TEXT,
 
     FOREIGN KEY(introduced_sha) REFERENCES commits(sha) ON DELETE CASCADE,
-    FOREIGN KEY(resolved_sha) REFERENCES commits(sha) ON DELETE SET NULL
+	FOREIGN KEY(introduced_review_id) REFERENCES review_attempts(id) ON DELETE CASCADE,
+	FOREIGN KEY(resolved_sha) REFERENCES commits(sha) ON DELETE SET NULL,
+	CHECK((dismissed_at IS NULL AND dismiss_reason IS NULL) OR
+	      (dismissed_at IS NOT NULL AND dismiss_reason IS NOT NULL))
 );
 
 CREATE TABLE finding_events (
     id          INTEGER PRIMARY KEY,
     finding_id  INTEGER NOT NULL,
-    sha         TEXT NOT NULL,
-    action      TEXT NOT NULL CHECK(action IN ('opened', 'resolved', 'reopened', 'updated')),
+	review_id   INTEGER,
+	sha         TEXT,
+	action      TEXT NOT NULL CHECK(action IN ('opened', 'resolved', 'reopened', 'updated', 'dismissed', 'noted')),
     note        TEXT,
+	created_at  TEXT NOT NULL,
 
     FOREIGN KEY(finding_id) REFERENCES findings(id) ON DELETE CASCADE,
+	FOREIGN KEY(review_id) REFERENCES review_attempts(id) ON DELETE CASCADE,
     FOREIGN KEY(sha) REFERENCES commits(sha) ON DELETE CASCADE
 );
 
 CREATE INDEX findings_open_idx ON findings(resolved_sha);
 CREATE INDEX finding_events_finding_idx ON finding_events(finding_id, id);
-PRAGMA user_version = 2;
+CREATE INDEX review_attempts_commit_idx ON review_attempts(commit_sha, id);
+CREATE INDEX finding_events_review_idx ON finding_events(review_id, id);
+PRAGMA user_version = 3;
 `
 
 func CreateStore(ctx context.Context, databasePath, startSHA string) (*Store, error) {
@@ -318,7 +364,15 @@ func (s *Store) ProcessedSHAs(ctx context.Context) (map[string]struct{}, error) 
 func (s *Store) OpenFindings(ctx context.Context) ([]Finding, error) {
 	return s.queryFindings(ctx, `
         SELECT id, introduced_sha, resolved_sha, severity, title, description, file, line, symbol
-        FROM findings WHERE resolved_sha IS NULL ORDER BY id`)
+		FROM findings WHERE resolved_sha IS NULL AND dismissed_at IS NULL ORDER BY id`)
+}
+
+func (s *Store) OpenFindingsExcludingCommit(ctx context.Context, sha string) ([]Finding, error) {
+	return s.queryFindings(ctx, `
+		SELECT id, introduced_sha, resolved_sha, severity, title, description, file, line, symbol
+		FROM findings
+		WHERE resolved_sha IS NULL AND dismissed_at IS NULL AND introduced_sha <> ?
+		ORDER BY id`, sha)
 }
 
 func (s *Store) Finding(ctx context.Context, id int64) (Finding, error) {
@@ -337,13 +391,39 @@ func (s *Store) Finding(ctx context.Context, id int64) (Finding, error) {
 func (s *Store) FindingsIntroducedBy(ctx context.Context, sha string) ([]Finding, error) {
 	return s.queryFindings(ctx, `
         SELECT id, introduced_sha, resolved_sha, severity, title, description, file, line, symbol
-        FROM findings WHERE introduced_sha = ? ORDER BY id`, sha)
+		FROM findings
+		WHERE introduced_review_id = (
+			SELECT id FROM review_attempts WHERE commit_sha = ? ORDER BY id DESC LIMIT 1
+		)
+		ORDER BY id`, sha)
 }
 
 func (s *Store) FindingsResolvedBy(ctx context.Context, sha string) ([]Finding, error) {
 	return s.queryFindings(ctx, `
-        SELECT id, introduced_sha, resolved_sha, severity, title, description, file, line, symbol
-        FROM findings WHERE resolved_sha = ? ORDER BY id`, sha)
+		SELECT f.id, f.introduced_sha, f.resolved_sha, f.severity, f.title,
+		       f.description, f.file, f.line, f.symbol
+		FROM findings f
+		JOIN finding_events e ON e.finding_id = f.id
+		WHERE e.action = 'resolved' AND e.review_id = (
+			SELECT id FROM review_attempts WHERE commit_sha = ? ORDER BY id DESC LIMIT 1
+		)
+		ORDER BY f.id`, sha)
+}
+
+func (s *Store) FindingsIntroducedByReview(ctx context.Context, reviewID int64) ([]Finding, error) {
+	return s.queryFindings(ctx, `
+		SELECT id, introduced_sha, resolved_sha, severity, title, description, file, line, symbol
+		FROM findings WHERE introduced_review_id = ? ORDER BY id`, reviewID)
+}
+
+func (s *Store) FindingsResolvedByReview(ctx context.Context, reviewID int64) ([]Finding, error) {
+	return s.queryFindings(ctx, `
+		SELECT f.id, f.introduced_sha, f.resolved_sha, f.severity, f.title,
+		       f.description, f.file, f.line, f.symbol
+		FROM findings f
+		JOIN finding_events e ON e.finding_id = f.id
+		WHERE e.action = 'resolved' AND e.review_id = ?
+		ORDER BY f.id`, reviewID)
 }
 
 func (s *Store) queryFindings(ctx context.Context, query string, args ...any) ([]Finding, error) {
@@ -545,6 +625,7 @@ func (s *Store) ApplyReview(
 		return nil, err
 	}
 
+	processedAt := formatTime(now)
 	_, err = tx.ExecContext(ctx, `
         INSERT INTO commits(
             sha, parent_sha, processed_at, status, model, reasoning_effort,
@@ -552,10 +633,29 @@ func (s *Store) ApplyReview(
 			cached_input_tokens, cache_write_tokens, output_tokens, reasoning_output_tokens,
 			estimated_cost_microusd, estimated_cost_max_microusd,
 			cost_context, cost_complete
-        ) VALUES(?, ?, ?, 'reviewed', ?, NULLIF(?, ''), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		) VALUES(?, ?, ?, 'reviewed', ?, NULLIF(?, ''), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(sha) DO UPDATE SET
+			parent_sha = excluded.parent_sha,
+			processed_at = excluded.processed_at,
+			status = 'reviewed',
+			skip_reason = NULL,
+			model = excluded.model,
+			reasoning_effort = excluded.reasoning_effort,
+			prompt_version = excluded.prompt_version,
+			summary = excluded.summary,
+			raw_response = excluded.raw_response,
+			input_tokens = excluded.input_tokens,
+			cached_input_tokens = excluded.cached_input_tokens,
+			cache_write_tokens = excluded.cache_write_tokens,
+			output_tokens = excluded.output_tokens,
+			reasoning_output_tokens = excluded.reasoning_output_tokens,
+			estimated_cost_microusd = excluded.estimated_cost_microusd,
+			estimated_cost_max_microusd = excluded.estimated_cost_max_microusd,
+			cost_context = excluded.cost_context,
+			cost_complete = excluded.cost_complete`,
 		metadata.SHA,
 		metadata.ParentSHA,
-		formatTime(now),
+		processedAt,
 		identity.Model.Name,
 		identity.ReasoningEffort,
 		promptVersion,
@@ -574,14 +674,47 @@ func (s *Store) ApplyReview(
 	if err != nil {
 		return nil, fmt.Errorf("record review for %s: %w", shortSHA(metadata.SHA), err)
 	}
+	attemptRow, err := tx.ExecContext(ctx, `
+		INSERT INTO review_attempts(
+			commit_sha, reviewed_at, model, reasoning_effort, prompt_version,
+			summary, raw_response, input_tokens, cached_input_tokens,
+			cache_write_tokens, output_tokens, reasoning_output_tokens,
+			estimated_cost_microusd, estimated_cost_max_microusd,
+			cost_context, cost_complete
+		) VALUES(?, ?, ?, NULLIF(?, ''), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		metadata.SHA,
+		processedAt,
+		identity.Model.Name,
+		identity.ReasoningEffort,
+		promptVersion,
+		result.Output.Summary,
+		result.RawResponse,
+		result.Usage.InputTokens,
+		result.Usage.CachedInputTokens,
+		nullableInt64(result.Usage.CacheWriteTokens),
+		result.Usage.OutputTokens,
+		result.Usage.ReasoningOutputTokens,
+		costMinimum(estimate),
+		costMaximum(estimate),
+		costContext(estimate),
+		costComplete(estimate),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("record review attempt for %s: %w", shortSHA(metadata.SHA), err)
+	}
+	attemptID, err := attemptRow.LastInsertId()
+	if err != nil {
+		return nil, fmt.Errorf("read review attempt ID: %w", err)
+	}
 
 	newIDs := make([]int64, 0, len(result.Output.NewFindings))
 	for _, finding := range result.Output.NewFindings {
 		row, err := tx.ExecContext(ctx, `
             INSERT INTO findings(
-                introduced_sha, severity, title, description, file, line, symbol
-            ) VALUES(?, ?, ?, ?, ?, ?, ?)`,
+				introduced_sha, introduced_review_id, severity, title, description, file, line, symbol
+			) VALUES(?, ?, ?, ?, ?, ?, ?, ?)`,
 			metadata.SHA,
+			attemptID,
 			finding.Severity,
 			finding.Title,
 			finding.Description,
@@ -597,8 +730,8 @@ func (s *Store) ApplyReview(
 			return nil, fmt.Errorf("read new finding ID: %w", err)
 		}
 		if _, err := tx.ExecContext(ctx, `
-            INSERT INTO finding_events(finding_id, sha, action)
-            VALUES(?, ?, 'opened')`, findingID, metadata.SHA); err != nil {
+			INSERT INTO finding_events(finding_id, review_id, sha, action, created_at)
+			VALUES(?, ?, ?, 'opened', ?)`, findingID, attemptID, metadata.SHA, processedAt); err != nil {
 			return nil, fmt.Errorf("record finding event: %w", err)
 		}
 		newIDs = append(newIDs, findingID)
@@ -624,10 +757,16 @@ func (s *Store) ApplyReview(
 			return nil, fmt.Errorf("finding #%d is missing or is no longer open", resolution.ID)
 		}
 		if _, err := tx.ExecContext(ctx, `
-            INSERT INTO finding_events(finding_id, sha, action, note)
-            VALUES(?, ?, 'resolved', ?)`, resolution.ID, metadata.SHA, resolution.Reason); err != nil {
+			INSERT INTO finding_events(finding_id, review_id, sha, action, note, created_at)
+			VALUES(?, ?, ?, 'resolved', ?, ?)`,
+			resolution.ID, attemptID, metadata.SHA, resolution.Reason, processedAt); err != nil {
 			return nil, fmt.Errorf("record resolution for finding #%d: %w", resolution.ID, err)
 		}
+	}
+	if _, err := tx.ExecContext(ctx, `
+		UPDATE review_attempts SET new_count = ?, resolved_count = ? WHERE id = ?`,
+		len(newIDs), len(result.Output.ResolvedFindings), attemptID); err != nil {
+		return nil, fmt.Errorf("record review attempt counts: %w", err)
 	}
 
 	if err := tx.Commit(); err != nil {
@@ -644,8 +783,10 @@ func (s *Store) Commit(ctx context.Context, sha string) (CommitRecord, error) {
 			c.input_tokens, c.cached_input_tokens, c.cache_write_tokens, c.output_tokens,
 			c.reasoning_output_tokens, c.estimated_cost_microusd,
 			c.estimated_cost_max_microusd, c.cost_context, c.cost_complete,
-            (SELECT COUNT(*) FROM findings f WHERE f.introduced_sha = c.sha),
-            (SELECT COUNT(*) FROM findings f WHERE f.resolved_sha = c.sha)
+			COALESCE((SELECT a.new_count FROM review_attempts a
+			          WHERE a.commit_sha = c.sha ORDER BY a.id DESC LIMIT 1), 0),
+			COALESCE((SELECT a.resolved_count FROM review_attempts a
+			          WHERE a.commit_sha = c.sha ORDER BY a.id DESC LIMIT 1), 0)
         FROM commits c WHERE c.sha = ?`, sha)
 	record, err := scanCommitRecord(row)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -665,8 +806,10 @@ func (s *Store) Log(ctx context.Context) ([]CommitRecord, error) {
 			c.input_tokens, c.cached_input_tokens, c.cache_write_tokens, c.output_tokens,
 			c.reasoning_output_tokens, c.estimated_cost_microusd,
 			c.estimated_cost_max_microusd, c.cost_context, c.cost_complete,
-            (SELECT COUNT(*) FROM findings f WHERE f.introduced_sha = c.sha),
-            (SELECT COUNT(*) FROM findings f WHERE f.resolved_sha = c.sha)
+			COALESCE((SELECT a.new_count FROM review_attempts a
+			          WHERE a.commit_sha = c.sha ORDER BY a.id DESC LIMIT 1), 0),
+			COALESCE((SELECT a.resolved_count FROM review_attempts a
+			          WHERE a.commit_sha = c.sha ORDER BY a.id DESC LIMIT 1), 0)
         FROM commits c ORDER BY c.processed_at DESC, c.sha DESC`)
 	if err != nil {
 		return nil, fmt.Errorf("read review log: %w", err)
@@ -755,6 +898,100 @@ func scanCommitRecord(row rowScanner) (CommitRecord, error) {
 		return CommitRecord{}, fmt.Errorf("parse processed timestamp: %w", err)
 	}
 	return record, nil
+}
+
+func (s *Store) ReviewAttempts(ctx context.Context, sha string) ([]ReviewAttempt, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT id, commit_sha, reviewed_at, model, reasoning_effort, prompt_version,
+		       summary, raw_response, input_tokens, cached_input_tokens,
+		       cache_write_tokens, output_tokens, reasoning_output_tokens,
+		       estimated_cost_microusd, estimated_cost_max_microusd,
+		       cost_context, cost_complete, new_count, resolved_count
+		FROM review_attempts WHERE commit_sha = ? ORDER BY id`, sha)
+	if err != nil {
+		return nil, fmt.Errorf("list review attempts: %w", err)
+	}
+	defer rows.Close()
+	var attempts []ReviewAttempt
+	for rows.Next() {
+		attempt, err := scanReviewAttempt(rows)
+		if err != nil {
+			return nil, fmt.Errorf("list review attempts: %w", err)
+		}
+		attempt.Number = len(attempts) + 1
+		attempts = append(attempts, attempt)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("list review attempts: %w", err)
+	}
+	if len(attempts) > 0 {
+		attempts[len(attempts)-1].Current = true
+	}
+	return attempts, nil
+}
+
+func (s *Store) ReviewAttempt(ctx context.Context, sha string, number int) (ReviewAttempt, error) {
+	if number <= 0 {
+		return ReviewAttempt{}, errors.New("review number must be positive")
+	}
+	attempts, err := s.ReviewAttempts(ctx, sha)
+	if err != nil {
+		return ReviewAttempt{}, err
+	}
+	if number > len(attempts) {
+		return ReviewAttempt{}, fmt.Errorf("commit %s has no review attempt #%d", shortSHA(sha), number)
+	}
+	return attempts[number-1], nil
+}
+
+func scanReviewAttempt(row rowScanner) (ReviewAttempt, error) {
+	var attempt ReviewAttempt
+	var reviewedAt string
+	var effort sql.NullString
+	var cacheWriteTokens, estimatedCost, estimatedCostMaximum sql.NullInt64
+	var costContextValue sql.NullString
+	var costCompleteValue sql.NullBool
+	if err := row.Scan(
+		&attempt.ID,
+		&attempt.CommitSHA,
+		&reviewedAt,
+		&attempt.Model,
+		&effort,
+		&attempt.PromptVersion,
+		&attempt.Summary,
+		&attempt.RawResponse,
+		&attempt.Usage.InputTokens,
+		&attempt.Usage.CachedInputTokens,
+		&cacheWriteTokens,
+		&attempt.Usage.OutputTokens,
+		&attempt.Usage.ReasoningOutputTokens,
+		&estimatedCost,
+		&estimatedCostMaximum,
+		&costContextValue,
+		&costCompleteValue,
+		&attempt.NewCount,
+		&attempt.ResolvedCount,
+	); err != nil {
+		return ReviewAttempt{}, err
+	}
+	attempt.ReasoningEffort = effort.String
+	if cacheWriteTokens.Valid {
+		attempt.Usage.CacheWriteTokens = int64Pointer(cacheWriteTokens.Int64)
+	}
+	if estimatedCost.Valid {
+		attempt.EstimatedCostMicrousd = int64Pointer(estimatedCost.Int64)
+	}
+	if estimatedCostMaximum.Valid {
+		attempt.EstimatedCostMaxMicrousd = int64Pointer(estimatedCostMaximum.Int64)
+	}
+	attempt.CostContext = costContextValue.String
+	attempt.CostComplete = costCompleteValue.Bool
+	parsed, err := time.Parse(time.RFC3339Nano, reviewedAt)
+	if err != nil {
+		return ReviewAttempt{}, fmt.Errorf("parse review timestamp: %w", err)
+	}
+	attempt.ReviewedAt = parsed
+	return attempt, nil
 }
 
 func validateReviewOutput(output ReviewOutput, allowedResolutions map[int64]struct{}) error {
