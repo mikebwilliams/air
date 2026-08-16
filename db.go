@@ -363,13 +363,15 @@ func (s *Store) ProcessedSHAs(ctx context.Context) (map[string]struct{}, error) 
 
 func (s *Store) OpenFindings(ctx context.Context) ([]Finding, error) {
 	return s.queryFindings(ctx, `
-        SELECT id, introduced_sha, resolved_sha, severity, title, description, file, line, symbol
+		SELECT id, introduced_sha, resolved_sha, dismissed_at, dismiss_reason,
+		       severity, title, description, file, line, symbol
 		FROM findings WHERE resolved_sha IS NULL AND dismissed_at IS NULL ORDER BY id`)
 }
 
 func (s *Store) OpenFindingsExcludingCommit(ctx context.Context, sha string) ([]Finding, error) {
 	return s.queryFindings(ctx, `
-		SELECT id, introduced_sha, resolved_sha, severity, title, description, file, line, symbol
+		SELECT id, introduced_sha, resolved_sha, dismissed_at, dismiss_reason,
+		       severity, title, description, file, line, symbol
 		FROM findings
 		WHERE resolved_sha IS NULL AND dismissed_at IS NULL AND introduced_sha <> ?
 		ORDER BY id`, sha)
@@ -377,7 +379,8 @@ func (s *Store) OpenFindingsExcludingCommit(ctx context.Context, sha string) ([]
 
 func (s *Store) Finding(ctx context.Context, id int64) (Finding, error) {
 	rows, err := s.queryFindings(ctx, `
-        SELECT id, introduced_sha, resolved_sha, severity, title, description, file, line, symbol
+		SELECT id, introduced_sha, resolved_sha, dismissed_at, dismiss_reason,
+		       severity, title, description, file, line, symbol
         FROM findings WHERE id = ?`, id)
 	if err != nil {
 		return Finding{}, err
@@ -390,7 +393,8 @@ func (s *Store) Finding(ctx context.Context, id int64) (Finding, error) {
 
 func (s *Store) FindingsIntroducedBy(ctx context.Context, sha string) ([]Finding, error) {
 	return s.queryFindings(ctx, `
-        SELECT id, introduced_sha, resolved_sha, severity, title, description, file, line, symbol
+		SELECT id, introduced_sha, resolved_sha, dismissed_at, dismiss_reason,
+		       severity, title, description, file, line, symbol
 		FROM findings
 		WHERE introduced_review_id = (
 			SELECT id FROM review_attempts WHERE commit_sha = ? ORDER BY id DESC LIMIT 1
@@ -400,7 +404,8 @@ func (s *Store) FindingsIntroducedBy(ctx context.Context, sha string) ([]Finding
 
 func (s *Store) FindingsResolvedBy(ctx context.Context, sha string) ([]Finding, error) {
 	return s.queryFindings(ctx, `
-		SELECT f.id, f.introduced_sha, f.resolved_sha, f.severity, f.title,
+		SELECT f.id, f.introduced_sha, f.resolved_sha, f.dismissed_at, f.dismiss_reason,
+		       f.severity, f.title,
 		       f.description, f.file, f.line, f.symbol
 		FROM findings f
 		JOIN finding_events e ON e.finding_id = f.id
@@ -412,13 +417,15 @@ func (s *Store) FindingsResolvedBy(ctx context.Context, sha string) ([]Finding, 
 
 func (s *Store) FindingsIntroducedByReview(ctx context.Context, reviewID int64) ([]Finding, error) {
 	return s.queryFindings(ctx, `
-		SELECT id, introduced_sha, resolved_sha, severity, title, description, file, line, symbol
+		SELECT id, introduced_sha, resolved_sha, dismissed_at, dismiss_reason,
+		       severity, title, description, file, line, symbol
 		FROM findings WHERE introduced_review_id = ? ORDER BY id`, reviewID)
 }
 
 func (s *Store) FindingsResolvedByReview(ctx context.Context, reviewID int64) ([]Finding, error) {
 	return s.queryFindings(ctx, `
-		SELECT f.id, f.introduced_sha, f.resolved_sha, f.severity, f.title,
+		SELECT f.id, f.introduced_sha, f.resolved_sha, f.dismissed_at, f.dismiss_reason,
+		       f.severity, f.title,
 		       f.description, f.file, f.line, f.symbol
 		FROM findings f
 		JOIN finding_events e ON e.finding_id = f.id
@@ -435,12 +442,14 @@ func (s *Store) queryFindings(ctx context.Context, query string, args ...any) ([
 	var findings []Finding
 	for rows.Next() {
 		var finding Finding
-		var resolved, file, symbol sql.NullString
+		var resolved, dismissedAt, dismissReason, file, symbol sql.NullString
 		var line sql.NullInt64
 		if err := rows.Scan(
 			&finding.ID,
 			&finding.IntroducedSHA,
 			&resolved,
+			&dismissedAt,
+			&dismissReason,
 			&finding.Severity,
 			&finding.Title,
 			&finding.Description,
@@ -452,6 +461,14 @@ func (s *Store) queryFindings(ctx context.Context, query string, args ...any) ([
 		}
 		if resolved.Valid {
 			finding.ResolvedSHA = stringPointer(resolved.String)
+		}
+		if dismissedAt.Valid {
+			parsed, err := time.Parse(time.RFC3339Nano, dismissedAt.String)
+			if err != nil {
+				return nil, fmt.Errorf("parse finding dismissal timestamp: %w", err)
+			}
+			finding.DismissedAt = &parsed
+			finding.DismissReason = dismissReason.String
 		}
 		if file.Valid {
 			finding.File = stringPointer(file.String)
@@ -469,6 +486,150 @@ func (s *Store) queryFindings(ctx context.Context, query string, args ...any) ([
 		return nil, fmt.Errorf("query findings: %w", err)
 	}
 	return findings, nil
+}
+
+func (s *Store) DismissFinding(ctx context.Context, id int64, reason string, now time.Time) error {
+	reason = strings.TrimSpace(reason)
+	if reason == "" {
+		return errors.New("dismissal reason must not be empty")
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("dismiss finding #%d: %w", id, err)
+	}
+	defer tx.Rollback()
+	var resolved, dismissed sql.NullString
+	if err := tx.QueryRowContext(ctx, `
+		SELECT resolved_sha, dismissed_at FROM findings WHERE id = ?`, id).Scan(&resolved, &dismissed); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return fmt.Errorf("finding #%d does not exist", id)
+		}
+		return fmt.Errorf("dismiss finding #%d: %w", id, err)
+	}
+	if resolved.Valid {
+		return fmt.Errorf("finding #%d is resolved; reopen it before dismissing it", id)
+	}
+	if dismissed.Valid {
+		return fmt.Errorf("finding #%d is already dismissed", id)
+	}
+	timestamp := formatTime(now)
+	if _, err := tx.ExecContext(ctx, `
+		UPDATE findings SET dismissed_at = ?, dismiss_reason = ? WHERE id = ?`, timestamp, reason, id); err != nil {
+		return fmt.Errorf("dismiss finding #%d: %w", id, err)
+	}
+	if _, err := tx.ExecContext(ctx, `
+		INSERT INTO finding_events(finding_id, action, note, created_at)
+		VALUES(?, 'dismissed', ?, ?)`, id, reason, timestamp); err != nil {
+		return fmt.Errorf("record dismissal for finding #%d: %w", id, err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("dismiss finding #%d: %w", id, err)
+	}
+	return nil
+}
+
+func (s *Store) ReopenFinding(ctx context.Context, id int64, now time.Time) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("reopen finding #%d: %w", id, err)
+	}
+	defer tx.Rollback()
+	var resolved, dismissed sql.NullString
+	if err := tx.QueryRowContext(ctx, `
+		SELECT resolved_sha, dismissed_at FROM findings WHERE id = ?`, id).Scan(&resolved, &dismissed); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return fmt.Errorf("finding #%d does not exist", id)
+		}
+		return fmt.Errorf("reopen finding #%d: %w", id, err)
+	}
+	if !resolved.Valid && !dismissed.Valid {
+		return fmt.Errorf("finding #%d is already open", id)
+	}
+	note := "reopened dismissed finding"
+	if resolved.Valid {
+		note = "reopened resolved finding"
+	}
+	timestamp := formatTime(now)
+	if _, err := tx.ExecContext(ctx, `
+		UPDATE findings
+		SET resolved_sha = NULL, dismissed_at = NULL, dismiss_reason = NULL
+		WHERE id = ?`, id); err != nil {
+		return fmt.Errorf("reopen finding #%d: %w", id, err)
+	}
+	if _, err := tx.ExecContext(ctx, `
+		INSERT INTO finding_events(finding_id, action, note, created_at)
+		VALUES(?, 'reopened', ?, ?)`, id, note, timestamp); err != nil {
+		return fmt.Errorf("record reopening for finding #%d: %w", id, err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("reopen finding #%d: %w", id, err)
+	}
+	return nil
+}
+
+func (s *Store) AddFindingNote(ctx context.Context, id int64, note string, now time.Time) error {
+	note = strings.TrimSpace(note)
+	if note == "" {
+		return errors.New("finding note must not be empty")
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("note finding #%d: %w", id, err)
+	}
+	defer tx.Rollback()
+	var exists int
+	if err := tx.QueryRowContext(ctx, `SELECT 1 FROM findings WHERE id = ?`, id).Scan(&exists); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return fmt.Errorf("finding #%d does not exist", id)
+		}
+		return fmt.Errorf("note finding #%d: %w", id, err)
+	}
+	if _, err := tx.ExecContext(ctx, `
+		INSERT INTO finding_events(finding_id, action, note, created_at)
+		VALUES(?, 'noted', ?, ?)`, id, note, formatTime(now)); err != nil {
+		return fmt.Errorf("note finding #%d: %w", id, err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("note finding #%d: %w", id, err)
+	}
+	return nil
+}
+
+func (s *Store) FindingEvents(ctx context.Context, id int64) ([]FindingEvent, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT id, finding_id, review_id, sha, action, note, created_at
+		FROM finding_events WHERE finding_id = ? ORDER BY id`, id)
+	if err != nil {
+		return nil, fmt.Errorf("read history for finding #%d: %w", id, err)
+	}
+	defer rows.Close()
+	var events []FindingEvent
+	for rows.Next() {
+		var event FindingEvent
+		var reviewID sql.NullInt64
+		var sha, note sql.NullString
+		var createdAt string
+		if err := rows.Scan(&event.ID, &event.FindingID, &reviewID, &sha,
+			&event.Action, &note, &createdAt); err != nil {
+			return nil, fmt.Errorf("read history for finding #%d: %w", id, err)
+		}
+		if reviewID.Valid {
+			event.ReviewID = int64Pointer(reviewID.Int64)
+		}
+		if sha.Valid {
+			event.SHA = stringPointer(sha.String)
+		}
+		event.Note = note.String
+		event.CreatedAt, err = time.Parse(time.RFC3339Nano, createdAt)
+		if err != nil {
+			return nil, fmt.Errorf("parse finding event timestamp: %w", err)
+		}
+		events = append(events, event)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("read history for finding #%d: %w", id, err)
+	}
+	return events, nil
 }
 
 func (s *Store) InsertSkipped(ctx context.Context, metadata CommitMetadata, reason string, now time.Time) error {

@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -399,6 +400,70 @@ func TestCLIRescanAndReviewAttemptDisplay(t *testing.T) {
 		!strings.Contains(stdout.String(), "Model: first-model") ||
 		strings.Contains(stdout.String(), "Model: second-model") {
 		t.Fatalf("first review output:\n%s", stdout.String())
+	}
+}
+
+func TestCLIFindingTriageCommands(t *testing.T) {
+	ctx := context.Background()
+	repository, directory := newTestGitRepository(t)
+	base := testCommitFile(t, directory, "app.txt", []byte("base\n"), "base")
+	head := testCommitFile(t, directory, "app.txt", []byte("changed\n"), "change")
+	now := time.Date(2026, 8, 16, 15, 0, 0, 0, time.UTC)
+	var stdout bytes.Buffer
+	environment := cliEnvironment{
+		Cwd: directory, Stdout: &stdout, Stderr: &bytes.Buffer{},
+		Getenv: func(string) string { return "" }, Now: func() time.Time { return now },
+	}
+	if err := runCLI(ctx, []string{"init", base}, environment); err != nil {
+		t.Fatal(err)
+	}
+	store, err := OpenStore(ctx, repository.DatabasePath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	result := cleanReview("Finding for CLI triage.")
+	result.Output.NewFindings = []NewFinding{{
+		Severity: "warning", Title: "manual triage", Description: "Exercise manual disposition.",
+	}}
+	ids, err := store.ApplyReview(ctx, CommitMetadata{SHA: head, ParentSHA: base},
+		ReviewIdentity{Model: modelByName("test-model")}, result, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	id := strconv.FormatInt(ids[0], 10)
+	if err := runCLI(ctx, []string{"finding", "dismiss", id, "--reason", "accepted risk"}, environment); err != nil {
+		t.Fatalf("dismiss: %v", err)
+	}
+	if err := runCLI(ctx, []string{"finding", "note", id, "check next release"}, environment); err != nil {
+		t.Fatalf("note: %v", err)
+	}
+	stdout.Reset()
+	if err := runCLI(ctx, []string{"finding", id}, environment); err != nil {
+		t.Fatalf("show finding: %v", err)
+	}
+	if !strings.Contains(stdout.String(), "dismissed") || !strings.Contains(stdout.String(), "accepted risk") ||
+		!strings.Contains(stdout.String(), "check next release") {
+		t.Fatalf("dismissed finding output:\n%s", stdout.String())
+	}
+	stdout.Reset()
+	if err := runCLI(ctx, []string{"status"}, environment); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(stdout.String(), "0 open findings") {
+		t.Fatalf("status after dismissal:\n%s", stdout.String())
+	}
+	if err := runCLI(ctx, []string{"finding", "reopen", id}, environment); err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	stdout.Reset()
+	if err := runCLI(ctx, []string{"status"}, environment); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(stdout.String(), "1 open findings") {
+		t.Fatalf("status after reopen:\n%s", stdout.String())
 	}
 }
 

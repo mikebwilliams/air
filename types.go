@@ -66,15 +66,27 @@ type ReviewIdentity struct {
 }
 
 type Finding struct {
-	ID            int64   `json:"id"`
-	IntroducedSHA string  `json:"introduced_sha"`
-	ResolvedSHA   *string `json:"resolved_sha,omitempty"`
-	Severity      string  `json:"severity"`
-	Title         string  `json:"title"`
-	Description   string  `json:"description"`
-	File          *string `json:"file,omitempty"`
-	Line          *int    `json:"line,omitempty"`
-	Symbol        *string `json:"symbol,omitempty"`
+	ID            int64      `json:"id"`
+	IntroducedSHA string     `json:"introduced_sha"`
+	ResolvedSHA   *string    `json:"resolved_sha,omitempty"`
+	DismissedAt   *time.Time `json:"dismissed_at,omitempty"`
+	DismissReason string     `json:"dismiss_reason,omitempty"`
+	Severity      string     `json:"severity"`
+	Title         string     `json:"title"`
+	Description   string     `json:"description"`
+	File          *string    `json:"file,omitempty"`
+	Line          *int       `json:"line,omitempty"`
+	Symbol        *string    `json:"symbol,omitempty"`
+}
+
+type FindingEvent struct {
+	ID        int64
+	FindingID int64
+	ReviewID  *int64
+	SHA       *string
+	Action    string
+	Note      string
+	CreatedAt time.Time
 }
 
 type NewFinding struct {

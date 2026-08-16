@@ -293,6 +293,8 @@ CREATE TABLE findings (
     introduced_sha  TEXT NOT NULL,
 	introduced_review_id INTEGER NOT NULL,
     resolved_sha    TEXT,
+	dismissed_at      TEXT,
+	dismiss_reason    TEXT,
     severity        TEXT NOT NULL,
     title           TEXT NOT NULL,
     description     TEXT NOT NULL,
@@ -341,6 +343,8 @@ opened
 resolved
 reopened
 updated
+dismissed
+noted
 ```
 
 The event table exists primarily for auditability.
@@ -835,16 +839,19 @@ Resolved:
     916cc21 Initialize backing object before validation
 ```
 
-### Deferred manual lifecycle overrides
+### Manual lifecycle overrides
 
 ```bash
-air close 17
-air reopen 17
+air finding dismiss 17 --reason "Intentional compatibility behavior"
+air finding note 17 "Verify after the parser rewrite"
+air finding reopen 17
 ```
 
-These commands are not part of version 0.1. When implemented, manual actions
-should create corresponding `finding_events` and define how the acting commit
-is recorded.
+Dismissal requires a reason and hides the finding from normal status and model
+context without pretending that a commit resolved it. Reopening clears either
+a dismissal or a recorded resolution. Notes do not change disposition. Manual
+events have no commit or review ID, but always retain their timestamp, action,
+and note in `finding_events`; `air finding <id>` displays that audit history.
 
 ### Rescan
 

@@ -220,6 +220,18 @@ air finding 17
 cost used for that commit. `--reviews` lists retained attempts, and `--review N`
 shows the findings and accounting recorded by one attempt.
 
+Triage findings without losing their audit history:
+
+```bash
+air finding dismiss 17 --reason "Intentional compatibility behavior"
+air finding note 17 "Verify after the parser rewrite"
+air finding reopen 17
+```
+
+Dismissed findings do not appear in `air status` and are not supplied to later
+reviews. Reopening clears either a manual dismissal or a model resolution.
+Every action and note is timestamped in the finding's displayed history.
+
 Run `air help` for the concise command reference.
 
 ## Review and skip behavior

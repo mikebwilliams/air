@@ -644,8 +644,18 @@ func printReviewResult(output io.Writer, introduced, resolved []Finding, summary
 }
 
 func runFinding(ctx context.Context, args []string, environment cliEnvironment) error {
+	if len(args) > 0 {
+		switch args[0] {
+		case "dismiss":
+			return runFindingDismiss(ctx, args[1:], environment)
+		case "reopen":
+			return runFindingReopen(ctx, args[1:], environment)
+		case "note":
+			return runFindingNote(ctx, args[1:], environment)
+		}
+	}
 	if len(args) != 1 {
-		return errors.New("usage: air finding <id>")
+		return errors.New("usage: air finding <id> | air finding <dismiss|reopen|note> ...")
 	}
 	id, err := parseFindingID(args[0])
 	if err != nil {
@@ -662,13 +672,108 @@ func runFinding(ctx context.Context, args []string, environment cliEnvironment) 
 	}
 	fmt.Fprintf(environment.Stdout, "#%d %s\n%s\n\n%s\n", finding.ID, finding.Severity, finding.Title, finding.Description)
 	printCommitReference(ctx, environment.Stdout, repository, "Introduced", finding.IntroducedSHA)
-	if finding.ResolvedSHA == nil {
+	if finding.DismissedAt != nil {
+		fmt.Fprintf(environment.Stdout, "\nDisposition:\n    dismissed %s\n    %s\n",
+			finding.DismissedAt.Format(time.RFC3339), finding.DismissReason)
+	} else if finding.ResolvedSHA == nil {
 		fmt.Fprintln(environment.Stdout, "\nResolved:\n    open")
 	} else {
 		fmt.Fprintln(environment.Stdout)
 		printCommitReference(ctx, environment.Stdout, repository, "Resolved", *finding.ResolvedSHA)
 	}
+	events, err := store.FindingEvents(ctx, id)
+	if err != nil {
+		return err
+	}
+	fmt.Fprintln(environment.Stdout, "\nHistory:")
+	for _, event := range events {
+		reference := ""
+		if event.SHA != nil {
+			reference = " " + shortSHA(*event.SHA)
+		}
+		note := ""
+		if event.Note != "" {
+			note = " — " + event.Note
+		}
+		fmt.Fprintf(environment.Stdout, "    %s  %s%s%s\n",
+			event.CreatedAt.Format(time.RFC3339), event.Action, reference, note)
+	}
 	return nil
+}
+
+func runFindingDismiss(ctx context.Context, args []string, environment cliEnvironment) error {
+	if len(args) < 2 || len(args) > 3 {
+		return errors.New("usage: air finding dismiss <id> --reason <text>")
+	}
+	id, err := parseFindingID(args[0])
+	if err != nil {
+		return err
+	}
+	reason := ""
+	if len(args) == 3 && args[1] == "--reason" {
+		reason = args[2]
+	} else if len(args) == 2 && strings.HasPrefix(args[1], "--reason=") {
+		reason = strings.TrimPrefix(args[1], "--reason=")
+	} else {
+		return errors.New("usage: air finding dismiss <id> --reason <text>")
+	}
+	_, store, closeStore, err := openRepositoryStore(ctx, environment.Cwd)
+	if err != nil {
+		return err
+	}
+	defer closeStore()
+	if err := store.DismissFinding(ctx, id, reason, environmentNow(environment)); err != nil {
+		return err
+	}
+	fmt.Fprintf(environment.Stdout, "Dismissed finding #%d\n", id)
+	return nil
+}
+
+func runFindingReopen(ctx context.Context, args []string, environment cliEnvironment) error {
+	if len(args) != 1 {
+		return errors.New("usage: air finding reopen <id>")
+	}
+	id, err := parseFindingID(args[0])
+	if err != nil {
+		return err
+	}
+	_, store, closeStore, err := openRepositoryStore(ctx, environment.Cwd)
+	if err != nil {
+		return err
+	}
+	defer closeStore()
+	if err := store.ReopenFinding(ctx, id, environmentNow(environment)); err != nil {
+		return err
+	}
+	fmt.Fprintf(environment.Stdout, "Reopened finding #%d\n", id)
+	return nil
+}
+
+func runFindingNote(ctx context.Context, args []string, environment cliEnvironment) error {
+	if len(args) != 2 {
+		return errors.New("usage: air finding note <id> <text>")
+	}
+	id, err := parseFindingID(args[0])
+	if err != nil {
+		return err
+	}
+	_, store, closeStore, err := openRepositoryStore(ctx, environment.Cwd)
+	if err != nil {
+		return err
+	}
+	defer closeStore()
+	if err := store.AddFindingNote(ctx, id, args[1], environmentNow(environment)); err != nil {
+		return err
+	}
+	fmt.Fprintf(environment.Stdout, "Added note to finding #%d\n", id)
+	return nil
+}
+
+func environmentNow(environment cliEnvironment) time.Time {
+	if environment.Now != nil {
+		return environment.Now()
+	}
+	return time.Now()
 }
 
 func openRepositoryStore(ctx context.Context, cwd string) (*GitRepository, *Store, func(), error) {
@@ -734,6 +839,9 @@ Usage:
   air log
   air show <commit-ish> [--reviews | --review N]
   air finding <id>
+  air finding dismiss <id> --reason <text>
+  air finding reopen <id>
+  air finding note <id> <text>
 
 Reviewer configuration precedence:
   command-line flag > environment variable > database > built-in default

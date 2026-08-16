@@ -341,6 +341,54 @@ func TestReviewAttemptsRetainHistoryAndCurrentReview(t *testing.T) {
 	}
 }
 
+func TestManualFindingDispositionAndNotes(t *testing.T) {
+	ctx := context.Background()
+	store, err := CreateStore(ctx, filepath.Join(t.TempDir(), "air.sqlite"), strings.Repeat("0", 40))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	result := cleanReview("Found an issue.")
+	result.Output.NewFindings = []NewFinding{{
+		Severity: "warning", Title: "triage me", Description: "This finding needs human triage.",
+	}}
+	now := time.Date(2026, 8, 16, 14, 0, 0, 0, time.UTC)
+	ids, err := store.ApplyReview(ctx, testMetadata("g", "0"),
+		ReviewIdentity{Model: modelByName("test-model")}, result, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := ids[0]
+	if err := store.DismissFinding(ctx, id, "Accepted compatibility tradeoff.", now.Add(time.Minute)); err != nil {
+		t.Fatalf("DismissFinding: %v", err)
+	}
+	if open, err := store.OpenFindings(ctx); err != nil || len(open) != 0 {
+		t.Fatalf("open after dismissal = %+v, %v", open, err)
+	}
+	finding, err := store.Finding(ctx, id)
+	if err != nil || finding.DismissedAt == nil || finding.DismissReason != "Accepted compatibility tradeoff." {
+		t.Fatalf("dismissed finding = %+v, %v", finding, err)
+	}
+	if err := store.AddFindingNote(ctx, id, "Revisit after the compatibility window.", now.Add(2*time.Minute)); err != nil {
+		t.Fatalf("AddFindingNote: %v", err)
+	}
+	if err := store.ReopenFinding(ctx, id, now.Add(3*time.Minute)); err != nil {
+		t.Fatalf("ReopenFinding: %v", err)
+	}
+	if open, err := store.OpenFindings(ctx); err != nil || len(open) != 1 || open[0].ID != id {
+		t.Fatalf("open after reopen = %+v, %v", open, err)
+	}
+	events, err := store.FindingEvents(ctx, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 4 || events[0].Action != "opened" || events[1].Action != "dismissed" ||
+		events[2].Action != "noted" || events[2].Note != "Revisit after the compatibility window." ||
+		events[3].Action != "reopened" {
+		t.Fatalf("finding events = %+v", events)
+	}
+}
+
 func testMetadata(shaCharacter, parentCharacter string) CommitMetadata {
 	return CommitMetadata{
 		SHA:       strings.Repeat(shaCharacter, 40),
