@@ -149,6 +149,209 @@ func TestCLIScanDefaultsToCodex(t *testing.T) {
 	}
 }
 
+func TestCLIStoredConfigurationDrivesScanAndRedactsSecrets(t *testing.T) {
+	ctx := context.Background()
+	repository, directory := newTestGitRepository(t)
+	base := testCommitFile(t, directory, "app.txt", []byte("base\n"), "base")
+	head := testCommitFile(t, directory, "app.txt", []byte("changed\n"), "change")
+	command, invocation := newCodexTestCommand(t, ReviewOutput{
+		NewFindings:      []NewFinding{},
+		ResolvedFindings: []ResolvedFinding{},
+		Summary:          "Reviewed using stored configuration.",
+	}, "")
+	var stdout bytes.Buffer
+	values := map[string]string{}
+	environment := cliEnvironment{
+		Cwd:          directory,
+		Stdout:       &stdout,
+		Stderr:       &bytes.Buffer{},
+		Getenv:       func(key string) string { return values[key] },
+		CodexCommand: command,
+		Now:          func() time.Time { return time.Date(2026, 8, 15, 13, 0, 0, 0, time.UTC) },
+	}
+	if err := runCLI(ctx, []string{"init", base}, environment); err != nil {
+		t.Fatalf("init: %v", err)
+	}
+	for _, setting := range [][2]string{
+		{"model", "stored-model"},
+		{"effort", "xhigh"},
+		{"codex-bin", "/stored/codex"},
+		{"codex-profile", "air-review"},
+		{"codex-timeout", "3m"},
+	} {
+		if err := runCLI(ctx, []string{"config", "set", setting[0], setting[1]}, environment); err != nil {
+			t.Fatalf("set %s: %v", setting[0], err)
+		}
+	}
+	environment.Stdin = strings.NewReader("database-secret\n")
+	if err := runCLI(ctx, []string{"config", "set", "--stdin", "api-key"}, environment); err != nil {
+		t.Fatalf("set api-key: %v", err)
+	}
+
+	stdout.Reset()
+	if err := runCLI(ctx, []string{"config", "list", "--effective"}, environment); err != nil {
+		t.Fatalf("config list: %v", err)
+	}
+	configOutput := stdout.String()
+	if !strings.Contains(configOutput, "model") || !strings.Contains(configOutput, "stored-model") ||
+		!strings.Contains(configOutput, "database") || !strings.Contains(configOutput, "reviewer") ||
+		!strings.Contains(configOutput, "built-in") || !strings.Contains(configOutput, "<redacted>") ||
+		strings.Contains(configOutput, "database-secret") {
+		t.Fatalf("effective configuration output:\n%s", configOutput)
+	}
+
+	stdout.Reset()
+	if err := runCLI(ctx, []string{"scan"}, environment); err != nil {
+		t.Fatalf("scan: %v", err)
+	}
+	if invocation.Name != "/stored/codex" {
+		t.Fatalf("Codex binary = %q", invocation.Name)
+	}
+	assertArgumentPair(t, invocation.Args, "--model", "stored-model")
+	assertArgumentPair(t, invocation.Args, "--config", `model_reasoning_effort="xhigh"`)
+	assertArgumentPair(t, invocation.Args, "--profile", "air-review")
+
+	secondHead := testCommitFile(t, directory, "app.txt", []byte("changed again\n"), "change again")
+	values["AIR_MODEL"] = "environment-model"
+	values["AIR_REASONING_EFFORT"] = "medium"
+	stdout.Reset()
+	if err := runCLI(ctx, []string{"config", "get", "--effective", "model"}, environment); err != nil {
+		t.Fatalf("get effective model: %v", err)
+	}
+	if !strings.Contains(stdout.String(), "environment-model\tAIR_MODEL") {
+		t.Fatalf("effective model output = %q", stdout.String())
+	}
+	if err := runCLI(ctx, []string{"scan", "--model", "command-model", "--effort", "high"}, environment); err != nil {
+		t.Fatalf("scan with flags: %v", err)
+	}
+	assertArgumentPair(t, invocation.Args, "--model", "command-model")
+	assertArgumentPair(t, invocation.Args, "--config", `model_reasoning_effort="high"`)
+
+	recordStore, err := OpenStore(ctx, repository.DatabasePath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer recordStore.Close()
+	record, err := recordStore.Commit(ctx, head)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if record.Model != "stored-model" || record.ReasoningEffort != "xhigh" {
+		t.Fatalf("stored review identity = model %q, effort %q", record.Model, record.ReasoningEffort)
+	}
+	record, err = recordStore.Commit(ctx, secondHead)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if record.Model != "command-model" || record.ReasoningEffort != "high" {
+		t.Fatalf("overridden review identity = model %q, effort %q", record.Model, record.ReasoningEffort)
+	}
+}
+
+func TestCLIStoredHTTPConfiguration(t *testing.T) {
+	ctx := context.Background()
+	_, directory := newTestGitRepository(t)
+	base := testCommitFile(t, directory, "app.txt", []byte("base\n"), "base")
+	testCommitFile(t, directory, "app.txt", []byte("changed\n"), "change")
+	client := &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		if request.URL.String() != "https://stored.example/v1/chat/completions" {
+			t.Fatalf("request URL = %s", request.URL)
+		}
+		if authorization := request.Header.Get("Authorization"); authorization != "Bearer stored-secret" {
+			t.Fatalf("Authorization = %q", authorization)
+		}
+		output, _ := json.Marshal(ReviewOutput{
+			NewFindings:      []NewFinding{},
+			ResolvedFindings: []ResolvedFinding{},
+			Summary:          "Reviewed with stored HTTP configuration.",
+		})
+		return JSONResponse(t, map[string]any{
+			"usage": chatUsage(10, 0, 0, 2, 0),
+			"choices": []any{map[string]any{
+				"message":       map[string]any{"role": "assistant", "content": string(output)},
+				"finish_reason": "stop",
+			}},
+		}), nil
+	})}
+	var stdout bytes.Buffer
+	environment := cliEnvironment{
+		Cwd:        directory,
+		Stdout:     &stdout,
+		Stderr:     &bytes.Buffer{},
+		Getenv:     func(string) string { return "" },
+		HTTPClient: client,
+		Now:        func() time.Time { return time.Date(2026, 8, 15, 14, 0, 0, 0, time.UTC) },
+	}
+	if err := runCLI(ctx, []string{"init", base}, environment); err != nil {
+		t.Fatalf("init: %v", err)
+	}
+	for _, setting := range [][2]string{
+		{"reviewer", "http"},
+		{"model", "stored-http-model"},
+		{"base-url", "https://stored.example/v1"},
+		{"api-key", "stored-secret"},
+	} {
+		if err := runCLI(ctx, []string{"config", "set", setting[0], setting[1]}, environment); err != nil {
+			t.Fatalf("set %s: %v", setting[0], err)
+		}
+	}
+	stdout.Reset()
+	if err := runCLI(ctx, []string{"scan"}, environment); err != nil {
+		t.Fatalf("scan: %v", err)
+	}
+	if !strings.Contains(stdout.String(), "0 new, 0 resolved") {
+		t.Fatalf("scan output:\n%s", stdout.String())
+	}
+}
+
+func TestCLIConfigGetUnsetAndValidation(t *testing.T) {
+	ctx := context.Background()
+	_, directory := newTestGitRepository(t)
+	base := testCommitFile(t, directory, "app.txt", []byte("base\n"), "base")
+	var stdout bytes.Buffer
+	environment := cliEnvironment{
+		Cwd:    directory,
+		Stdout: &stdout,
+		Stderr: &bytes.Buffer{},
+		Getenv: func(string) string { return "" },
+	}
+	if err := runCLI(ctx, []string{"init", base}, environment); err != nil {
+		t.Fatalf("init: %v", err)
+	}
+	stdout.Reset()
+	if err := runCLI(ctx, []string{"config", "list"}, environment); err != nil {
+		t.Fatalf("empty list: %v", err)
+	}
+	if !strings.Contains(stdout.String(), "No reviewer configuration stored") {
+		t.Fatalf("empty list output = %q", stdout.String())
+	}
+	if err := runCLI(ctx, []string{"config", "set", "model", "test-model"}, environment); err != nil {
+		t.Fatalf("set model: %v", err)
+	}
+	stdout.Reset()
+	if err := runCLI(ctx, []string{"config", "get", "model"}, environment); err != nil {
+		t.Fatalf("get model: %v", err)
+	}
+	if strings.TrimSpace(stdout.String()) != "test-model" {
+		t.Fatalf("get model output = %q", stdout.String())
+	}
+	if err := runCLI(ctx, []string{"config", "unset", "model"}, environment); err != nil {
+		t.Fatalf("unset model: %v", err)
+	}
+	if err := runCLI(ctx, []string{"config", "get", "model"}, environment); err == nil ||
+		!strings.Contains(err.Error(), "not set in the database") {
+		t.Fatalf("missing model error = %v", err)
+	}
+	if err := runCLI(ctx, []string{"config", "set", "codex-timeout", "never"}, environment); err == nil ||
+		!strings.Contains(err.Error(), "positive duration") {
+		t.Fatalf("invalid timeout error = %v", err)
+	}
+	if err := runCLI(ctx, []string{"config", "set", "mystery", "value"}, environment); err == nil ||
+		!strings.Contains(err.Error(), "unknown configuration setting") {
+		t.Fatalf("unknown setting error = %v", err)
+	}
+}
+
 func TestCLICodexRequiresExplicitReviewIdentity(t *testing.T) {
 	ctx := context.Background()
 	_, directory := newTestGitRepository(t)

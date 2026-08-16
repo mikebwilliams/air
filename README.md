@@ -52,10 +52,50 @@ provenance.
 
 ```bash
 codex login status
-export AIR_MODEL=your-codex-model
-export AIR_REASONING_EFFORT=low
+air config set model your-codex-model
+air config set effort low
 air scan
 ```
+
+Reviewer settings may come from a scan flag, an environment variable, the AIR
+database, or a built-in default, in that order of precedence:
+
+```text
+command-line flag > environment variable > database > built-in default
+```
+
+The database is the convenient persistent default for a repository. Environment
+variables remain useful for automation, and flags provide one-off overrides:
+
+```bash
+AIR_MODEL=temporary-model air scan
+air scan --model one-off-model --effort high
+```
+
+Manage stored settings and inspect the effective configuration with:
+
+```bash
+air config set codex-profile air-review
+air config get model
+air config unset codex-profile
+air config list
+air config list --effective
+```
+
+Effective output includes the winning source for every setting. API keys are
+always redacted in `config get` and `config list` output.
+
+| Database setting | Scan flag | Environment variable | Built-in default |
+| --- | --- | --- | --- |
+| `reviewer` | `--reviewer` | `AIR_REVIEWER` | `codex` |
+| `model` | `--model` | `AIR_MODEL` | none |
+| `effort` | `--effort` | `AIR_REASONING_EFFORT` | none |
+| `codex-bin` | `--codex-bin` | `AIR_CODEX_BIN` | `codex` |
+| `codex-profile` | `--codex-profile` | `AIR_CODEX_PROFILE` | none |
+| `codex-timeout` | `--codex-timeout` | `AIR_CODEX_TIMEOUT` | `10m` |
+| `base-url` | `--base-url` | `AIR_BASE_URL` | `https://api.openai.com/v1` |
+| `api-key-env` | `--api-key-env` | `AIR_API_KEY_ENV` | none |
+| `api-key` | `--api-key` | `AIR_API_KEY`, then `OPENAI_API_KEY` | none |
 
 Each commit gets an independent ephemeral `codex exec` session. AIR supplies
 the exact commit and first-parent identities, open findings, and a JSON output
@@ -66,9 +106,9 @@ unattended scan fails instead of pausing or modifying the repository.
 Additional optional configuration:
 
 ```bash
-export AIR_CODEX_BIN=/path/to/codex
-export AIR_CODEX_PROFILE=air-review
-export AIR_CODEX_TIMEOUT=10m
+air config set codex-bin /path/to/codex
+air config set codex-profile air-review
+air config set codex-timeout 10m
 ```
 
 The corresponding flags are `--model`, `--effort`, `--codex-bin`,
@@ -104,14 +144,18 @@ The original OpenAI-compatible HTTP reviewer remains available as an explicit
 fallback:
 
 ```bash
-export AIR_MODEL=your-model
-export AIR_API_KEY=your-key
-air scan --reviewer http
+air config set reviewer http
+air config set model your-model
+printf '%s\n' 'your-key' | air config set --stdin api-key
+air scan
 ```
 
 For that backend, `AIR_BASE_URL` defaults to `https://api.openai.com/v1`.
 `AIR_API_KEY_ENV` may name another key variable, and `OPENAI_API_KEY` is the
-final fallback.
+final environment fallback. The corresponding database settings are `base-url`,
+`api-key-env`, and `api-key`; the corresponding flags are `--base-url`,
+`--api-key-env`, and `--api-key`. A stored API key is plaintext in the mode-0600
+SQLite database, so an environment variable is preferable on shared machines.
 
 ## Usage
 

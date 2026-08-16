@@ -17,6 +17,7 @@ func main() {
 	}
 	err = runCLI(ctx, os.Args[1:], cliEnvironment{
 		Cwd:    cwd,
+		Stdin:  os.Stdin,
 		Stdout: os.Stdout,
 		Stderr: os.Stderr,
 		Getenv: os.Getenv,

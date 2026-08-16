@@ -14,6 +14,7 @@ import (
 
 type cliEnvironment struct {
 	Cwd          string
+	Stdin        io.Reader
 	Stdout       io.Writer
 	Stderr       io.Writer
 	Getenv       func(string) string
@@ -35,6 +36,8 @@ func runCLI(ctx context.Context, args []string, environment cliEnvironment) erro
 		return runInit(ctx, args[1:], environment)
 	case "scan":
 		return runScan(ctx, args[1:], environment)
+	case "config":
+		return runConfig(ctx, args[1:], environment)
 	case "status":
 		return runStatus(ctx, args[1:], environment)
 	case "log":
@@ -87,45 +90,192 @@ func runInit(ctx context.Context, args []string, environment cliEnvironment) err
 	return nil
 }
 
+func runConfig(ctx context.Context, args []string, environment cliEnvironment) error {
+	if len(args) == 0 {
+		return errors.New("usage: air config <get|set|unset|list> ...")
+	}
+	_, store, closeStore, err := openRepositoryStore(ctx, environment.Cwd)
+	if err != nil {
+		return err
+	}
+	defer closeStore()
+
+	switch args[0] {
+	case "get":
+		flags := newFlagSet("config get", environment.Stderr)
+		effective := flags.Bool("effective", false, "show the effective value and its source")
+		if err := flags.Parse(args[1:]); err != nil {
+			return err
+		}
+		if flags.NArg() != 1 {
+			return errors.New("usage: air config get [--effective] <name>")
+		}
+		setting, ok := settingByKey(flags.Arg(0))
+		if !ok {
+			return unknownSettingError(flags.Arg(0))
+		}
+		if *effective {
+			resolved, err := effectiveSettingForDisplay(ctx, store, environment.Getenv, setting)
+			if err != nil {
+				return err
+			}
+			fmt.Fprintf(environment.Stdout, "%s\t%s\n", displaySettingValue(setting, resolved.Value), resolved.Source)
+			return nil
+		}
+		value, found, err := store.ConfigValue(ctx, setting.Key)
+		if err != nil {
+			return err
+		}
+		if !found {
+			return fmt.Errorf("configuration %q is not set in the database", setting.Key)
+		}
+		fmt.Fprintln(environment.Stdout, displaySettingValue(setting, value))
+		return nil
+
+	case "set":
+		flags := newFlagSet("config set", environment.Stderr)
+		fromStdin := flags.Bool("stdin", false, "read the value from standard input")
+		if err := flags.Parse(args[1:]); err != nil {
+			return err
+		}
+		expectedArguments := 2
+		if *fromStdin {
+			expectedArguments = 1
+		}
+		if flags.NArg() != expectedArguments {
+			return errors.New("usage: air config set [--stdin] <name> [<value>]")
+		}
+		setting, ok := settingByKey(flags.Arg(0))
+		if !ok {
+			return unknownSettingError(flags.Arg(0))
+		}
+		value := ""
+		if *fromStdin {
+			if environment.Stdin == nil {
+				return errors.New("standard input is unavailable")
+			}
+			const maximumSettingBytes = 64 * 1024
+			contents, err := io.ReadAll(io.LimitReader(environment.Stdin, maximumSettingBytes+1))
+			if err != nil {
+				return fmt.Errorf("read configuration value: %w", err)
+			}
+			if len(contents) > maximumSettingBytes {
+				return errors.New("configuration value exceeds 64 KiB")
+			}
+			value = strings.TrimRight(string(contents), "\r\n")
+		} else {
+			value = flags.Arg(1)
+		}
+		value, err = validateSettingValue(setting, value)
+		if err != nil {
+			return fmt.Errorf("invalid %s: %w", setting.Key, err)
+		}
+		if err := store.SetConfig(ctx, setting.Key, value); err != nil {
+			return err
+		}
+		fmt.Fprintf(environment.Stdout, "Set %s=%s\n", setting.Key, displaySettingValue(setting, value))
+		return nil
+
+	case "unset":
+		if len(args) != 2 {
+			return errors.New("usage: air config unset <name>")
+		}
+		setting, ok := settingByKey(args[1])
+		if !ok {
+			return unknownSettingError(args[1])
+		}
+		removed, err := store.UnsetConfig(ctx, setting.Key)
+		if err != nil {
+			return err
+		}
+		if removed {
+			fmt.Fprintf(environment.Stdout, "Unset %s\n", setting.Key)
+		} else {
+			fmt.Fprintf(environment.Stdout, "%s was not set\n", setting.Key)
+		}
+		return nil
+
+	case "list":
+		flags := newFlagSet("config list", environment.Stderr)
+		effective := flags.Bool("effective", false, "include overrides, defaults, and value sources")
+		if err := flags.Parse(args[1:]); err != nil {
+			return err
+		}
+		if flags.NArg() != 0 {
+			return errors.New("usage: air config list [--effective]")
+		}
+		printed := false
+		for _, setting := range reviewerSettings {
+			if *effective {
+				resolved, err := effectiveSettingForDisplay(ctx, store, environment.Getenv, setting)
+				if err != nil {
+					return err
+				}
+				fmt.Fprintf(environment.Stdout, "%-16s %-24s %s\n",
+					setting.Key, displaySettingValue(setting, resolved.Value), resolved.Source)
+				printed = true
+				continue
+			}
+			value, found, err := store.ConfigValue(ctx, setting.Key)
+			if err != nil {
+				return err
+			}
+			if found {
+				fmt.Fprintf(environment.Stdout, "%-16s %s\n", setting.Key, displaySettingValue(setting, value))
+				printed = true
+			}
+		}
+		if !printed {
+			fmt.Fprintln(environment.Stdout, "No reviewer configuration stored.")
+		}
+		return nil
+
+	default:
+		return fmt.Errorf("unknown config command %q; expected get, set, unset, or list", args[0])
+	}
+}
+
+func effectiveSettingForDisplay(
+	ctx context.Context,
+	store *Store,
+	getenv func(string) string,
+	setting settingSpec,
+) (resolvedSetting, error) {
+	if setting.Key != "api-key" {
+		return resolveSettingValue(ctx, store, getenv, setting, "", false)
+	}
+	value, source, err := configuredAPIKey(ctx, store, getenv, "", false, "", false)
+	if err != nil {
+		return resolvedSetting{}, err
+	}
+	return resolvedSetting{Value: value, Source: source}, nil
+}
+
+func unknownSettingError(key string) error {
+	keys := make([]string, 0, len(reviewerSettings))
+	for _, setting := range reviewerSettings {
+		keys = append(keys, setting.Key)
+	}
+	return fmt.Errorf("unknown configuration setting %q; expected one of: %s", key, strings.Join(keys, ", "))
+}
+
 func runScan(ctx context.Context, args []string, environment cliEnvironment) error {
 	flags := newFlagSet("scan", environment.Stderr)
-	reviewerDefault := environment.Getenv("AIR_REVIEWER")
-	if reviewerDefault == "" {
-		reviewerDefault = "codex"
-	}
-	reviewerName := flags.String("reviewer", reviewerDefault, "review backend: codex or http")
+	reviewerFlag := flags.String("reviewer", "", "review backend: codex or http")
 	limit := flags.Int("limit", 0, "maximum commits to process; zero means unlimited")
-	model := flags.String("model", environment.Getenv("AIR_MODEL"), "model identifier")
-	effort := flags.String("effort", environment.Getenv("AIR_REASONING_EFFORT"), "Codex reasoning effort")
-	codexBinaryDefault := environment.Getenv("AIR_CODEX_BIN")
-	if codexBinaryDefault == "" {
-		codexBinaryDefault = "codex"
-	}
-	codexBinary := flags.String("codex-bin", codexBinaryDefault, "Codex CLI executable")
-	codexProfile := flags.String("codex-profile", environment.Getenv("AIR_CODEX_PROFILE"), "Codex configuration profile")
-	codexTimeoutDefault := defaultCodexTimeout
-	if configuredTimeout := environment.Getenv("AIR_CODEX_TIMEOUT"); configuredTimeout != "" {
-		parsedTimeout, err := time.ParseDuration(configuredTimeout)
-		if err != nil || parsedTimeout <= 0 {
-			return errors.New("AIR_CODEX_TIMEOUT must be a positive duration")
-		}
-		codexTimeoutDefault = parsedTimeout
-	}
-	codexTimeout := flags.Duration("codex-timeout", codexTimeoutDefault, "per-commit Codex timeout")
-	baseURLDefault := environment.Getenv("AIR_BASE_URL")
-	if baseURLDefault == "" {
-		baseURLDefault = "https://api.openai.com/v1"
-	}
-	baseURL := flags.String("base-url", baseURLDefault, "OpenAI-compatible API base URL")
-	apiKeyEnv := flags.String("api-key-env", environment.Getenv("AIR_API_KEY_ENV"), "environment variable containing the API key")
+	modelFlag := flags.String("model", "", "model identifier")
+	effortFlag := flags.String("effort", "", "Codex reasoning effort")
+	codexBinaryFlag := flags.String("codex-bin", "", "Codex CLI executable")
+	codexProfileFlag := flags.String("codex-profile", "", "Codex configuration profile")
+	codexTimeoutFlag := flags.String("codex-timeout", "", "per-commit Codex timeout")
+	baseURLFlag := flags.String("base-url", "", "OpenAI-compatible API base URL")
+	apiKeyEnvFlag := flags.String("api-key-env", "", "environment variable containing the API key")
+	apiKeyFlag := flags.String("api-key", "", "HTTP reviewer API key (prefer an environment variable)")
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
 	if flags.NArg() > 1 {
 		return errors.New("usage: air scan [flags] [<from>..<to>]")
-	}
-	if *codexTimeout <= 0 {
-		return errors.New("--codex-timeout must be positive")
 	}
 	if *limit < 0 {
 		return errors.New("--limit must not be negative")
@@ -143,47 +293,89 @@ func runScan(ctx context.Context, args []string, environment cliEnvironment) err
 		return err
 	}
 	defer store.Close()
+	setFlags := visitedFlagNames(flags)
+	resolve := func(key, commandLineValue string) (resolvedSetting, error) {
+		setting, _ := settingByKey(key)
+		return resolveSettingValue(ctx, store, environment.Getenv, setting, commandLineValue, setFlags[key])
+	}
+	reviewerName, err := resolve("reviewer", *reviewerFlag)
+	if err != nil {
+		return err
+	}
+	model, err := resolve("model", *modelFlag)
+	if err != nil {
+		return err
+	}
+	effort, err := resolve("effort", *effortFlag)
+	if err != nil {
+		return err
+	}
+	codexBinary, err := resolve("codex-bin", *codexBinaryFlag)
+	if err != nil {
+		return err
+	}
+	codexProfile, err := resolve("codex-profile", *codexProfileFlag)
+	if err != nil {
+		return err
+	}
+	codexTimeoutValue, err := resolve("codex-timeout", *codexTimeoutFlag)
+	if err != nil {
+		return err
+	}
+	codexTimeout, err := time.ParseDuration(codexTimeoutValue.Value)
+	if err != nil {
+		return fmt.Errorf("parse codex-timeout: %w", err)
+	}
+	baseURL, err := resolve("base-url", *baseURLFlag)
+	if err != nil {
+		return err
+	}
 
 	factory := func() (Reviewer, ReviewIdentity, error) {
-		switch strings.ToLower(strings.TrimSpace(*reviewerName)) {
+		switch reviewerName.Value {
 		case "codex":
-			configuredModel := strings.TrimSpace(*model)
+			configuredModel := strings.TrimSpace(model.Value)
 			if configuredModel == "" {
-				return nil, ReviewIdentity{}, errors.New("model is required for the Codex reviewer; set AIR_MODEL or pass --model")
+				return nil, ReviewIdentity{}, errors.New("model is required for the Codex reviewer; configure it, set AIR_MODEL, or pass --model")
 			}
-			configuredEffort := strings.TrimSpace(*effort)
+			configuredEffort := strings.TrimSpace(effort.Value)
 			if configuredEffort == "" {
-				return nil, ReviewIdentity{}, errors.New("reasoning effort is required for the Codex reviewer; set AIR_REASONING_EFFORT or pass --effort")
+				return nil, ReviewIdentity{}, errors.New("reasoning effort is required for the Codex reviewer; configure it, set AIR_REASONING_EFFORT, or pass --effort")
 			}
 			return &CodexReviewer{
 				Repository:     repository,
-				Binary:         *codexBinary,
+				Binary:         codexBinary.Value,
 				Model:          configuredModel,
 				Effort:         configuredEffort,
-				Profile:        *codexProfile,
-				Timeout:        *codexTimeout,
+				Profile:        codexProfile.Value,
+				Timeout:        codexTimeout,
 				CommandContext: environment.CodexCommand,
 			}, ReviewIdentity{Model: modelByName(configuredModel), ReasoningEffort: configuredEffort}, nil
 		case "http":
-			if strings.TrimSpace(*model) == "" {
-				return nil, ReviewIdentity{}, errors.New("model is required for the HTTP reviewer; set AIR_MODEL or pass --model")
+			configuredModel := strings.TrimSpace(model.Value)
+			if configuredModel == "" {
+				return nil, ReviewIdentity{}, errors.New("model is required for the HTTP reviewer; configure it, set AIR_MODEL, or pass --model")
 			}
-			apiKey, keySource := resolveAPIKey(environment.Getenv, *apiKeyEnv)
+			apiKey, _, err := configuredAPIKey(
+				ctx, store, environment.Getenv,
+				*apiKeyFlag, setFlags["api-key"],
+				*apiKeyEnvFlag, setFlags["api-key-env"],
+			)
+			if err != nil {
+				return nil, ReviewIdentity{}, err
+			}
 			if apiKey == "" {
-				if keySource != "" {
-					return nil, ReviewIdentity{}, fmt.Errorf("API key environment variable %s is empty", keySource)
-				}
-				return nil, ReviewIdentity{}, errors.New("API key is required for the HTTP reviewer; set AIR_API_KEY, OPENAI_API_KEY, or --api-key-env")
+				return nil, ReviewIdentity{}, errors.New("API key is required for the HTTP reviewer; configure it, set AIR_API_KEY or OPENAI_API_KEY, or pass --api-key/--api-key-env")
 			}
 			return &HTTPReviewer{
 				Repository: repository,
-				Model:      *model,
-				BaseURL:    *baseURL,
+				Model:      configuredModel,
+				BaseURL:    baseURL.Value,
 				APIKey:     apiKey,
 				Client:     environment.HTTPClient,
-			}, ReviewIdentity{Model: modelByName(*model)}, nil
+			}, ReviewIdentity{Model: modelByName(configuredModel)}, nil
 		default:
-			return nil, ReviewIdentity{}, fmt.Errorf("unknown reviewer %q; expected codex or http", *reviewerName)
+			return nil, ReviewIdentity{}, fmt.Errorf("unknown reviewer %q; expected codex or http", reviewerName.Value)
 		}
 	}
 	return scanRepository(ctx, repository, store, scanOptions{
@@ -193,16 +385,6 @@ func runScan(ctx context.Context, args []string, environment cliEnvironment) err
 		Now:           environment.Now,
 		NewReviewer:   factory,
 	})
-}
-
-func resolveAPIKey(getenv func(string) string, configuredName string) (string, string) {
-	if configuredName != "" {
-		return getenv(configuredName), configuredName
-	}
-	if key := getenv("AIR_API_KEY"); key != "" {
-		return key, "AIR_API_KEY"
-	}
-	return getenv("OPENAI_API_KEY"), "OPENAI_API_KEY"
 }
 
 func runStatus(ctx context.Context, args []string, environment cliEnvironment) error {
@@ -413,18 +595,30 @@ func newFlagSet(name string, output io.Writer) *flag.FlagSet {
 	return flags
 }
 
+func visitedFlagNames(flags *flag.FlagSet) map[string]bool {
+	visited := make(map[string]bool)
+	flags.Visit(func(value *flag.Flag) {
+		visited[value.Name] = true
+	})
+	return visited
+}
+
 func printUsage(output io.Writer) {
 	fmt.Fprintln(output, `AIR reviews commits on the first-parent history of master.
 
 Usage:
   air init <commit-ish>
-  air scan [--limit N] [--reviewer codex|http] --model MODEL [--effort EFFORT] [<from>..<to>]
+  air scan [flags] [<from>..<to>]
+  air config <get|set|unset|list> ...
   air status
   air log
   air show <commit-ish>
   air finding <id>
 
-Reviewer environment:
+Reviewer configuration precedence:
+  command-line flag > environment variable > database > built-in default
+
+Reviewer environment variables:
   AIR_REVIEWER       Review backend (default: codex)
   AIR_MODEL          Model identifier (required)
   AIR_REASONING_EFFORT
@@ -435,5 +629,7 @@ Reviewer environment:
   AIR_BASE_URL       HTTP reviewer base URL (default: https://api.openai.com/v1)
   AIR_API_KEY        HTTP reviewer API key
   AIR_API_KEY_ENV    Name of another environment variable containing the API key
-  OPENAI_API_KEY     Fallback HTTP reviewer API key`)
+  OPENAI_API_KEY     Fallback HTTP reviewer API key
+
+Run "air config list --effective" to show effective values and their sources.`)
 }

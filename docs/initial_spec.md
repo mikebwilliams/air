@@ -135,11 +135,22 @@ start_sha
 prompt_version
 ```
 
-Optional keys may later include:
+Optional public reviewer-setting keys are:
 
 ```text
-default_model
+reviewer
+model
+effort
+codex-bin
+codex-profile
+codex-timeout
+base-url
+api-key-env
+api-key
 ```
+
+The CLI owns validation for these values and does not expose the internal
+`start_sha` or `prompt_version` keys through `air config`.
 
 ### 5.2 `models`
 
@@ -835,50 +846,48 @@ changing the database.
 ## 19. Reviewer Configuration
 
 The default reviewer is the locally installed Codex CLI. It reuses Codex's
-existing authentication and configuration; AIR never reads or copies Codex
-credentials.
+existing authentication, configuration, repository instructions, and exec
+policy. AIR never reads or copies Codex credentials.
 
-The initial CLI reads:
+Every reviewer setting has a database representation, an environment-variable
+override, and a scan flag override. Values are resolved with this fixed
+precedence:
 
 ```text
-AIR_REVIEWER
-AIR_MODEL
-AIR_REASONING_EFFORT
-AIR_CODEX_BIN
-AIR_CODEX_PROFILE
-AIR_CODEX_TIMEOUT
-AIR_BASE_URL
-AIR_API_KEY
-AIR_API_KEY_ENV
-OPENAI_API_KEY
+command-line flag > environment variable > database > built-in default
 ```
 
-`AIR_REVIEWER` defaults to `codex`. `AIR_CODEX_BIN` defaults to `codex`, and
-`AIR_CODEX_PROFILE` may select an optional local Codex configuration profile.
-Codex reviews require explicit `AIR_MODEL` and `AIR_REASONING_EFFORT` values so
-the exact review provenance is known rather than inferred from changing local
+| Database setting | Scan flag | Environment variable | Default |
+| --- | --- | --- | --- |
+| `reviewer` | `--reviewer` | `AIR_REVIEWER` | `codex` |
+| `model` | `--model` | `AIR_MODEL` | none |
+| `effort` | `--effort` | `AIR_REASONING_EFFORT` | none |
+| `codex-bin` | `--codex-bin` | `AIR_CODEX_BIN` | `codex` |
+| `codex-profile` | `--codex-profile` | `AIR_CODEX_PROFILE` | none |
+| `codex-timeout` | `--codex-timeout` | `AIR_CODEX_TIMEOUT` | `10m` |
+| `base-url` | `--base-url` | `AIR_BASE_URL` | `https://api.openai.com/v1` |
+| `api-key-env` | `--api-key-env` | `AIR_API_KEY_ENV` | none |
+| `api-key` | `--api-key` | `AIR_API_KEY`, then `OPENAI_API_KEY` | none |
+
+`air config set`, `get`, `unset`, and `list` manage only these public reviewer
+settings in the existing `config` table. `air config list --effective` includes
+all settings, their resolved values, and their winning sources. Sensitive values
+are redacted by both `get` and `list`. `air config set --stdin api-key` avoids
+putting a persisted API key in shell history, though the value remains plaintext
+in AIR's mode-0600 SQLite database.
+
+Codex reviews require explicit effective `model` and `effort` values so the exact
+review provenance is known rather than inferred from changing local Codex
 defaults. AIR passes them to Codex as `--model` and
-`model_reasoning_effort=<value>`. `AIR_CODEX_TIMEOUT` is a positive Go duration
-and defaults to `10m`; it bounds each commit review independently.
+`model_reasoning_effort=<value>`. `codex-timeout` is a positive Go duration and
+bounds each commit review independently.
 
-The corresponding scan flags are:
-
-```text
---reviewer
---model
---effort
---codex-bin
---codex-profile
---codex-timeout
---base-url
---api-key-env
-```
-
-The `http` reviewer remains as an explicit fallback. For that backend,
-`AIR_BASE_URL` defaults to `https://api.openai.com/v1`; `AIR_API_KEY_ENV` may
-name a different key variable; and `OPENAI_API_KEY` is the final key fallback.
-The HTTP reviewer requires `AIR_MODEL` and an API key and uses an
-OpenAI-compatible `/chat/completions` endpoint with function tool calls.
+The `http` reviewer remains as an explicit fallback. `api-key-env` may name a
+different key variable. Credential resolution is `--api-key`,
+`--api-key-env`, `AIR_API_KEY_ENV`, `AIR_API_KEY`, `OPENAI_API_KEY`, database
+`api-key-env`, then database `api-key`. The HTTP reviewer requires an effective
+model and API key and uses an OpenAI-compatible `/chat/completions` endpoint
+with function tool calls.
 
 Both reviewers must report token usage. AIR records input, cached-input,
 cache-write, output, and reasoning-output counts for every reviewed commit.

@@ -244,14 +244,50 @@ func (s *Store) Close() error {
 }
 
 func (s *Store) Config(ctx context.Context, key string) (string, error) {
+	value, found, err := s.ConfigValue(ctx, key)
+	if err != nil {
+		return "", err
+	}
+	if !found {
+		return "", fmt.Errorf("missing configuration key %q", key)
+	}
+	return value, nil
+}
+
+func (s *Store) ConfigValue(ctx context.Context, key string) (string, bool, error) {
 	var value string
 	if err := s.db.QueryRowContext(ctx, `SELECT value FROM config WHERE key = ?`, key).Scan(&value); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return "", fmt.Errorf("missing configuration key %q", key)
+			return "", false, nil
 		}
-		return "", fmt.Errorf("read configuration %q: %w", key, err)
+		return "", false, fmt.Errorf("read configuration %q: %w", key, err)
 	}
-	return value, nil
+	return value, true, nil
+}
+
+func (s *Store) SetConfig(ctx context.Context, key, value string) error {
+	if strings.TrimSpace(key) == "" {
+		return errors.New("configuration key must not be empty")
+	}
+	_, err := s.db.ExecContext(ctx, `
+		INSERT INTO config(key, value) VALUES(?, ?)
+		ON CONFLICT(key) DO UPDATE SET value = excluded.value`, key, value)
+	if err != nil {
+		return fmt.Errorf("write configuration %q: %w", key, err)
+	}
+	return nil
+}
+
+func (s *Store) UnsetConfig(ctx context.Context, key string) (bool, error) {
+	result, err := s.db.ExecContext(ctx, `DELETE FROM config WHERE key = ?`, key)
+	if err != nil {
+		return false, fmt.Errorf("remove configuration %q: %w", key, err)
+	}
+	count, err := result.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("count removed configuration %q: %w", key, err)
+	}
+	return count != 0, nil
 }
 
 func (s *Store) ProcessedSHAs(ctx context.Context) (map[string]struct{}, error) {

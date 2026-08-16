@@ -132,6 +132,39 @@ func TestStoreFindingLifecycleAndCleanupForeignKeys(t *testing.T) {
 	}
 }
 
+func TestStoreConfigurationValues(t *testing.T) {
+	ctx := context.Background()
+	store, err := CreateStore(ctx, filepath.Join(t.TempDir(), "air.sqlite"), strings.Repeat("0", 40))
+	if err != nil {
+		t.Fatalf("CreateStore: %v", err)
+	}
+	defer store.Close()
+
+	if value, found, err := store.ConfigValue(ctx, "model"); err != nil || found || value != "" {
+		t.Fatalf("missing model = %q, found=%t, err=%v", value, found, err)
+	}
+	if err := store.SetConfig(ctx, "model", "gpt-5.6-luna"); err != nil {
+		t.Fatalf("SetConfig: %v", err)
+	}
+	if value, found, err := store.ConfigValue(ctx, "model"); err != nil || !found || value != "gpt-5.6-luna" {
+		t.Fatalf("stored model = %q, found=%t, err=%v", value, found, err)
+	}
+	if err := store.SetConfig(ctx, "model", "gpt-5.6-sol"); err != nil {
+		t.Fatalf("replace model: %v", err)
+	}
+	if value, err := store.Config(ctx, "model"); err != nil || value != "gpt-5.6-sol" {
+		t.Fatalf("replaced model = %q, err=%v", value, err)
+	}
+	removed, err := store.UnsetConfig(ctx, "model")
+	if err != nil || !removed {
+		t.Fatalf("UnsetConfig = %t, %v", removed, err)
+	}
+	removed, err = store.UnsetConfig(ctx, "model")
+	if err != nil || removed {
+		t.Fatalf("second UnsetConfig = %t, %v", removed, err)
+	}
+}
+
 func TestApplyReviewRollsBackWholeCommit(t *testing.T) {
 	ctx := context.Background()
 	store, err := CreateStore(ctx, filepath.Join(t.TempDir(), "air.sqlite"), strings.Repeat("0", 40))
