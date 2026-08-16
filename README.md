@@ -23,8 +23,24 @@ It is shared by worktrees and does not modify tracked files.
 ## Build and test
 
 ```bash
-go build -o air .
-go test ./...
+make build
+make test
+```
+
+Install into `/usr/local/bin` by building as your normal user and elevating
+only the copy step:
+
+```bash
+make build
+sudo make install
+```
+
+The install prefix is configurable. For example, a user-local or packaging
+install can use:
+
+```bash
+make install PREFIX="$HOME/.local"
+make install DESTDIR=/tmp/air-package-root
 ```
 
 ## Codex configuration
