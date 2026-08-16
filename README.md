@@ -283,6 +283,8 @@ Inspect results:
 
 ```bash
 air status
+air findings
+air findings --all
 air log
 air show HEAD
 air show HEAD --reviews
@@ -310,6 +312,17 @@ explicit instead of being silently treated as zero.
 `air export --format json` emits current open findings, while `--format sarif`
 emits SARIF 2.1.0 with file and line locations when the reviewer supplied them.
 Dismissed and resolved findings are excluded from both exports.
+
+`air findings` opens a full-screen terminal browser. It starts with open
+findings; `--all` starts with every disposition. Use the arrow keys or `j`/`k`
+to move, `/` to search, `s` and `v` to cycle status and severity filters, and
+`Ctrl+U`/`Ctrl+D` to scroll long details. The detail pane includes the finding's
+description, location, introducing review and model/effort, and complete event
+history. Press `d` to dismiss with a required reason, `r` to reopen after
+confirmation, or `n` to add a note. These actions use the same audited lifecycle
+as `air finding`; `?` shows the complete key reference. The command requires an
+interactive terminal, while `air status --json` remains the non-interactive
+interface.
 
 Triage findings without losing their audit history:
 

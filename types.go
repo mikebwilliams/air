@@ -139,6 +139,15 @@ type FindingEvent struct {
 	CreatedAt time.Time
 }
 
+type FindingReview struct {
+	ID              int64
+	Number          int
+	CommitSHA       string
+	ReviewedAt      time.Time
+	Model           string
+	ReasoningEffort string
+}
+
 type NewFinding struct {
 	Severity    string  `json:"severity"`
 	Title       string  `json:"title"`

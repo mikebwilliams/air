@@ -923,6 +923,26 @@ Resolved:
     916cc21 Initialize backing object before validation
 ```
 
+### Browse findings interactively
+
+```bash
+air findings [--all]
+```
+
+`air findings` is a full-screen terminal browser that initially contains open
+findings only. `--all` initially includes open, dismissed, and resolved
+findings. The list shows ID, severity, disposition, location, and title; the
+detail view shows the description, commit references, introducing review's
+model and reasoning effort, and event history. The browser supports keyboard
+navigation, text search, status and severity filters, and independent detail
+scrolling. It can dismiss a finding with a required reason, reopen a dismissed
+or resolved finding after confirmation, and append a note. All changes call the
+same audited lifecycle operations as `air finding dismiss`, `reopen`, and
+`note`. It makes no reviewer or network calls.
+
+The browser requires both input and output to be interactive terminals. Scripts
+should use `air status --json` or `air export` instead.
+
 ### Manual lifecycle overrides
 
 ```bash

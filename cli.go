@@ -27,6 +27,7 @@ type cliEnvironment struct {
 	HTTPClient   *http.Client
 	CodexCommand commandContextFunc
 	Now          func() time.Time
+	FindingsUI   findingsUIRunner
 }
 
 func runCLI(ctx context.Context, args []string, environment cliEnvironment) error {
@@ -74,6 +75,8 @@ func runCLI(ctx context.Context, args []string, environment cliEnvironment) erro
 		return runShow(ctx, args[1:], environment)
 	case "finding":
 		return runFinding(ctx, args[1:], environment)
+	case "findings":
+		return runFindings(ctx, args[1:], environment)
 	case "rescan":
 		return runRescan(ctx, args[1:], environment)
 	default:
@@ -1684,6 +1687,7 @@ Usage:
   air log
   air show <commit-ish> [--reviews | --review N] [--json]
   air export --format <json|sarif>
+  air findings [--all]
   air finding <id>
   air finding dismiss <id> --reason <text>
   air finding reopen <id>

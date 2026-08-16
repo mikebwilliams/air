@@ -561,6 +561,13 @@ func (s *Store) OpenFindings(ctx context.Context) ([]Finding, error) {
 		FROM findings WHERE resolved_sha IS NULL AND dismissed_at IS NULL ORDER BY id`)
 }
 
+func (s *Store) AllFindings(ctx context.Context) ([]Finding, error) {
+	return s.queryFindings(ctx, `
+		SELECT id, introduced_sha, resolved_sha, dismissed_at, dismiss_reason,
+		       severity, title, description, file, line, symbol
+		FROM findings ORDER BY id DESC`)
+}
+
 func (s *Store) OpenFindingsExcludingCommit(ctx context.Context, sha string) ([]Finding, error) {
 	return s.queryFindings(ctx, `
 		SELECT id, introduced_sha, resolved_sha, dismissed_at, dismiss_reason,
@@ -823,6 +830,39 @@ func (s *Store) FindingEvents(ctx context.Context, id int64) ([]FindingEvent, er
 		return nil, fmt.Errorf("read history for finding #%d: %w", id, err)
 	}
 	return events, nil
+}
+
+func (s *Store) FindingReview(ctx context.Context, id int64) (FindingReview, error) {
+	var review FindingReview
+	var reviewedAt string
+	var effort sql.NullString
+	err := s.db.QueryRowContext(ctx, `
+		SELECT a.id,
+		       (SELECT COUNT(*) FROM review_attempts previous
+		        WHERE previous.commit_sha = a.commit_sha AND previous.id <= a.id),
+		       a.commit_sha, a.reviewed_at, a.model, a.reasoning_effort
+		FROM findings f
+		JOIN review_attempts a ON a.id = f.introduced_review_id
+		WHERE f.id = ?`, id).Scan(
+		&review.ID,
+		&review.Number,
+		&review.CommitSHA,
+		&reviewedAt,
+		&review.Model,
+		&effort,
+	)
+	if errors.Is(err, sql.ErrNoRows) {
+		return FindingReview{}, fmt.Errorf("finding #%d does not exist", id)
+	}
+	if err != nil {
+		return FindingReview{}, fmt.Errorf("read review for finding #%d: %w", id, err)
+	}
+	review.ReasoningEffort = effort.String
+	review.ReviewedAt, err = time.Parse(time.RFC3339Nano, reviewedAt)
+	if err != nil {
+		return FindingReview{}, fmt.Errorf("parse review timestamp for finding #%d: %w", id, err)
+	}
+	return review, nil
 }
 
 func (s *Store) InsertSkipped(ctx context.Context, metadata CommitMetadata, reason string, now time.Time) error {
