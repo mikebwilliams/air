@@ -139,6 +139,29 @@ maximum estimate spanning ordinary-input and cache-write pricing. Models absent
 from AIR's registry remain usable and are stored with explicitly unknown
 pricing.
 
+Inspect or override the database-backed model registry:
+
+```bash
+air model list
+air model show gpt-5.6-luna
+air model mark-pricing-unknown private-model
+```
+
+Custom prices use USD per million tokens. All eight short/long-context billing
+categories are required:
+
+```bash
+air model set-pricing private-model \
+  --source internal-price-sheet --as-of 2026-08-16 \
+  --long-context-threshold 272000 \
+  --short-input 1 --short-cached-input .1 \
+  --short-cache-write 1.25 --short-output 6 \
+  --long-input 2 --long-cached-input .2 \
+  --long-cache-write 2.5 --long-output 9
+```
+
+Stored model records override compiled pricing snapshots during later scans.
+
 These are API-equivalent USD estimates. A Codex run authenticated through a
 ChatGPT account does not expose an authoritative per-run monetary charge.
 

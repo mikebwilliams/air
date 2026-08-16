@@ -773,6 +773,115 @@ func recordModel(ctx context.Context, tx *sql.Tx, model Model) error {
 	return nil
 }
 
+func (s *Store) SaveModel(ctx context.Context, model Model) error {
+	if strings.TrimSpace(model.Name) == "" {
+		return errors.New("model name must not be empty")
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("save model %s: %w", model.Name, err)
+	}
+	defer tx.Rollback()
+	if err := recordModel(ctx, tx, model); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("save model %s: %w", model.Name, err)
+	}
+	return nil
+}
+
+func (s *Store) Model(ctx context.Context, name string) (Model, bool, error) {
+	row := s.db.QueryRowContext(ctx, `
+		SELECT name, pricing_status, service_tier, pricing_source, pricing_as_of,
+		       long_context_input_tokens,
+		       short_input_nanousd_per_token, short_cached_nanousd_per_token,
+		       short_cache_write_nanousd_per_token, short_output_nanousd_per_token,
+		       long_input_nanousd_per_token, long_cached_nanousd_per_token,
+		       long_cache_write_nanousd_per_token, long_output_nanousd_per_token
+		FROM models WHERE name = ?`, name)
+	model, err := scanModel(row)
+	if errors.Is(err, sql.ErrNoRows) {
+		return Model{}, false, nil
+	}
+	if err != nil {
+		return Model{}, false, fmt.Errorf("read model %s: %w", name, err)
+	}
+	return model, true, nil
+}
+
+func (s *Store) Models(ctx context.Context) ([]Model, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT name, pricing_status, service_tier, pricing_source, pricing_as_of,
+		       long_context_input_tokens,
+		       short_input_nanousd_per_token, short_cached_nanousd_per_token,
+		       short_cache_write_nanousd_per_token, short_output_nanousd_per_token,
+		       long_input_nanousd_per_token, long_cached_nanousd_per_token,
+		       long_cache_write_nanousd_per_token, long_output_nanousd_per_token
+		FROM models ORDER BY name`)
+	if err != nil {
+		return nil, fmt.Errorf("list models: %w", err)
+	}
+	defer rows.Close()
+	var models []Model
+	for rows.Next() {
+		model, err := scanModel(rows)
+		if err != nil {
+			return nil, fmt.Errorf("list models: %w", err)
+		}
+		models = append(models, model)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("list models: %w", err)
+	}
+	return models, nil
+}
+
+func scanModel(row rowScanner) (Model, error) {
+	var model Model
+	var status string
+	var serviceTier, source, asOf sql.NullString
+	var threshold sql.NullInt64
+	var rates [8]sql.NullInt64
+	if err := row.Scan(
+		&model.Name, &status, &serviceTier, &source, &asOf, &threshold,
+		&rates[0], &rates[1], &rates[2], &rates[3],
+		&rates[4], &rates[5], &rates[6], &rates[7],
+	); err != nil {
+		return Model{}, err
+	}
+	if status == "unknown" {
+		return model, nil
+	}
+	if status != "known" || !serviceTier.Valid || !source.Valid || !asOf.Valid || !threshold.Valid {
+		return Model{}, fmt.Errorf("model %s has invalid pricing metadata", model.Name)
+	}
+	for _, rate := range rates {
+		if !rate.Valid {
+			return Model{}, fmt.Errorf("model %s has incomplete pricing", model.Name)
+		}
+	}
+	model.Pricing = &ModelPricing{
+		ServiceTier:            serviceTier.String,
+		Source:                 source.String,
+		AsOf:                   asOf.String,
+		LongContextInputTokens: threshold.Int64,
+		ShortContext: TokenPrices{
+			InputNanousdPerToken:       rates[0].Int64,
+			CachedInputNanousdPerToken: rates[1].Int64,
+			CacheWriteNanousdPerToken:  rates[2].Int64,
+			OutputNanousdPerToken:      rates[3].Int64,
+		},
+		LongContext: TokenPrices{
+			InputNanousdPerToken:       rates[4].Int64,
+			CachedInputNanousdPerToken: rates[5].Int64,
+			CacheWriteNanousdPerToken:  rates[6].Int64,
+			OutputNanousdPerToken:      rates[7].Int64,
+		},
+	}
+	return model, nil
+}
+
 func costMinimum(estimate *CostEstimate) any {
 	if estimate == nil {
 		return nil

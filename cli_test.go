@@ -601,6 +601,76 @@ func TestCLIResetRequiresConfirmationAndRemovesStateDirectory(t *testing.T) {
 	}
 }
 
+func TestCLIModelPricingManagementControlsReviewCost(t *testing.T) {
+	ctx := context.Background()
+	_, directory := newTestGitRepository(t)
+	base := testCommitFile(t, directory, "app.txt", []byte("base\n"), "base")
+	head := testCommitFile(t, directory, "app.txt", []byte("changed\n"), "change")
+	command, _ := newCodexTestCommand(t, ReviewOutput{
+		NewFindings:      []NewFinding{},
+		ResolvedFindings: []ResolvedFinding{},
+		Summary:          "Custom-priced review.",
+	}, "")
+	var stdout bytes.Buffer
+	environment := cliEnvironment{
+		Cwd: directory, Stdout: &stdout, Stderr: &bytes.Buffer{},
+		Getenv: func(string) string { return "" }, CodexCommand: command,
+		Now: func() time.Time { return time.Date(2026, 8, 16, 16, 0, 0, 0, time.UTC) },
+	}
+	if err := runCLI(ctx, []string{"init", base}, environment); err != nil {
+		t.Fatal(err)
+	}
+	pricingArgs := []string{
+		"model", "set-pricing", "custom-model",
+		"--service-tier", "standard", "--source", "test", "--as-of", "2026-08-16",
+		"--long-context-threshold", "100000",
+		"--short-input", "1", "--short-cached-input", "0.5",
+		"--short-cache-write", "1.25", "--short-output", "2",
+		"--long-input", "2", "--long-cached-input", "1",
+		"--long-cache-write", "2.5", "--long-output", "3",
+	}
+	if err := runCLI(ctx, pricingArgs, environment); err != nil {
+		t.Fatalf("set pricing: %v", err)
+	}
+	stdout.Reset()
+	if err := runCLI(ctx, []string{"model", "show", "custom-model"}, environment); err != nil {
+		t.Fatalf("show model: %v", err)
+	}
+	if !strings.Contains(stdout.String(), "Pricing: known") ||
+		!strings.Contains(stdout.String(), "short input 1.000") {
+		t.Fatalf("model output:\n%s", stdout.String())
+	}
+	if err := runCLI(ctx, []string{"config", "set", "model", "custom-model"}, environment); err != nil {
+		t.Fatal(err)
+	}
+	if err := runCLI(ctx, []string{"config", "set", "effort", "low"}, environment); err != nil {
+		t.Fatal(err)
+	}
+	if err := runCLI(ctx, []string{"scan"}, environment); err != nil {
+		t.Fatalf("scan: %v", err)
+	}
+	stdout.Reset()
+	if err := runCLI(ctx, []string{"show", head}, environment); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(stdout.String(), "Estimated cost: $0.000019 USD") {
+		t.Fatalf("custom cost output:\n%s", stdout.String())
+	}
+	if err := runCLI(ctx, []string{"model", "mark-pricing-unknown", "custom-model"}, environment); err != nil {
+		t.Fatalf("mark unknown: %v", err)
+	}
+	if err := runCLI(ctx, []string{"rescan", head}, environment); err != nil {
+		t.Fatalf("rescan unknown pricing: %v", err)
+	}
+	stdout.Reset()
+	if err := runCLI(ctx, []string{"show", head}, environment); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(stdout.String(), "Estimated cost: unavailable") {
+		t.Fatalf("unknown cost output:\n%s", stdout.String())
+	}
+}
+
 func TestCLICodexRequiresExplicitReviewIdentity(t *testing.T) {
 	ctx := context.Background()
 	_, directory := newTestGitRepository(t)

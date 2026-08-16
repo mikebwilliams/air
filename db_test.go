@@ -389,6 +389,40 @@ func TestManualFindingDispositionAndNotes(t *testing.T) {
 	}
 }
 
+func TestModelConfigurationRoundTrip(t *testing.T) {
+	ctx := context.Background()
+	store, err := CreateStore(ctx, filepath.Join(t.TempDir(), "air.sqlite"), strings.Repeat("0", 40))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	model := Model{
+		Name: "private-model",
+		Pricing: &ModelPricing{
+			ServiceTier: "priority", Source: "operator", AsOf: "2026-08-16",
+			LongContextInputTokens: 100_000,
+			ShortContext:           TokenPrices{100, 20, 125, 600},
+			LongContext:            TokenPrices{200, 40, 250, 900},
+		},
+	}
+	if err := store.SaveModel(ctx, model); err != nil {
+		t.Fatalf("SaveModel: %v", err)
+	}
+	stored, found, err := store.Model(ctx, model.Name)
+	if err != nil || !found || stored.Pricing == nil ||
+		stored.Pricing.ServiceTier != "priority" || stored.Pricing.ShortContext.CacheWriteNanousdPerToken != 125 ||
+		stored.Pricing.LongContext.OutputNanousdPerToken != 900 {
+		t.Fatalf("stored model = %+v, found=%t, err=%v", stored, found, err)
+	}
+	if err := store.SaveModel(ctx, Model{Name: model.Name}); err != nil {
+		t.Fatalf("mark unknown: %v", err)
+	}
+	stored, found, err = store.Model(ctx, model.Name)
+	if err != nil || !found || stored.Pricing != nil {
+		t.Fatalf("unknown model = %+v, found=%t, err=%v", stored, found, err)
+	}
+}
+
 func testMetadata(shaCharacter, parentCharacter string) CommitMetadata {
 	return CommitMetadata{
 		SHA:       strings.Repeat(shaCharacter, 40),

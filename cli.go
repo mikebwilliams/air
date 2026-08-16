@@ -7,9 +7,11 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -47,6 +49,8 @@ func runCLI(ctx context.Context, args []string, environment cliEnvironment) erro
 		return runReset(ctx, args[1:], environment)
 	case "config":
 		return runConfig(ctx, args[1:], environment)
+	case "model":
+		return runModel(ctx, args[1:], environment)
 	case "status":
 		return runStatus(ctx, args[1:], environment)
 	case "log":
@@ -268,6 +272,205 @@ func unknownSettingError(key string) error {
 	return fmt.Errorf("unknown configuration setting %q; expected one of: %s", key, strings.Join(keys, ", "))
 }
 
+func runModel(ctx context.Context, args []string, environment cliEnvironment) error {
+	if len(args) == 0 {
+		return errors.New("usage: air model <list|show|set-pricing|mark-pricing-unknown> ...")
+	}
+	_, store, closeStore, err := openRepositoryStore(ctx, environment.Cwd)
+	if err != nil {
+		return err
+	}
+	defer closeStore()
+
+	switch args[0] {
+	case "list":
+		if len(args) != 1 {
+			return errors.New("usage: air model list")
+		}
+		models, err := availableModels(ctx, store)
+		if err != nil {
+			return err
+		}
+		for _, model := range models {
+			if model.Pricing == nil {
+				fmt.Fprintf(environment.Stdout, "%-24s unknown pricing\n", model.Name)
+			} else {
+				fmt.Fprintf(environment.Stdout, "%-24s %s pricing as of %s\n",
+					model.Name, model.Pricing.ServiceTier, model.Pricing.AsOf)
+			}
+		}
+		return nil
+
+	case "show":
+		if len(args) != 2 {
+			return errors.New("usage: air model show <name>")
+		}
+		model, found, err := modelForDisplay(ctx, store, args[1])
+		if err != nil {
+			return err
+		}
+		if !found {
+			return fmt.Errorf("model %q is not configured", args[1])
+		}
+		printModel(environment.Stdout, model)
+		return nil
+
+	case "mark-pricing-unknown":
+		if len(args) != 2 {
+			return errors.New("usage: air model mark-pricing-unknown <name>")
+		}
+		name := strings.TrimSpace(args[1])
+		if name == "" {
+			return errors.New("model name must not be empty")
+		}
+		if err := store.SaveModel(ctx, Model{Name: name}); err != nil {
+			return err
+		}
+		fmt.Fprintf(environment.Stdout, "Marked pricing unknown for %s\n", name)
+		return nil
+
+	case "set-pricing":
+		return runModelSetPricing(ctx, store, args[1:], environment)
+
+	default:
+		return fmt.Errorf("unknown model command %q; expected list, show, set-pricing, or mark-pricing-unknown", args[0])
+	}
+}
+
+func runModelSetPricing(ctx context.Context, store *Store, args []string, environment cliEnvironment) error {
+	if len(args) > 1 && !strings.HasPrefix(args[0], "-") {
+		args = append(append([]string(nil), args[1:]...), args[0])
+	}
+	flags := newFlagSet("model set-pricing", environment.Stderr)
+	serviceTier := flags.String("service-tier", standardServiceTier, "service tier")
+	source := flags.String("source", "manual", "pricing source")
+	asOf := flags.String("as-of", environmentNow(environment).Format("2006-01-02"), "pricing date")
+	threshold := flags.Int64("long-context-threshold", longContextInputTokens, "input-token threshold for long-context prices")
+	shortInput := flags.Float64("short-input", -1, "short-context input USD per million tokens")
+	shortCached := flags.Float64("short-cached-input", -1, "short-context cached-input USD per million tokens")
+	shortWrite := flags.Float64("short-cache-write", -1, "short-context cache-write USD per million tokens")
+	shortOutput := flags.Float64("short-output", -1, "short-context output USD per million tokens")
+	longInput := flags.Float64("long-input", -1, "long-context input USD per million tokens")
+	longCached := flags.Float64("long-cached-input", -1, "long-context cached-input USD per million tokens")
+	longWrite := flags.Float64("long-cache-write", -1, "long-context cache-write USD per million tokens")
+	longOutput := flags.Float64("long-output", -1, "long-context output USD per million tokens")
+	if err := flags.Parse(args); err != nil {
+		return err
+	}
+	if flags.NArg() != 1 {
+		return errors.New("usage: air model set-pricing <name> [pricing flags]")
+	}
+	if strings.TrimSpace(*serviceTier) == "" || strings.TrimSpace(*source) == "" || strings.TrimSpace(*asOf) == "" {
+		return errors.New("service tier, source, and pricing date must not be empty")
+	}
+	if *threshold <= 0 {
+		return errors.New("--long-context-threshold must be positive")
+	}
+	rates := []struct {
+		name  string
+		value float64
+	}{
+		{"--short-input", *shortInput},
+		{"--short-cached-input", *shortCached},
+		{"--short-cache-write", *shortWrite},
+		{"--short-output", *shortOutput},
+		{"--long-input", *longInput},
+		{"--long-cached-input", *longCached},
+		{"--long-cache-write", *longWrite},
+		{"--long-output", *longOutput},
+	}
+	for _, rate := range rates {
+		if rate.value < 0 || math.IsNaN(rate.value) || math.IsInf(rate.value, 0) {
+			return fmt.Errorf("%s must be a non-negative USD-per-million-token price", rate.name)
+		}
+	}
+	name := strings.TrimSpace(flags.Arg(0))
+	model := Model{
+		Name: name,
+		Pricing: &ModelPricing{
+			ServiceTier:            strings.TrimSpace(*serviceTier),
+			Source:                 strings.TrimSpace(*source),
+			AsOf:                   strings.TrimSpace(*asOf),
+			LongContextInputTokens: *threshold,
+			ShortContext:           tokenPrices(*shortInput, *shortCached, *shortWrite, *shortOutput),
+			LongContext:            tokenPrices(*longInput, *longCached, *longWrite, *longOutput),
+		},
+	}
+	if err := store.SaveModel(ctx, model); err != nil {
+		return err
+	}
+	fmt.Fprintf(environment.Stdout, "Stored pricing for %s\n", name)
+	return nil
+}
+
+func availableModels(ctx context.Context, store *Store) ([]Model, error) {
+	modelsByName := make(map[string]Model, len(builtinModels))
+	for name := range builtinModels {
+		modelsByName[name] = modelByName(name)
+	}
+	stored, err := store.Models(ctx)
+	if err != nil {
+		return nil, err
+	}
+	for _, model := range stored {
+		modelsByName[model.Name] = model
+	}
+	names := make([]string, 0, len(modelsByName))
+	for name := range modelsByName {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	models := make([]Model, 0, len(names))
+	for _, name := range names {
+		models = append(models, modelsByName[name])
+	}
+	return models, nil
+}
+
+func modelForDisplay(ctx context.Context, store *Store, name string) (Model, bool, error) {
+	name = strings.TrimSpace(name)
+	if model, found, err := store.Model(ctx, name); err != nil || found {
+		return model, found, err
+	}
+	model, found := builtinModels[name]
+	if !found {
+		return Model{}, false, nil
+	}
+	return modelByName(model.Name), true, nil
+}
+
+func modelForReview(ctx context.Context, store *Store, name string) (Model, error) {
+	if model, found, err := store.Model(ctx, name); err != nil {
+		return Model{}, err
+	} else if found {
+		return model, nil
+	}
+	return modelByName(name), nil
+}
+
+func printModel(output io.Writer, model Model) {
+	fmt.Fprintf(output, "Model: %s\n", model.Name)
+	if model.Pricing == nil {
+		fmt.Fprintln(output, "Pricing: unknown")
+		return
+	}
+	pricing := model.Pricing
+	fmt.Fprintf(output, "Pricing: known\nService tier: %s\nSource: %s\nAs of: %s\nLong-context threshold: %d input tokens\n",
+		pricing.ServiceTier, pricing.Source, pricing.AsOf, pricing.LongContextInputTokens)
+	fmt.Fprintln(output, "USD per million tokens:")
+	printTokenPrices(output, "short", pricing.ShortContext)
+	printTokenPrices(output, "long", pricing.LongContext)
+}
+
+func printTokenPrices(output io.Writer, contextName string, prices TokenPrices) {
+	fmt.Fprintf(output, "  %-5s input %.3f, cached input %.3f, cache write %.3f, output %.3f\n",
+		contextName,
+		float64(prices.InputNanousdPerToken)/1_000,
+		float64(prices.CachedInputNanousdPerToken)/1_000,
+		float64(prices.CacheWriteNanousdPerToken)/1_000,
+		float64(prices.OutputNanousdPerToken)/1_000)
+}
+
 func runScan(ctx context.Context, args []string, environment cliEnvironment) error {
 	return runScanCommand(ctx, args, environment, false)
 }
@@ -399,6 +602,10 @@ func runScanCommand(ctx context.Context, args []string, environment cliEnvironme
 			if configuredEffort == "" {
 				return nil, ReviewIdentity{}, errors.New("reasoning effort is required for the Codex reviewer; configure it, set AIR_REASONING_EFFORT, or pass --effort")
 			}
+			reviewModel, err := modelForReview(ctx, store, configuredModel)
+			if err != nil {
+				return nil, ReviewIdentity{}, err
+			}
 			return &CodexReviewer{
 				Repository:     repository,
 				Binary:         codexBinary.Value,
@@ -407,7 +614,7 @@ func runScanCommand(ctx context.Context, args []string, environment cliEnvironme
 				Profile:        codexProfile.Value,
 				Timeout:        codexTimeout,
 				CommandContext: environment.CodexCommand,
-			}, ReviewIdentity{Model: modelByName(configuredModel), ReasoningEffort: configuredEffort}, nil
+			}, ReviewIdentity{Model: reviewModel, ReasoningEffort: configuredEffort}, nil
 		case "http":
 			configuredModel := strings.TrimSpace(model.Value)
 			if configuredModel == "" {
@@ -424,13 +631,17 @@ func runScanCommand(ctx context.Context, args []string, environment cliEnvironme
 			if apiKey == "" {
 				return nil, ReviewIdentity{}, errors.New("API key is required for the HTTP reviewer; configure it, set AIR_API_KEY or OPENAI_API_KEY, or pass --api-key/--api-key-env")
 			}
+			reviewModel, err := modelForReview(ctx, store, configuredModel)
+			if err != nil {
+				return nil, ReviewIdentity{}, err
+			}
 			return &HTTPReviewer{
 				Repository: repository,
 				Model:      configuredModel,
 				BaseURL:    baseURL.Value,
 				APIKey:     apiKey,
 				Client:     environment.HTTPClient,
-			}, ReviewIdentity{Model: modelByName(configuredModel)}, nil
+			}, ReviewIdentity{Model: reviewModel}, nil
 		default:
 			return nil, ReviewIdentity{}, fmt.Errorf("unknown reviewer %q; expected codex or http", reviewerName.Value)
 		}
@@ -998,6 +1209,7 @@ Usage:
   air clean [--dry-run]
   air reset [--force]
   air config <get|set|unset|list> ...
+  air model <list|show|set-pricing|mark-pricing-unknown> ...
   air status
   air log
   air show <commit-ish> [--reviews | --review N]

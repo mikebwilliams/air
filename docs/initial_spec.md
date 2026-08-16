@@ -207,6 +207,14 @@ The model configuration is inserted or refreshed transactionally whenever a
 review using that model is recorded. Review rows retain their computed cost,
 so a later pricing update affects only later reviews.
 
+`air model list` merges compiled models with database records, with the
+database authoritative on name collisions. `air model show` displays all
+stored rates. `air model set-pricing` accepts the complete eight-category
+short/long price set in USD per million tokens plus source, date, tier, and
+long-context threshold. `air model mark-pricing-unknown` stores an explicit
+unknown record, including when overriding a compiled model. Scans always load
+the stored record first before falling back to compiled model metadata.
+
 ### 5.3 `commits`
 
 ```sql
