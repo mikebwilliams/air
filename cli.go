@@ -19,15 +19,16 @@ import (
 )
 
 type cliEnvironment struct {
-	Cwd          string
-	Stdin        io.Reader
-	Stdout       io.Writer
-	Stderr       io.Writer
-	Getenv       func(string) string
-	HTTPClient   *http.Client
-	CodexCommand commandContextFunc
-	Now          func() time.Time
-	FindingsUI   findingsUIRunner
+	Cwd             string
+	Stdin           io.Reader
+	Stdout          io.Writer
+	Stderr          io.Writer
+	Getenv          func(string) string
+	HTTPClient      *http.Client
+	CodexCommand    commandContextFunc
+	Now             func() time.Time
+	FindingsUI      findingsUIRunner
+	ExternalCommand commandContextFunc
 }
 
 func runCLI(ctx context.Context, args []string, environment cliEnvironment) error {
@@ -1490,10 +1491,14 @@ func runFinding(ctx context.Context, args []string, environment cliEnvironment) 
 			return runFindingReopen(ctx, args[1:], environment)
 		case "note":
 			return runFindingNote(ctx, args[1:], environment)
+		case "diff":
+			return runFindingDiff(ctx, args[1:], environment)
+		case "open":
+			return runFindingOpen(ctx, args[1:], environment)
 		}
 	}
 	if len(args) != 1 {
-		return errors.New("usage: air finding <id> | air finding <dismiss|reopen|note> ...")
+		return errors.New("usage: air finding <id> | air finding <dismiss|reopen|note|diff|open> ...")
 	}
 	id, err := parseFindingID(args[0])
 	if err != nil {
@@ -1692,6 +1697,8 @@ Usage:
   air finding dismiss <id> --reason <text>
   air finding reopen <id>
   air finding note <id> <text>
+  air finding diff <id>
+  air finding open <id>
 
 Reviewer configuration precedence:
   command-line flag > environment variable > database > built-in default

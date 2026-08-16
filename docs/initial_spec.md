@@ -935,10 +935,12 @@ findings. The list shows ID, severity, disposition, location, and title; the
 detail view shows the description, commit references, introducing review's
 model and reasoning effort, and event history. The browser supports keyboard
 navigation, text search, status and severity filters, and independent detail
-scrolling. It can dismiss a finding with a required reason, reopen a dismissed
-or resolved finding after confirmation, and append a note. All changes call the
-same audited lifecycle operations as `air finding dismiss`, `reopen`, and
-`note`. It makes no reviewer or network calls.
+scrolling. It can launch the introducing commit through `git difftool`, open a
+located finding in the editor reported by `git var GIT_EDITOR`, dismiss a
+finding with a required reason, reopen a dismissed or resolved finding after
+confirmation, and append a note. Lifecycle changes call the same audited
+operations as `air finding dismiss`, `reopen`, and `note`. It makes no reviewer
+or network calls.
 
 The browser requires both input and output to be interactive terminals. Scripts
 should use `air status --json` or `air export` instead.
@@ -949,6 +951,8 @@ should use `air status --json` or `air export` instead.
 air finding dismiss 17 --reason "Intentional compatibility behavior"
 air finding note 17 "Verify after the parser rewrite"
 air finding reopen 17
+air finding diff 17
+air finding open 17
 ```
 
 Dismissal requires a reason and hides the finding from normal status and model
@@ -956,6 +960,15 @@ context without pretending that a commit resolved it. Reopening clears either
 a dismissal or a recorded resolution. Notes do not change disposition. Manual
 events have no commit or review ID, but always retain their timestamp, action,
 and note in `finding_events`; `air finding <id>` displays that audit history.
+
+`air finding diff <id>` launches `git difftool --no-prompt` for the finding's
+introducing commit against its first parent, using the user's configured Git
+diff tool. `air finding open <id>` launches the editor selected by
+`git var GIT_EDITOR` on the current working-tree file. AIR supplies the recorded
+line using the native argument convention for common editors and otherwise
+opens the file without a line selector. A missing or invalid finding path is an
+error. Both commands attach the child process to the terminal; from the browser,
+AIR temporarily leaves full-screen mode and restores it after the child exits.
 
 ### Rescan
 

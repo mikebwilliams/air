@@ -19,6 +19,7 @@ type findingsUIRunner func(
 	context.Context,
 	io.Reader,
 	io.Writer,
+	findingExternalCommands,
 	*Store,
 	[]Finding,
 	bool,
@@ -34,7 +35,7 @@ func runFindings(ctx context.Context, args []string, environment cliEnvironment)
 	if flags.NArg() != 0 {
 		return errors.New("usage: air findings [--all]")
 	}
-	_, store, closeStore, err := openRepositoryStore(ctx, environment.Cwd)
+	repository, store, closeStore, err := openRepositoryStore(ctx, environment.Cwd)
 	if err != nil {
 		return err
 	}
@@ -47,7 +48,8 @@ func runFindings(ctx context.Context, args []string, environment cliEnvironment)
 	if runner == nil {
 		runner = runTerminalFindingsUI
 	}
-	return runner(ctx, environment.Stdin, environment.Stdout, store, findings, *includeAll,
+	commands := newFindingExternalCommands(repository, environment.ExternalCommand)
+	return runner(ctx, environment.Stdin, environment.Stdout, commands, store, findings, *includeAll,
 		func() time.Time { return environmentNow(environment) })
 }
 
@@ -55,6 +57,7 @@ func runTerminalFindingsUI(
 	ctx context.Context,
 	input io.Reader,
 	output io.Writer,
+	external findingExternalCommands,
 	store *Store,
 	findings []Finding,
 	includeAll bool,
@@ -65,7 +68,7 @@ func runTerminalFindingsUI(
 	if !inputOK || !outputOK || !term.IsTerminal(inputFile.Fd()) || !term.IsTerminal(outputFile.Fd()) {
 		return errors.New("findings requires an interactive terminal; use air status --json for non-interactive output")
 	}
-	model := newFindingsModel(ctx, store, findings, includeAll, now)
+	model := newFindingsModel(ctx, external, store, findings, includeAll, now)
 	program := tea.NewProgram(model,
 		tea.WithContext(ctx),
 		tea.WithInput(input),
@@ -92,6 +95,7 @@ const (
 
 type findingsModel struct {
 	ctx             context.Context
+	external        findingExternalCommands
 	store           *Store
 	now             func() time.Time
 	all             []Finding
@@ -114,6 +118,7 @@ type findingsModel struct {
 
 func newFindingsModel(
 	ctx context.Context,
+	external findingExternalCommands,
 	store *Store,
 	findings []Finding,
 	includeAll bool,
@@ -125,6 +130,7 @@ func newFindingsModel(
 	}
 	model := findingsModel{
 		ctx:            ctx,
+		external:       external,
 		store:          store,
 		now:            now,
 		all:            findings,
@@ -144,6 +150,13 @@ func (m findingsModel) Init() tea.Cmd {
 
 func (m findingsModel) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 	switch message := message.(type) {
+	case findingExternalFinishedMsg:
+		if message.err != nil {
+			m.message = fmt.Sprintf("%s failed for finding #%d: %v", message.action, message.findingID, message.err)
+		} else {
+			m.message = fmt.Sprintf("%s closed for finding #%d.", message.action, message.findingID)
+		}
+		return m, nil
 	case tea.WindowSizeMsg:
 		m.width = message.Width
 		m.height = message.Height
@@ -230,6 +243,10 @@ func (m findingsModel) handleKey(key string) (tea.Model, tea.Cmd) {
 				m.input = ""
 			}
 		}
+	case "D":
+		return m, m.launchExternal("Diff", m.external.diff)
+	case "o":
+		return m, m.launchExternal("Editor", m.external.open)
 	case "r":
 		if finding, ok := m.selectedFinding(); ok {
 			if findingDisposition(finding) == "open" {
@@ -245,6 +262,32 @@ func (m findingsModel) handleKey(key string) (tea.Model, tea.Cmd) {
 		}
 	}
 	return m, nil
+}
+
+type findingExternalFinishedMsg struct {
+	action    string
+	findingID int64
+	err       error
+}
+
+func (m *findingsModel) launchExternal(action string, builder findingCommandBuilder) tea.Cmd {
+	finding, ok := m.selectedFinding()
+	if !ok {
+		return nil
+	}
+	if builder == nil {
+		m.message = action + " command is unavailable."
+		return nil
+	}
+	command, err := builder(m.ctx, finding)
+	if err != nil {
+		m.message = action + " failed: " + err.Error()
+		return nil
+	}
+	m.message = fmt.Sprintf("Opening %s for finding #%d…", strings.ToLower(action), finding.ID)
+	return tea.ExecProcess(command, func(err error) tea.Msg {
+		return findingExternalFinishedMsg{action: action, findingID: finding.ID, err: err}
+	})
 }
 
 func (m findingsModel) handleInputKey(key string) (tea.Model, tea.Cmd) {
@@ -635,7 +678,7 @@ func (m findingsModel) footer() string {
 	case findingsConfirmReopen:
 		return fmt.Sprintf("Reopen #%d?  y yes, n no", m.selectedID())
 	default:
-		return "↑/↓ j/k move  / search  s status  v severity  d dismiss  r reopen  n note  ? help  q quit"
+		return "↑/↓ j/k move  / search  D diff  o open  d dismiss  r reopen  n note  ? help  q quit"
 	}
 }
 
@@ -650,6 +693,8 @@ Ctrl+U/Ctrl+D scroll detail
 s             cycle status: open, all, dismissed, resolved
 v             cycle severity: all, error, warning, info
 c             clear search and restore default filters
+D             open the introducing commit in git difftool
+o             open the finding's file and line in the configured Git editor
 d             dismiss the selected open finding (reason required)
 r             reopen a dismissed or resolved finding (confirmation required)
 n             append an audited note

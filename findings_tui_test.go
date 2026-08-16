@@ -3,7 +3,9 @@ package main
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -108,7 +110,7 @@ func TestFindingsModelActionsAreAudited(t *testing.T) {
 	store, findings, reviewedAt := testStoreWithFindings(t)
 	defer store.Close()
 	now := reviewedAt.Add(time.Hour)
-	model := newFindingsModel(ctx, store, findings, true, func() time.Time {
+	model := newFindingsModel(ctx, findingExternalCommands{}, store, findings, true, func() time.Time {
 		now = now.Add(time.Second)
 		return now
 	})
@@ -142,6 +144,45 @@ func TestFindingsModelActionsAreAudited(t *testing.T) {
 	}
 	if events[len(events)-1].Note != "double-check this path" {
 		t.Fatalf("last event = %+v", events[len(events)-1])
+	}
+}
+
+func TestFindingsModelLaunchesExternalActions(t *testing.T) {
+	ctx := context.Background()
+	finding := Finding{ID: 9, Severity: "warning", Title: "open me", IntroducedSHA: strings.Repeat("a", 40)}
+	var diffID int64
+	model := findingsModel{
+		ctx: ctx,
+		external: findingExternalCommands{
+			diff: func(_ context.Context, selected Finding) (*exec.Cmd, error) {
+				diffID = selected.ID
+				return exec.Command("true"), nil
+			},
+			open: func(_ context.Context, selected Finding) (*exec.Cmd, error) {
+				return nil, errors.New("file is unavailable")
+			},
+		},
+		all:            []Finding{finding},
+		statusFilter:   "open",
+		severityFilter: "all",
+	}
+	model.applyFilters(0)
+
+	updatedValue, command := model.handleKey("D")
+	updated := updatedValue.(findingsModel)
+	if command == nil || diffID != 9 || !strings.Contains(updated.message, "Opening diff") {
+		t.Fatalf("diff launch: command=%v, id=%d, message=%q", command, diffID, updated.message)
+	}
+	finishedValue, _ := updated.Update(findingExternalFinishedMsg{action: "Diff", findingID: 9})
+	finished := finishedValue.(findingsModel)
+	if finished.message != "Diff closed for finding #9." {
+		t.Fatalf("completion message = %q", finished.message)
+	}
+
+	updatedValue, command = model.handleKey("o")
+	updated = updatedValue.(findingsModel)
+	if command != nil || !strings.Contains(updated.message, "file is unavailable") {
+		t.Fatalf("open failure: command=%v, message=%q", command, updated.message)
 	}
 }
 
@@ -179,7 +220,7 @@ func TestRunFindingsHandsAllRowsToUI(t *testing.T) {
 		Stdin:  bytes.NewBuffer(nil),
 		Stdout: io.Discard,
 		Stderr: io.Discard,
-		FindingsUI: func(_ context.Context, _ io.Reader, _ io.Writer, _ *Store,
+		FindingsUI: func(_ context.Context, _ io.Reader, _ io.Writer, _ findingExternalCommands, _ *Store,
 			findings []Finding, includeAll bool, _ func() time.Time,
 		) error {
 			called = true
@@ -199,7 +240,7 @@ func TestRunFindingsHandsAllRowsToUI(t *testing.T) {
 
 func TestTerminalFindingsUIRejectsPipes(t *testing.T) {
 	err := runTerminalFindingsUI(context.Background(), bytes.NewBuffer(nil), io.Discard,
-		nil, nil, false, time.Now)
+		findingExternalCommands{}, nil, nil, false, time.Now)
 	if err == nil || !strings.Contains(err.Error(), "interactive terminal") {
 		t.Fatalf("error = %v", err)
 	}

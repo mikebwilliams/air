@@ -318,8 +318,10 @@ findings; `--all` starts with every disposition. Use the arrow keys or `j`/`k`
 to move, `/` to search, `s` and `v` to cycle status and severity filters, and
 `Ctrl+U`/`Ctrl+D` to scroll long details. The detail pane includes the finding's
 description, location, introducing review and model/effort, and complete event
-history. Press `d` to dismiss with a required reason, `r` to reopen after
-confirmation, or `n` to add a note. These actions use the same audited lifecycle
+history. Press `D` to open the introducing commit in the user's configured
+`git difftool`, or `o` to open the recorded file and line using Git's configured
+editor. Press `d` to dismiss with a required reason, `r` to reopen after
+confirmation, or `n` to add a note. Lifecycle actions use the same audit trail
 as `air finding`; `?` shows the complete key reference. The command requires an
 interactive terminal, while `air status --json` remains the non-interactive
 interface.
@@ -330,11 +332,18 @@ Triage findings without losing their audit history:
 air finding dismiss 17 --reason "Intentional compatibility behavior"
 air finding note 17 "Verify after the parser rewrite"
 air finding reopen 17
+air finding diff 17
+air finding open 17
 ```
 
 Dismissed findings do not appear in `air status` and are not supplied to later
 reviews. Reopening clears either a manual dismissal or a model resolution.
 Every action and note is timestamped in the finding's displayed history.
+`diff` delegates the entire introducing commit to `git difftool`, honoring the
+user's Git diff-tool configuration. `open` uses `git var GIT_EDITOR` and opens
+the current working-tree file at the recorded line for common editors; it
+reports a clear error when the finding has no location or the file no longer
+exists.
 
 Run `air help` for the concise command reference.
 
