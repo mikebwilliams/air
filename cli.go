@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -55,6 +56,8 @@ func runCLI(ctx context.Context, args []string, environment cliEnvironment) erro
 		return runStats(ctx, args[1:], environment)
 	case "cost":
 		return runCost(ctx, args[1:], environment)
+	case "export":
+		return runExport(ctx, args[1:], environment)
 	case "status":
 		return runStatus(ctx, args[1:], environment)
 	case "log":
@@ -931,8 +934,13 @@ func runReset(ctx context.Context, args []string, environment cliEnvironment) er
 }
 
 func runStatus(ctx context.Context, args []string, environment cliEnvironment) error {
-	if len(args) != 0 {
-		return errors.New("usage: air status")
+	flags := newFlagSet("status", environment.Stderr)
+	jsonOutput := flags.Bool("json", false, "write machine-readable JSON")
+	if err := flags.Parse(args); err != nil {
+		return err
+	}
+	if flags.NArg() != 0 {
+		return errors.New("usage: air status [--json]")
 	}
 	_, store, closeStore, err := openRepositoryStore(ctx, environment.Cwd)
 	if err != nil {
@@ -942,6 +950,11 @@ func runStatus(ctx context.Context, args []string, environment cliEnvironment) e
 	findings, err := store.OpenFindings(ctx)
 	if err != nil {
 		return err
+	}
+	if *jsonOutput {
+		return writeJSON(environment.Stdout, struct {
+			OpenFindings []Finding `json:"open_findings"`
+		}{OpenFindings: findings})
 	}
 	fmt.Fprintf(environment.Stdout, "%d open findings\n", len(findings))
 	for _, finding := range findings {
@@ -986,17 +999,18 @@ func runLog(ctx context.Context, args []string, environment cliEnvironment) erro
 
 func runShow(ctx context.Context, args []string, environment cliEnvironment) error {
 	if len(args) == 0 {
-		return errors.New("usage: air show <commit-ish> [--reviews | --review N]")
+		return errors.New("usage: air show <commit-ish> [--reviews | --review N] [--json]")
 	}
 	revision := args[0]
 	flags := newFlagSet("show", environment.Stderr)
 	listReviews := flags.Bool("reviews", false, "list all retained review attempts")
 	reviewNumber := flags.Int("review", 0, "show one retained review attempt")
+	jsonOutput := flags.Bool("json", false, "write machine-readable JSON")
 	if err := flags.Parse(args[1:]); err != nil {
 		return err
 	}
 	if flags.NArg() != 0 || (*listReviews && *reviewNumber != 0) || *reviewNumber < 0 {
-		return errors.New("usage: air show <commit-ish> [--reviews | --review N]")
+		return errors.New("usage: air show <commit-ish> [--reviews | --review N] [--json]")
 	}
 	repository, store, closeStore, err := openRepositoryStore(ctx, environment.Cwd)
 	if err != nil {
@@ -1015,13 +1029,20 @@ func runShow(ctx context.Context, args []string, environment cliEnvironment) err
 	subject := ""
 	if metadataErr == nil {
 		subject = firstLine(metadata.Message)
+	} else {
+		metadata = CommitMetadata{SHA: sha, ParentSHA: record.ParentSHA}
 	}
-	fmt.Fprintf(environment.Stdout, "%s %s\n", shortSHA(sha), subject)
 	if record.Status == "skipped" {
 		if *listReviews || *reviewNumber != 0 {
 			return fmt.Errorf("commit %s was skipped and has no review attempts", shortSHA(sha))
 		}
-		fmt.Fprintf(environment.Stdout, "\nSkipped: %s\n", record.SkipReason)
+		if *jsonOutput {
+			return writeJSON(environment.Stdout, showJSONOutput{
+				Commit: metadata, Record: record,
+				IntroducedFindings: []Finding{}, ResolvedFindings: []Finding{},
+			})
+		}
+		fmt.Fprintf(environment.Stdout, "%s %s\n\nSkipped: %s\n", shortSHA(sha), subject, record.SkipReason)
 		return nil
 	}
 	if *reviewNumber != 0 {
@@ -1029,14 +1050,6 @@ func runShow(ctx context.Context, args []string, environment cliEnvironment) err
 		if err != nil {
 			return err
 		}
-		current := ""
-		if attempt.Current {
-			current = " (current)"
-		}
-		fmt.Fprintf(environment.Stdout, "\nReview attempt #%d%s\n", attempt.Number, current)
-		printReviewAccounting(environment.Stdout, attempt.Model, attempt.ReasoningEffort,
-			&attempt.Usage, attempt.EstimatedCostMicrousd, attempt.EstimatedCostMaxMicrousd,
-			attempt.CostContext, attempt.CostComplete)
 		introduced, err := store.FindingsIntroducedByReview(ctx, attempt.ID)
 		if err != nil {
 			return err
@@ -1045,14 +1058,25 @@ func runShow(ctx context.Context, args []string, environment cliEnvironment) err
 		if err != nil {
 			return err
 		}
+		if *jsonOutput {
+			return writeJSON(environment.Stdout, showJSONOutput{
+				Commit: metadata, Record: record, Review: &attempt,
+				IntroducedFindings: introduced, ResolvedFindings: resolved,
+			})
+		}
+		fmt.Fprintf(environment.Stdout, "%s %s\n", shortSHA(sha), subject)
+		current := ""
+		if attempt.Current {
+			current = " (current)"
+		}
+		fmt.Fprintf(environment.Stdout, "\nReview attempt #%d%s\n", attempt.Number, current)
+		printReviewAccounting(environment.Stdout, attempt.Model, attempt.ReasoningEffort,
+			&attempt.Usage, attempt.EstimatedCostMicrousd, attempt.EstimatedCostMaxMicrousd,
+			attempt.CostContext, attempt.CostComplete)
 		printReviewResult(environment.Stdout, introduced, resolved, attempt.Summary)
 		return nil
 	}
 
-	fmt.Fprintln(environment.Stdout)
-	printReviewAccounting(environment.Stdout, record.Model, record.ReasoningEffort,
-		record.Usage, record.EstimatedCostMicrousd, record.EstimatedCostMaxMicrousd,
-		record.CostContext, record.CostComplete)
 	introduced, err := store.FindingsIntroducedBy(ctx, sha)
 	if err != nil {
 		return err
@@ -1061,12 +1085,28 @@ func runShow(ctx context.Context, args []string, environment cliEnvironment) err
 	if err != nil {
 		return err
 	}
-	printReviewResult(environment.Stdout, introduced, resolved, record.Summary)
+	var attempts []ReviewAttempt
 	if *listReviews {
-		attempts, err := store.ReviewAttempts(ctx, sha)
+		attempts, err = store.ReviewAttempts(ctx, sha)
 		if err != nil {
 			return err
 		}
+	}
+	if *jsonOutput {
+		if attempts == nil {
+			attempts = []ReviewAttempt{}
+		}
+		return writeJSON(environment.Stdout, showJSONOutput{
+			Commit: metadata, Record: record, IntroducedFindings: introduced,
+			ResolvedFindings: resolved, Reviews: attempts,
+		})
+	}
+	fmt.Fprintf(environment.Stdout, "%s %s\n\n", shortSHA(sha), subject)
+	printReviewAccounting(environment.Stdout, record.Model, record.ReasoningEffort,
+		record.Usage, record.EstimatedCostMicrousd, record.EstimatedCostMaxMicrousd,
+		record.CostContext, record.CostComplete)
+	printReviewResult(environment.Stdout, introduced, resolved, record.Summary)
+	if *listReviews {
 		fmt.Fprintln(environment.Stdout, "\nReview attempts:")
 		for _, attempt := range attempts {
 			current := ""
@@ -1081,6 +1121,25 @@ func runShow(ctx context.Context, args []string, environment cliEnvironment) err
 				attempt.Number, attempt.ReviewedAt.Format(time.RFC3339), attempt.Model, effort,
 				attempt.NewCount, attempt.ResolvedCount, current)
 		}
+	}
+	return nil
+}
+
+type showJSONOutput struct {
+	Commit             CommitMetadata  `json:"commit"`
+	Record             CommitRecord    `json:"record"`
+	Review             *ReviewAttempt  `json:"review,omitempty"`
+	IntroducedFindings []Finding       `json:"introduced_findings"`
+	ResolvedFindings   []Finding       `json:"resolved_findings"`
+	Reviews            []ReviewAttempt `json:"reviews,omitempty"`
+}
+
+func writeJSON(output io.Writer, value any) error {
+	encoder := json.NewEncoder(output)
+	encoder.SetIndent("", "  ")
+	encoder.SetEscapeHTML(false)
+	if err := encoder.Encode(value); err != nil {
+		return fmt.Errorf("write JSON: %w", err)
 	}
 	return nil
 }
@@ -1138,6 +1197,147 @@ func printReviewResult(output io.Writer, introduced, resolved []Finding, summary
 	fmt.Fprintln(output, "\nResolved:")
 	printFindingList(output, resolved)
 	fmt.Fprintf(output, "\nReview:\n  %s\n", summary)
+}
+
+func runExport(ctx context.Context, args []string, environment cliEnvironment) error {
+	flags := newFlagSet("export", environment.Stderr)
+	format := flags.String("format", "", "output format: json or sarif")
+	if err := flags.Parse(args); err != nil {
+		return err
+	}
+	if flags.NArg() != 0 || (*format != "json" && *format != "sarif") {
+		return errors.New("usage: air export --format <json|sarif>")
+	}
+	_, store, closeStore, err := openRepositoryStore(ctx, environment.Cwd)
+	if err != nil {
+		return err
+	}
+	defer closeStore()
+	findings, err := store.OpenFindings(ctx)
+	if err != nil {
+		return err
+	}
+	if *format == "json" {
+		return writeJSON(environment.Stdout, struct {
+			OpenFindings []Finding `json:"open_findings"`
+		}{OpenFindings: findings})
+	}
+	return writeJSON(environment.Stdout, buildSARIF(findings))
+}
+
+type sarifLog struct {
+	Schema  string     `json:"$schema"`
+	Version string     `json:"version"`
+	Runs    []sarifRun `json:"runs"`
+}
+
+type sarifRun struct {
+	Tool    sarifTool     `json:"tool"`
+	Results []sarifResult `json:"results"`
+}
+
+type sarifTool struct {
+	Driver sarifDriver `json:"driver"`
+}
+
+type sarifDriver struct {
+	Name           string      `json:"name"`
+	InformationURI string      `json:"informationUri,omitempty"`
+	Rules          []sarifRule `json:"rules"`
+}
+
+type sarifRule struct {
+	ID               string       `json:"id"`
+	ShortDescription sarifMessage `json:"shortDescription"`
+}
+
+type sarifResult struct {
+	RuleID       string            `json:"ruleId"`
+	Level        string            `json:"level"`
+	Message      sarifMessage      `json:"message"`
+	Locations    []sarifLocation   `json:"locations,omitempty"`
+	Fingerprints map[string]string `json:"fingerprints"`
+	Properties   sarifProperties   `json:"properties"`
+}
+
+type sarifMessage struct {
+	Text string `json:"text"`
+}
+
+type sarifLocation struct {
+	PhysicalLocation sarifPhysicalLocation `json:"physicalLocation"`
+}
+
+type sarifPhysicalLocation struct {
+	ArtifactLocation sarifArtifactLocation `json:"artifactLocation"`
+	Region           *sarifRegion          `json:"region,omitempty"`
+}
+
+type sarifArtifactLocation struct {
+	URI string `json:"uri"`
+}
+
+type sarifRegion struct {
+	StartLine int `json:"startLine"`
+}
+
+type sarifProperties struct {
+	FindingID    int64  `json:"finding_id"`
+	IntroducedBy string `json:"introduced_sha"`
+	Symbol       string `json:"symbol,omitempty"`
+}
+
+func buildSARIF(findings []Finding) sarifLog {
+	results := make([]sarifResult, 0, len(findings))
+	for _, finding := range findings {
+		result := sarifResult{
+			RuleID:  "AIR",
+			Level:   sarifLevel(finding.Severity),
+			Message: sarifMessage{Text: finding.Title + "\n\n" + finding.Description},
+			Fingerprints: map[string]string{
+				"air/finding-id": strconv.FormatInt(finding.ID, 10),
+			},
+			Properties: sarifProperties{
+				FindingID: finding.ID, IntroducedBy: finding.IntroducedSHA,
+			},
+		}
+		if finding.Symbol != nil {
+			result.Properties.Symbol = *finding.Symbol
+		}
+		if finding.File != nil {
+			physical := sarifPhysicalLocation{
+				ArtifactLocation: sarifArtifactLocation{URI: filepath.ToSlash(*finding.File)},
+			}
+			if finding.Line != nil {
+				physical.Region = &sarifRegion{StartLine: *finding.Line}
+			}
+			result.Locations = []sarifLocation{{PhysicalLocation: physical}}
+		}
+		results = append(results, result)
+	}
+	return sarifLog{
+		Schema:  "https://json.schemastore.org/sarif-2.1.0.json",
+		Version: "2.1.0",
+		Runs: []sarifRun{{
+			Tool: sarifTool{Driver: sarifDriver{
+				Name: "AIR", Rules: []sarifRule{{
+					ID: "AIR", ShortDescription: sarifMessage{Text: "AIR semantic commit review finding"},
+				}},
+			}},
+			Results: results,
+		}},
+	}
+}
+
+func sarifLevel(severity string) string {
+	switch severity {
+	case "error":
+		return "error"
+	case "warning":
+		return "warning"
+	default:
+		return "note"
+	}
 }
 
 func runFinding(ctx context.Context, args []string, environment cliEnvironment) error {
@@ -1338,9 +1538,10 @@ Usage:
   air model <list|show|set-pricing|mark-pricing-unknown> ...
   air stats [--model MODEL] [--since DATE]
   air cost [--model MODEL] [--since DATE]
-  air status
+  air status [--json]
   air log
-  air show <commit-ish> [--reviews | --review N]
+  air show <commit-ish> [--reviews | --review N] [--json]
+  air export --format <json|sarif>
   air finding <id>
   air finding dismiss <id> --reason <text>
   air finding reopen <id>

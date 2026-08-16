@@ -266,6 +266,9 @@ air show HEAD --review 1
 air finding 17
 air stats
 air cost --model gpt-5.6-luna --since 2026-08-01
+air status --json
+air show HEAD --json
+air export --format sarif
 ```
 
 `air show` includes the model, reasoning effort, token usage, and estimated
@@ -278,6 +281,11 @@ current repository finding counts. `air cost` provides the accounting-focused
 view. Both accept an exact `--model` filter and a `--since` date or RFC3339
 timestamp. Unknown model prices and unreported cache-write token counts remain
 explicit instead of being silently treated as zero.
+
+`status` and `show` support indented, stable-field-name JSON for automation.
+`air export --format json` emits current open findings, while `--format sarif`
+emits SARIF 2.1.0 with file and line locations when the reviewer supplied them.
+Dismissed and resolved findings are excluded from both exports.
 
 Triage findings without losing their audit history:
 

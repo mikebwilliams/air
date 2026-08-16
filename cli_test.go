@@ -75,6 +75,17 @@ func TestCLIInitScanAndQueries(t *testing.T) {
 	if !strings.Contains(stdout.String(), "1 open findings") || !strings.Contains(stdout.String(), "test finding") {
 		t.Fatalf("status output:\n%s", stdout.String())
 	}
+	stdout.Reset()
+	if err := runCLI(ctx, []string{"status", "--json"}, environment); err != nil {
+		t.Fatalf("status JSON: %v", err)
+	}
+	var statusJSON struct {
+		OpenFindings []Finding `json:"open_findings"`
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &statusJSON); err != nil || len(statusJSON.OpenFindings) != 1 ||
+		statusJSON.OpenFindings[0].Title != "test finding" {
+		t.Fatalf("status JSON = %+v, %v; output=%s", statusJSON, err, stdout.String())
+	}
 
 	stdout.Reset()
 	if err := runCLI(ctx, []string{"show", head}, environment); err != nil {
@@ -86,6 +97,28 @@ func TestCLIInitScanAndQueries(t *testing.T) {
 		!strings.Contains(stdout.String(), "Reviewed app.txt.") ||
 		!strings.Contains(stdout.String(), "#1 warning") {
 		t.Fatalf("show output:\n%s", stdout.String())
+	}
+	stdout.Reset()
+	if err := runCLI(ctx, []string{"show", head, "--reviews", "--json"}, environment); err != nil {
+		t.Fatalf("show JSON: %v", err)
+	}
+	var showJSON showJSONOutput
+	if err := json.Unmarshal(stdout.Bytes(), &showJSON); err != nil || showJSON.Commit.SHA != head ||
+		showJSON.Record.Model != "gpt-5.6-luna" || len(showJSON.IntroducedFindings) != 1 ||
+		len(showJSON.Reviews) != 1 || showJSON.Reviews[0].Usage.InputTokens != 100 {
+		t.Fatalf("show JSON = %+v, %v; output=%s", showJSON, err, stdout.String())
+	}
+
+	stdout.Reset()
+	if err := runCLI(ctx, []string{"export", "--format", "sarif"}, environment); err != nil {
+		t.Fatalf("SARIF export: %v", err)
+	}
+	var sarif sarifLog
+	if err := json.Unmarshal(stdout.Bytes(), &sarif); err != nil || sarif.Version != "2.1.0" ||
+		len(sarif.Runs) != 1 || len(sarif.Runs[0].Results) != 1 ||
+		sarif.Runs[0].Results[0].Level != "warning" ||
+		sarif.Runs[0].Results[0].Locations[0].PhysicalLocation.ArtifactLocation.URI != "app.txt" {
+		t.Fatalf("SARIF = %+v, %v; output=%s", sarif, err, stdout.String())
 	}
 
 	stdout.Reset()

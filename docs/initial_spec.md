@@ -904,6 +904,26 @@ or an RFC3339 timestamp; `--model` is an exact model identifier match.
 and the number of skipped commits. These repository-state counts are not
 affected by the review filters.
 
+### Machine-readable output
+
+```bash
+air status --json
+air show <commit-ish> --json
+air export --format json
+air export --format sarif
+```
+
+JSON uses documented snake-case field names rather than mirroring Go field
+names. The status and export views contain only current open findings. Show
+JSON includes commit metadata, the current commit record, findings introduced
+or resolved by the selected review, and retained attempts when `--reviews` is
+given. `--review N --json` selects a historical attempt.
+
+SARIF export uses version 2.1.0. Each open finding becomes one result with AIR's
+severity mapped to SARIF `error`, `warning`, or `note`, a stable finding-ID
+fingerprint, introducing commit metadata, and an artifact URI/start line when
+available. Resolved and dismissed findings are not exported.
+
 ## 19. Reviewer Configuration
 
 The default reviewer is the locally installed Codex CLI. It reuses Codex's

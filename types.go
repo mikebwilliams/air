@@ -13,51 +13,51 @@ const (
 )
 
 type CommitMetadata struct {
-	SHA       string
-	ParentSHA string
-	Author    string
-	Date      string
-	Message   string
+	SHA       string `json:"sha"`
+	ParentSHA string `json:"parent_sha,omitempty"`
+	Author    string `json:"author,omitempty"`
+	Date      string `json:"date,omitempty"`
+	Message   string `json:"message,omitempty"`
 }
 
 type CommitRecord struct {
-	SHA                      string
-	ParentSHA                string
-	ProcessedAt              time.Time
-	Status                   string
-	SkipReason               string
-	Model                    string
-	ReasoningEffort          string
-	PromptVersion            string
-	Summary                  string
-	RawResponse              string
-	Usage                    *TokenUsage
-	EstimatedCostMicrousd    *int64
-	EstimatedCostMaxMicrousd *int64
-	CostContext              string
-	CostComplete             bool
-	NewCount                 int
-	ResolvedCount            int
+	SHA                      string      `json:"sha"`
+	ParentSHA                string      `json:"parent_sha,omitempty"`
+	ProcessedAt              time.Time   `json:"processed_at"`
+	Status                   string      `json:"status"`
+	SkipReason               string      `json:"skip_reason,omitempty"`
+	Model                    string      `json:"model,omitempty"`
+	ReasoningEffort          string      `json:"reasoning_effort,omitempty"`
+	PromptVersion            string      `json:"prompt_version,omitempty"`
+	Summary                  string      `json:"summary,omitempty"`
+	RawResponse              string      `json:"raw_response,omitempty"`
+	Usage                    *TokenUsage `json:"usage,omitempty"`
+	EstimatedCostMicrousd    *int64      `json:"estimated_cost_microusd,omitempty"`
+	EstimatedCostMaxMicrousd *int64      `json:"estimated_cost_max_microusd,omitempty"`
+	CostContext              string      `json:"cost_context,omitempty"`
+	CostComplete             bool        `json:"cost_complete"`
+	NewCount                 int         `json:"new_count"`
+	ResolvedCount            int         `json:"resolved_count"`
 }
 
 type ReviewAttempt struct {
-	ID                       int64
-	Number                   int
-	CommitSHA                string
-	ReviewedAt               time.Time
-	Model                    string
-	ReasoningEffort          string
-	PromptVersion            string
-	Summary                  string
-	RawResponse              string
-	Usage                    TokenUsage
-	EstimatedCostMicrousd    *int64
-	EstimatedCostMaxMicrousd *int64
-	CostContext              string
-	CostComplete             bool
-	NewCount                 int
-	ResolvedCount            int
-	Current                  bool
+	ID                       int64      `json:"id"`
+	Number                   int        `json:"number"`
+	CommitSHA                string     `json:"commit_sha"`
+	ReviewedAt               time.Time  `json:"reviewed_at"`
+	Model                    string     `json:"model"`
+	ReasoningEffort          string     `json:"reasoning_effort,omitempty"`
+	PromptVersion            string     `json:"prompt_version"`
+	Summary                  string     `json:"summary"`
+	RawResponse              string     `json:"raw_response"`
+	Usage                    TokenUsage `json:"usage"`
+	EstimatedCostMicrousd    *int64     `json:"estimated_cost_microusd,omitempty"`
+	EstimatedCostMaxMicrousd *int64     `json:"estimated_cost_max_microusd,omitempty"`
+	CostContext              string     `json:"cost_context,omitempty"`
+	CostComplete             bool       `json:"cost_complete"`
+	NewCount                 int        `json:"new_count"`
+	ResolvedCount            int        `json:"resolved_count"`
+	Current                  bool       `json:"current"`
 }
 
 type ReviewStats struct {
@@ -161,11 +161,11 @@ type ReviewResult struct {
 }
 
 type TokenUsage struct {
-	InputTokens           int64
-	CachedInputTokens     int64
-	CacheWriteTokens      *int64
-	OutputTokens          int64
-	ReasoningOutputTokens int64
+	InputTokens           int64  `json:"input_tokens"`
+	CachedInputTokens     int64  `json:"cached_input_tokens"`
+	CacheWriteTokens      *int64 `json:"cache_write_tokens"`
+	OutputTokens          int64  `json:"output_tokens"`
+	ReasoningOutputTokens int64  `json:"reasoning_output_tokens"`
 }
 
 type Reviewer interface {

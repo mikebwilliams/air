@@ -487,7 +487,7 @@ func (s *Store) queryFindings(ctx context.Context, query string, args ...any) ([
 		return nil, fmt.Errorf("query findings: %w", err)
 	}
 	defer rows.Close()
-	var findings []Finding
+	findings := make([]Finding, 0)
 	for rows.Next() {
 		var finding Finding
 		var resolved, dismissedAt, dismissReason, file, symbol sql.NullString
