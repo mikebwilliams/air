@@ -176,6 +176,16 @@ Review every unprocessed commit between the baseline and local `master`:
 air scan
 ```
 
+Preview the same work without creating a reviewer or changing the database:
+
+```bash
+air pending
+air scan --dry-run
+```
+
+Both commands list commits in processing order as `review` or `skip` and print
+a summary. `air pending` also accepts `--limit` and an explicit range.
+
 Process at most ten of those commits in this invocation:
 
 ```bash

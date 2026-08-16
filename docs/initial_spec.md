@@ -722,6 +722,11 @@ The tool enumerates the configured baseline through `refs/heads/master`, skips
 commits already recorded in the database, and processes the remainder in
 chronological order.
 
+`air pending` and `air scan --dry-run` run the identical enumeration,
+processed-commit filtering, limit, diff extraction, and skip classification,
+but do not construct a reviewer or write the database. They list each pending
+commit as reviewable or skipped in the order a real scan would process it.
+
 It does not require a daemon.
 
 A daemon, cron job, systemd timer, post-fetch hook, or other automation may be layered on later.

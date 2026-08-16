@@ -467,6 +467,44 @@ func TestCLIFindingTriageCommands(t *testing.T) {
 	}
 }
 
+func TestCLIPendingAndScanDryRun(t *testing.T) {
+	ctx := context.Background()
+	repository, directory := newTestGitRepository(t)
+	base := testCommitFile(t, directory, "app.txt", []byte("base\n"), "base")
+	head := testCommitFile(t, directory, "app.txt", []byte("changed\n"), "change")
+	var stdout bytes.Buffer
+	environment := cliEnvironment{
+		Cwd: directory, Stdout: &stdout, Stderr: &bytes.Buffer{},
+		Getenv: func(string) string { return "" },
+	}
+	if err := runCLI(ctx, []string{"init", base}, environment); err != nil {
+		t.Fatal(err)
+	}
+	stdout.Reset()
+	if err := runCLI(ctx, []string{"pending"}, environment); err != nil {
+		t.Fatalf("pending: %v", err)
+	}
+	if !strings.Contains(stdout.String(), shortSHA(head)+"  review") ||
+		!strings.Contains(stdout.String(), "Pending: 1 commit (1 reviewable, 0 skipped)") {
+		t.Fatalf("pending output:\n%s", stdout.String())
+	}
+	stdout.Reset()
+	if err := runCLI(ctx, []string{"scan", "--dry-run"}, environment); err != nil {
+		t.Fatalf("scan --dry-run: %v", err)
+	}
+	if !strings.Contains(stdout.String(), shortSHA(head)+"  review") {
+		t.Fatalf("scan --dry-run output:\n%s", stdout.String())
+	}
+	store, err := OpenStore(ctx, repository.DatabasePath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	if _, err := store.Commit(ctx, head); err == nil {
+		t.Fatal("dry-run commit was recorded")
+	}
+}
+
 func TestCLICodexRequiresExplicitReviewIdentity(t *testing.T) {
 	ctx := context.Background()
 	_, directory := newTestGitRepository(t)

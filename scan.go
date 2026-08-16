@@ -13,6 +13,7 @@ type scanOptions struct {
 	RevisionRange string
 	Commits       []string
 	Force         bool
+	DryRun        bool
 	Limit         int
 	Output        io.Writer
 	Now           func() time.Time
@@ -28,13 +29,16 @@ func scanRepository(
 	if options.Limit < 0 {
 		return fmt.Errorf("scan limit must not be negative")
 	}
-	lock, err := acquireScanLock(repository.LockPath())
-	if err != nil {
-		return err
+	if !options.DryRun {
+		lock, err := acquireScanLock(repository.LockPath())
+		if err != nil {
+			return err
+		}
+		defer lock.Close()
 	}
-	defer lock.Close()
 
 	commits := append([]string(nil), options.Commits...)
+	var err error
 	if len(commits) > 0 {
 		// Explicit commits are already resolved and validated by the caller.
 	} else if options.RevisionRange == "" {
@@ -69,7 +73,11 @@ func scanRepository(
 		remaining = remaining[:options.Limit]
 	}
 	if len(remaining) == 0 {
-		fmt.Fprintln(options.Output, "No unprocessed commits.")
+		if options.DryRun {
+			fmt.Fprintln(options.Output, "No pending commits.")
+		} else {
+			fmt.Fprintln(options.Output, "No unprocessed commits.")
+		}
 		return nil
 	}
 
@@ -79,6 +87,8 @@ func scanRepository(
 	}
 	var reviewer Reviewer
 	var identity ReviewIdentity
+	reviewableCount := 0
+	skippedCount := 0
 	for _, sha := range remaining {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -91,14 +101,16 @@ func scanRepository(
 		if err != nil {
 			return err
 		}
-		skipReason := ""
-		switch {
-		case diff.Oversized:
-			skipReason = "textual diff exceeds 256 KiB"
-		case len(diff.BinaryFiles) > 0 && diff.Text == "":
-			skipReason = "binary-only diff"
-		case diff.Empty:
-			skipReason = "empty diff"
+		skipReason := diffSkipReason(diff)
+		if options.DryRun {
+			if skipReason == "" {
+				reviewableCount++
+				fmt.Fprintf(options.Output, "%s  review\n", shortSHA(sha))
+			} else {
+				skippedCount++
+				fmt.Fprintf(options.Output, "%s  skip: %s\n", shortSHA(sha), skipReason)
+			}
+			continue
 		}
 		if skipReason != "" {
 			if options.Force {
@@ -159,5 +171,26 @@ func scanRepository(
 			len(result.Output.ResolvedFindings),
 		)
 	}
+	if options.DryRun {
+		commitLabel := "commits"
+		if len(remaining) == 1 {
+			commitLabel = "commit"
+		}
+		fmt.Fprintf(options.Output, "Pending: %d %s (%d reviewable, %d skipped)\n",
+			len(remaining), commitLabel, reviewableCount, skippedCount)
+	}
 	return nil
+}
+
+func diffSkipReason(diff DiffResult) string {
+	switch {
+	case diff.Oversized:
+		return "textual diff exceeds 256 KiB"
+	case len(diff.BinaryFiles) > 0 && diff.Text == "":
+		return "binary-only diff"
+	case diff.Empty:
+		return "empty diff"
+	default:
+		return ""
+	}
 }

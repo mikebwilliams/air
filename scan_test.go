@@ -280,6 +280,42 @@ func TestForcedScanCreatesReviewAttemptAndExcludesSameCommitFindings(t *testing.
 	}
 }
 
+func TestDryRunClassifiesPendingCommitsWithoutWriting(t *testing.T) {
+	ctx := context.Background()
+	repository, directory := newTestGitRepository(t)
+	base := testCommitFile(t, directory, "app.txt", []byte("base\n"), "base")
+	textCommit := testCommitFile(t, directory, "app.txt", []byte("changed\n"), "text")
+	binaryCommit := testCommitFile(t, directory, "image.bin", []byte{0, 1, 2, 0, 3}, "binary")
+	store, err := CreateStore(ctx, repository.DatabasePath(), base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	var output bytes.Buffer
+	if err := scanRepository(ctx, repository, store, scanOptions{
+		DryRun: true,
+		Output: &output,
+		NewReviewer: func() (Reviewer, ReviewIdentity, error) {
+			t.Fatal("dry run constructed a reviewer")
+			return nil, ReviewIdentity{}, nil
+		},
+	}); err != nil {
+		t.Fatalf("dry run: %v", err)
+	}
+	if !strings.Contains(output.String(), shortSHA(textCommit)+"  review") ||
+		!strings.Contains(output.String(), shortSHA(binaryCommit)+"  skip: binary-only diff") ||
+		!strings.Contains(output.String(), "Pending: 2 commits (1 reviewable, 1 skipped)") {
+		t.Fatalf("dry-run output:\n%s", output.String())
+	}
+	processed, err := store.ProcessedSHAs(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(processed) != 0 {
+		t.Fatalf("dry run recorded commits: %v", processed)
+	}
+}
+
 func cleanReview(summary string) ReviewResult {
 	return ReviewResult{
 		Output: ReviewOutput{

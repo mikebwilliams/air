@@ -36,6 +36,8 @@ func runCLI(ctx context.Context, args []string, environment cliEnvironment) erro
 		return runInit(ctx, args[1:], environment)
 	case "scan":
 		return runScan(ctx, args[1:], environment)
+	case "pending":
+		return runPending(ctx, args[1:], environment)
 	case "config":
 		return runConfig(ctx, args[1:], environment)
 	case "status":
@@ -278,6 +280,7 @@ func runScanCommand(ctx context.Context, args []string, environment cliEnvironme
 	flags := newFlagSet(commandName, environment.Stderr)
 	reviewerFlag := flags.String("reviewer", "", "review backend: codex or http")
 	limit := flags.Int("limit", 0, "maximum commits to process; zero means unlimited")
+	dryRun := flags.Bool("dry-run", false, "show pending work without reviewing or writing")
 	modelFlag := flags.String("model", "", "model identifier")
 	effortFlag := flags.String("effort", "", "Codex reasoning effort")
 	codexBinaryFlag := flags.String("codex-bin", "", "Codex CLI executable")
@@ -295,6 +298,9 @@ func runScanCommand(ctx context.Context, args []string, environment cliEnvironme
 		}
 		if *limit != 0 {
 			return errors.New("--limit is not valid with air rescan")
+		}
+		if *dryRun {
+			return errors.New("--dry-run is not valid with air rescan")
 		}
 	} else if flags.NArg() > 1 {
 		return errors.New("usage: air scan [flags] [<from>..<to>]")
@@ -426,10 +432,40 @@ func runScanCommand(ctx context.Context, args []string, environment cliEnvironme
 		RevisionRange: revisionRange,
 		Commits:       explicitCommits,
 		Force:         rescan,
+		DryRun:        *dryRun,
 		Limit:         *limit,
 		Output:        environment.Stdout,
 		Now:           environment.Now,
 		NewReviewer:   factory,
+	})
+}
+
+func runPending(ctx context.Context, args []string, environment cliEnvironment) error {
+	flags := newFlagSet("pending", environment.Stderr)
+	limit := flags.Int("limit", 0, "maximum pending commits to show; zero means unlimited")
+	if err := flags.Parse(args); err != nil {
+		return err
+	}
+	if flags.NArg() > 1 {
+		return errors.New("usage: air pending [--limit N] [<from>..<to>]")
+	}
+	if *limit < 0 {
+		return errors.New("--limit must not be negative")
+	}
+	revisionRange := ""
+	if flags.NArg() == 1 {
+		revisionRange = flags.Arg(0)
+	}
+	repository, store, closeStore, err := openRepositoryStore(ctx, environment.Cwd)
+	if err != nil {
+		return err
+	}
+	defer closeStore()
+	return scanRepository(ctx, repository, store, scanOptions{
+		RevisionRange: revisionRange,
+		Limit:         *limit,
+		DryRun:        true,
+		Output:        environment.Stdout,
 	})
 }
 
@@ -833,6 +869,7 @@ func printUsage(output io.Writer) {
 Usage:
   air init <commit-ish>
   air scan [flags] [<from>..<to>]
+  air pending [--limit N] [<from>..<to>]
   air rescan <commit-ish> [flags]
   air config <get|set|unset|list> ...
   air status
