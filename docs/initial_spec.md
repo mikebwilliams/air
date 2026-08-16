@@ -790,6 +790,29 @@ and inspect `refs/heads/master` directly.
 air init <commit-ish>
 ```
 
+### Diagnostics and database discovery
+
+```bash
+air db path
+air doctor [--json]
+```
+
+`air db path` prints the absolute `<git-common-dir>/air/reviews.sqlite` path and
+does not require AIR to be initialized. This makes reset, backup, and direct
+SQLite inspection scripts independent of worktree layout.
+
+`air doctor` is a preflight for unattended or expensive scans. It checks
+repository discovery, `refs/heads/master`, state-directory and database
+permissions, supported schema version, SQLite `quick_check`, effective reviewer
+settings, selected model and pricing, and backend prerequisites. For Codex it
+locates the effective executable and runs `codex login status` with a bounded
+timeout. For HTTP it validates the effective endpoint setting and verifies that
+an API key can be resolved without displaying the secret. Unknown pricing is a
+warning; missing credentials, configuration, master, or a usable database is a
+failed check. Any failed check produces a nonzero exit after all safe applicable
+checks have been reported. `--json` emits the same named checks and aggregate
+pass/warning/failure counts.
+
 ### Scan new commits
 
 ```bash

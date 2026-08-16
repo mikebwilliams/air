@@ -56,6 +56,10 @@ func runCLI(ctx context.Context, args []string, environment cliEnvironment) erro
 		return runConfig(ctx, args[1:], environment)
 	case "model":
 		return runModel(ctx, args[1:], environment)
+	case "doctor":
+		return runDoctor(ctx, args[1:], environment)
+	case "db":
+		return runDB(ctx, args[1:], environment)
 	case "stats":
 		return runStats(ctx, args[1:], environment)
 	case "cost":
@@ -1672,6 +1676,8 @@ Usage:
   air reset [--force]
   air config <get|set|unset|list> ...
   air model <list|show|set-pricing|mark-pricing-unknown> ...
+  air doctor [--json]
+  air db path
   air stats [--model MODEL] [--since DATE]
   air cost [--model MODEL] [--since DATE]
   air status [--json]

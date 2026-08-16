@@ -307,6 +307,31 @@ func (s *Store) Close() error {
 	return s.db.Close()
 }
 
+func (s *Store) IntegrityCheck(ctx context.Context) error {
+	rows, err := s.db.QueryContext(ctx, `PRAGMA quick_check`)
+	if err != nil {
+		return fmt.Errorf("run SQLite integrity check: %w", err)
+	}
+	defer rows.Close()
+	var problems []string
+	for rows.Next() {
+		var result string
+		if err := rows.Scan(&result); err != nil {
+			return fmt.Errorf("read SQLite integrity check: %w", err)
+		}
+		if result != "ok" {
+			problems = append(problems, result)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("read SQLite integrity check: %w", err)
+	}
+	if len(problems) != 0 {
+		return fmt.Errorf("SQLite integrity check failed: %s", strings.Join(problems, "; "))
+	}
+	return nil
+}
+
 func (s *Store) Config(ctx context.Context, key string) (string, error) {
 	value, found, err := s.ConfigValue(ctx, key)
 	if err != nil {

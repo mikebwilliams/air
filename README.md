@@ -11,6 +11,12 @@ The database lives at:
 <git-common-dir>/air/reviews.sqlite
 ```
 
+Print the resolved path for the current repository, even before initialization:
+
+```bash
+air db path
+```
+
 AIR's scan lock is stored beside it as `<git-common-dir>/air/scan.lock`. The
 state directory is private to the user, shared by worktrees, and does not
 modify tracked files.
@@ -318,6 +324,21 @@ reviews. Reopening clears either a manual dismissal or a model resolution.
 Every action and note is timestamped in the finding's displayed history.
 
 Run `air help` for the concise command reference.
+
+Before an unattended or expensive run, inspect the complete local setup:
+
+```bash
+air doctor
+air doctor --json
+```
+
+The doctor checks the Git repository and master ref, state permissions, schema
+version, SQLite integrity, effective reviewer/model configuration, model
+pricing, and backend prerequisites. For Codex it locates the configured binary
+and runs `codex login status`; for HTTP it validates the endpoint configuration
+and confirms that a key is available without printing it. Unknown pricing is a
+warning, while missing review credentials or an unusable database is a failed
+check and a nonzero exit.
 
 ## Review and skip behavior
 

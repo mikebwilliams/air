@@ -5,8 +5,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"os"
+	"os/exec"
 	"strconv"
 	"strings"
 	"testing"
@@ -149,6 +151,87 @@ func TestCLIInitScanAndQueries(t *testing.T) {
 		!strings.Contains(stdout.String(), "Reviews: 1 attempts across 1 commits") {
 		t.Fatalf("cost output:\n%s", stdout.String())
 	}
+}
+
+func TestCLIDatabasePathWorksBeforeInitialization(t *testing.T) {
+	_, directory := newTestGitRepository(t)
+	var stdout bytes.Buffer
+	environment := cliEnvironment{Cwd: directory, Stdout: &stdout, Stderr: &bytes.Buffer{}}
+	if err := runCLI(context.Background(), []string{"db", "path"}, environment); err != nil {
+		t.Fatal(err)
+	}
+	repository, err := DiscoverGitRepository(context.Background(), directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stdout.String() != repository.DatabasePath()+"\n" {
+		t.Fatalf("db path output = %q, want %q", stdout.String(), repository.DatabasePath()+"\n")
+	}
+}
+
+func TestCLIDoctorChecksCodexConfigurationAndAuthentication(t *testing.T) {
+	ctx := context.Background()
+	_, directory := newTestGitRepository(t)
+	base := testCommitFile(t, directory, "app.txt", []byte("base\n"), "base")
+	executable, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var stdout bytes.Buffer
+	var invokedName string
+	var invokedArgs []string
+	environment := cliEnvironment{
+		Cwd: directory, Stdout: &stdout, Stderr: &bytes.Buffer{}, Getenv: func(string) string { return "" },
+		CodexCommand: func(commandContext context.Context, name string, args ...string) *exec.Cmd {
+			invokedName = name
+			invokedArgs = append([]string(nil), args...)
+			command := exec.CommandContext(commandContext, os.Args[0], "-test.run=^TestDoctorLoginHelper$")
+			command.Env = append(os.Environ(), "AIR_DOCTOR_HELPER=1")
+			return command
+		},
+	}
+	if err := runCLI(ctx, []string{"init", base}, environment); err != nil {
+		t.Fatal(err)
+	}
+	for _, setting := range [][2]string{
+		{"model", "gpt-5.6-luna"},
+		{"effort", "xhigh"},
+		{"codex-bin", executable},
+	} {
+		if err := runCLI(ctx, []string{"config", "set", setting[0], setting[1]}, environment); err != nil {
+			t.Fatalf("set %s: %v", setting[0], err)
+		}
+	}
+	stdout.Reset()
+	if err := runCLI(ctx, []string{"doctor"}, environment); err != nil {
+		t.Fatalf("doctor: %v\n%s", err, stdout.String())
+	}
+	if invokedName != executable || len(invokedArgs) != 2 || invokedArgs[0] != "login" || invokedArgs[1] != "status" {
+		t.Fatalf("doctor Codex invocation = %q %q", invokedName, invokedArgs)
+	}
+	if !strings.Contains(stdout.String(), "PASS repository") ||
+		!strings.Contains(stdout.String(), "PASS database integrity") ||
+		!strings.Contains(stdout.String(), "PASS Codex authentication") ||
+		!strings.Contains(stdout.String(), "0 warnings, 0 failed") {
+		t.Fatalf("doctor output:\n%s", stdout.String())
+	}
+	stdout.Reset()
+	if err := runCLI(ctx, []string{"doctor", "--json"}, environment); err != nil {
+		t.Fatalf("doctor JSON: %v", err)
+	}
+	var report doctorReport
+	if err := json.Unmarshal(stdout.Bytes(), &report); err != nil || !report.OK || report.Failed != 0 ||
+		report.DatabasePath == "" || len(report.Checks) < 8 {
+		t.Fatalf("doctor report = %+v, %v; output=%s", report, err, stdout.String())
+	}
+}
+
+func TestDoctorLoginHelper(t *testing.T) {
+	if os.Getenv("AIR_DOCTOR_HELPER") != "1" {
+		return
+	}
+	fmt.Fprintln(os.Stdout, "Logged in for AIR test")
+	os.Exit(0)
 }
 
 func TestCLIScanDefaultsToCodex(t *testing.T) {
