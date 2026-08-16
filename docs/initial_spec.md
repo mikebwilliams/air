@@ -885,6 +885,25 @@ air show <commit-ish> --reviews
 air show <commit-ish> --review 2
 ```
 
+### Repository accounting
+
+```bash
+air stats [--model MODEL] [--since DATE]
+air cost [--model MODEL] [--since DATE]
+```
+
+Accounting includes every retained review attempt because superseded rescans
+still consumed tokens. Totals include input, cached-input, cache-write, output,
+and reasoning-output tokens and are grouped by model and reasoning effort.
+Costs are summed as lower and upper bounds from the estimates stored on each
+attempt. Attempts with unknown prices and attempts whose backend omitted
+cache-write usage are counted explicitly. `--since` accepts either a UTC date
+or an RFC3339 timestamp; `--model` is an exact model identifier match.
+
+`air stats` also reports current open, dismissed, and resolved finding counts
+and the number of skipped commits. These repository-state counts are not
+affected by the review filters.
+
 ## 19. Reviewer Configuration
 
 The default reviewer is the locally installed Codex CLI. It reuses Codex's

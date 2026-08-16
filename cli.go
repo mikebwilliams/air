@@ -51,6 +51,10 @@ func runCLI(ctx context.Context, args []string, environment cliEnvironment) erro
 		return runConfig(ctx, args[1:], environment)
 	case "model":
 		return runModel(ctx, args[1:], environment)
+	case "stats":
+		return runStats(ctx, args[1:], environment)
+	case "cost":
+		return runCost(ctx, args[1:], environment)
 	case "status":
 		return runStatus(ctx, args[1:], environment)
 	case "log":
@@ -64,6 +68,128 @@ func runCLI(ctx context.Context, args []string, environment cliEnvironment) erro
 	default:
 		return fmt.Errorf("unknown command %q; run air help", args[0])
 	}
+}
+
+func runStats(ctx context.Context, args []string, environment cliEnvironment) error {
+	model, since, err := parseReportingFlags("stats", args, environment.Stderr)
+	if err != nil {
+		return err
+	}
+	_, store, closeStore, err := openRepositoryStore(ctx, environment.Cwd)
+	if err != nil {
+		return err
+	}
+	defer closeStore()
+	reviews, err := store.ReviewStats(ctx, model, since)
+	if err != nil {
+		return err
+	}
+	findings, err := store.FindingStats(ctx)
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(environment.Stdout, "Reviews: %d attempts across %d commits\n", reviews.Attempts, reviews.Commits)
+	printTokenTotals(environment.Stdout, reviews.InputTokens, reviews.CachedInputTokens,
+		reviews.CacheWriteTokens, reviews.CacheWritesUnreported, reviews.OutputTokens,
+		reviews.ReasoningOutputTokens)
+	printCostTotals(environment.Stdout, reviews.MinimumCostMicrousd, reviews.MaximumCostMicrousd,
+		reviews.PricedAttempts, reviews.UnknownCostAttempts)
+	fmt.Fprintf(environment.Stdout, "Repository findings: %d open, %d dismissed, %d resolved\n",
+		findings.Open, findings.Dismissed, findings.Resolved)
+	fmt.Fprintf(environment.Stdout, "Skipped commits: %d\n", findings.Skipped)
+	printReviewGroups(environment.Stdout, reviews.Groups)
+	return nil
+}
+
+func runCost(ctx context.Context, args []string, environment cliEnvironment) error {
+	model, since, err := parseReportingFlags("cost", args, environment.Stderr)
+	if err != nil {
+		return err
+	}
+	_, store, closeStore, err := openRepositoryStore(ctx, environment.Cwd)
+	if err != nil {
+		return err
+	}
+	defer closeStore()
+	reviews, err := store.ReviewStats(ctx, model, since)
+	if err != nil {
+		return err
+	}
+	printCostTotals(environment.Stdout, reviews.MinimumCostMicrousd, reviews.MaximumCostMicrousd,
+		reviews.PricedAttempts, reviews.UnknownCostAttempts)
+	fmt.Fprintf(environment.Stdout, "Reviews: %d attempts across %d commits\n", reviews.Attempts, reviews.Commits)
+	printReviewGroups(environment.Stdout, reviews.Groups)
+	return nil
+}
+
+func parseReportingFlags(command string, args []string, stderr io.Writer) (string, *time.Time, error) {
+	flags := newFlagSet(command, stderr)
+	model := flags.String("model", "", "include only reviews performed by this model")
+	sinceValue := flags.String("since", "", "include reviews on or after YYYY-MM-DD or RFC3339")
+	if err := flags.Parse(args); err != nil {
+		return "", nil, err
+	}
+	if flags.NArg() != 0 {
+		return "", nil, fmt.Errorf("usage: air %s [--model MODEL] [--since DATE]", command)
+	}
+	if strings.TrimSpace(*model) != *model {
+		return "", nil, errors.New("model must not have leading or trailing whitespace")
+	}
+	if *sinceValue == "" {
+		return *model, nil, nil
+	}
+	since, err := time.Parse(time.RFC3339, *sinceValue)
+	if err != nil {
+		since, err = time.Parse("2006-01-02", *sinceValue)
+	}
+	if err != nil {
+		return "", nil, fmt.Errorf("invalid --since %q: use YYYY-MM-DD or RFC3339", *sinceValue)
+	}
+	return *model, &since, nil
+}
+
+func printTokenTotals(output io.Writer, input, cachedInput, cacheWrite int64,
+	cacheWritesUnreported int, outputTokens, reasoningOutput int64,
+) {
+	fmt.Fprintf(output, "Tokens: %d input (%d cached), %d cache writes, %d output (%d reasoning)\n",
+		input, cachedInput, cacheWrite, outputTokens, reasoningOutput)
+	if cacheWritesUnreported != 0 {
+		fmt.Fprintf(output, "Cache writes: unreported by %d attempts\n", cacheWritesUnreported)
+	}
+}
+
+func printCostTotals(output io.Writer, minimum, maximum int64, priced, unknown int) {
+	fmt.Fprintf(output, "Estimated cost: %s", formatCostRange(minimum, maximum))
+	if unknown != 0 {
+		fmt.Fprintf(output, " plus %d attempts with unknown cost", unknown)
+	}
+	fmt.Fprintf(output, " (%d priced attempts)\n", priced)
+}
+
+func printReviewGroups(output io.Writer, groups []ReviewStatsGroup) {
+	if len(groups) == 0 {
+		return
+	}
+	fmt.Fprintln(output, "By model and effort:")
+	for _, group := range groups {
+		name := group.Model
+		if group.ReasoningEffort != "" {
+			name += "/" + group.ReasoningEffort
+		}
+		cost := formatCostRange(group.MinimumCostMicrousd, group.MaximumCostMicrousd)
+		if group.UnknownCostAttempts != 0 {
+			cost += fmt.Sprintf(" + %d unknown", group.UnknownCostAttempts)
+		}
+		fmt.Fprintf(output, "  %s: %d attempts, %d input, %d output, %s\n",
+			name, group.Attempts, group.InputTokens, group.OutputTokens, cost)
+	}
+}
+
+func formatCostRange(minimum, maximum int64) string {
+	if minimum == maximum {
+		return fmt.Sprintf("$%.6f USD", float64(minimum)/1_000_000)
+	}
+	return fmt.Sprintf("$%.6f–$%.6f USD", float64(minimum)/1_000_000, float64(maximum)/1_000_000)
 }
 
 func runInit(ctx context.Context, args []string, environment cliEnvironment) error {
@@ -1210,6 +1336,8 @@ Usage:
   air reset [--force]
   air config <get|set|unset|list> ...
   air model <list|show|set-pricing|mark-pricing-unknown> ...
+  air stats [--model MODEL] [--since DATE]
+  air cost [--model MODEL] [--since DATE]
   air status
   air log
   air show <commit-ish> [--reviews | --review N]

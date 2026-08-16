@@ -341,6 +341,53 @@ func TestReviewAttemptsRetainHistoryAndCurrentReview(t *testing.T) {
 	}
 }
 
+func TestReviewStatsAggregateEveryAttemptAndPreserveUnknownCosts(t *testing.T) {
+	ctx := context.Background()
+	store, err := CreateStore(ctx, filepath.Join(t.TempDir(), "air.sqlite"), strings.Repeat("0", 40))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	firstTime := time.Date(2026, 8, 15, 10, 0, 0, 0, time.UTC)
+	known := cleanReview("Known-price review.")
+	known.Usage = &TokenUsage{InputTokens: 1_000_000, OutputTokens: 1_000_000}
+	metadata := testMetadata("h", "0")
+	if _, err := store.ApplyReview(ctx, metadata,
+		ReviewIdentity{Model: modelByName("gpt-5.6-luna"), ReasoningEffort: "low"}, known, firstTime); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.ApplyReview(ctx, metadata,
+		ReviewIdentity{Model: modelByName("gpt-5.6-luna"), ReasoningEffort: "xhigh"}, known, firstTime.Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	unknown := cleanReview("Unknown-price review.")
+	unknown.Usage = &TokenUsage{InputTokens: 7, OutputTokens: 3}
+	if _, err := store.ApplyReview(ctx, testMetadata("i", "h"),
+		ReviewIdentity{Model: modelByName("private-model")}, unknown, firstTime.Add(2*time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+
+	stats, err := store.ReviewStats(ctx, "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stats.Attempts != 3 || stats.Commits != 2 || stats.InputTokens != 2_000_007 ||
+		stats.OutputTokens != 2_000_003 || stats.PricedAttempts != 2 ||
+		stats.UnknownCostAttempts != 1 || stats.MinimumCostMicrousd == 0 ||
+		stats.MaximumCostMicrousd < stats.MinimumCostMicrousd || len(stats.Groups) != 3 {
+		t.Fatalf("review stats = %+v", stats)
+	}
+	since := firstTime.Add(90 * time.Minute)
+	filtered, err := store.ReviewStats(ctx, "private-model", &since)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if filtered.Attempts != 1 || filtered.Commits != 1 || filtered.UnknownCostAttempts != 1 ||
+		filtered.InputTokens != 7 {
+		t.Fatalf("filtered review stats = %+v", filtered)
+	}
+}
+
 func TestManualFindingDispositionAndNotes(t *testing.T) {
 	ctx := context.Background()
 	store, err := CreateStore(ctx, filepath.Join(t.TempDir(), "air.sqlite"), strings.Repeat("0", 40))

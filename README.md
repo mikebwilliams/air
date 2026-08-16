@@ -264,11 +264,20 @@ air show HEAD
 air show HEAD --reviews
 air show HEAD --review 1
 air finding 17
+air stats
+air cost --model gpt-5.6-luna --since 2026-08-01
 ```
 
 `air show` includes the model, reasoning effort, token usage, and estimated
 cost used for that commit. `--reviews` lists retained attempts, and `--review N`
 shows the findings and accounting recorded by one attempt.
+
+`air stats` aggregates token usage and API-equivalent estimated cost across
+every retained review attempt, including superseded rescans, and shows the
+current repository finding counts. `air cost` provides the accounting-focused
+view. Both accept an exact `--model` filter and a `--since` date or RFC3339
+timestamp. Unknown model prices and unreported cache-write token counts remain
+explicit instead of being silently treated as zero.
 
 Triage findings without losing their audit history:
 

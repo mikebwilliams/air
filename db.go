@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -1309,6 +1310,106 @@ func scanReviewAttempt(row rowScanner) (ReviewAttempt, error) {
 	}
 	attempt.ReviewedAt = parsed
 	return attempt, nil
+}
+
+func (s *Store) ReviewStats(ctx context.Context, modelFilter string, since *time.Time) (ReviewStats, error) {
+	sinceValue := ""
+	if since != nil {
+		sinceValue = formatTime(*since)
+	}
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT commit_sha, model, reasoning_effort, input_tokens, cached_input_tokens,
+		       cache_write_tokens, output_tokens, reasoning_output_tokens,
+		       estimated_cost_microusd, estimated_cost_max_microusd
+		FROM review_attempts
+		WHERE (? = '' OR model = ?) AND (? = '' OR reviewed_at >= ?)
+		ORDER BY id`, modelFilter, modelFilter, sinceValue, sinceValue)
+	if err != nil {
+		return ReviewStats{}, fmt.Errorf("read review statistics: %w", err)
+	}
+	defer rows.Close()
+	type groupKey struct {
+		model  string
+		effort string
+	}
+	groups := make(map[groupKey]*ReviewStatsGroup)
+	commits := make(map[string]struct{})
+	var stats ReviewStats
+	for rows.Next() {
+		var sha, model string
+		var effort sql.NullString
+		var input, cached, output, reasoning int64
+		var cacheWrite, minimumCost, maximumCost sql.NullInt64
+		if err := rows.Scan(&sha, &model, &effort, &input, &cached, &cacheWrite,
+			&output, &reasoning, &minimumCost, &maximumCost); err != nil {
+			return ReviewStats{}, fmt.Errorf("read review statistics: %w", err)
+		}
+		commits[sha] = struct{}{}
+		key := groupKey{model: model, effort: effort.String}
+		group := groups[key]
+		if group == nil {
+			group = &ReviewStatsGroup{Model: model, ReasoningEffort: effort.String}
+			groups[key] = group
+		}
+		stats.Attempts++
+		group.Attempts++
+		stats.InputTokens += input
+		group.InputTokens += input
+		stats.CachedInputTokens += cached
+		group.CachedInputTokens += cached
+		stats.OutputTokens += output
+		group.OutputTokens += output
+		stats.ReasoningOutputTokens += reasoning
+		group.ReasoningOutputTokens += reasoning
+		if cacheWrite.Valid {
+			stats.CacheWriteTokens += cacheWrite.Int64
+			group.CacheWriteTokens += cacheWrite.Int64
+		} else {
+			stats.CacheWritesUnreported++
+			group.CacheWritesUnreported++
+		}
+		if minimumCost.Valid && maximumCost.Valid {
+			stats.MinimumCostMicrousd += minimumCost.Int64
+			stats.MaximumCostMicrousd += maximumCost.Int64
+			stats.PricedAttempts++
+			group.MinimumCostMicrousd += minimumCost.Int64
+			group.MaximumCostMicrousd += maximumCost.Int64
+			group.PricedAttempts++
+		} else {
+			stats.UnknownCostAttempts++
+			group.UnknownCostAttempts++
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return ReviewStats{}, fmt.Errorf("read review statistics: %w", err)
+	}
+	stats.Commits = len(commits)
+	for _, group := range groups {
+		stats.Groups = append(stats.Groups, *group)
+	}
+	sort.Slice(stats.Groups, func(i, j int) bool {
+		if stats.Groups[i].Model == stats.Groups[j].Model {
+			return stats.Groups[i].ReasoningEffort < stats.Groups[j].ReasoningEffort
+		}
+		return stats.Groups[i].Model < stats.Groups[j].Model
+	})
+	return stats, nil
+}
+
+func (s *Store) FindingStats(ctx context.Context) (FindingStats, error) {
+	var stats FindingStats
+	if err := s.db.QueryRowContext(ctx, `
+		SELECT
+			COALESCE(SUM(CASE WHEN resolved_sha IS NULL AND dismissed_at IS NULL THEN 1 ELSE 0 END), 0),
+			COALESCE(SUM(CASE WHEN dismissed_at IS NOT NULL THEN 1 ELSE 0 END), 0),
+			COALESCE(SUM(CASE WHEN resolved_sha IS NOT NULL THEN 1 ELSE 0 END), 0)
+		FROM findings`).Scan(&stats.Open, &stats.Dismissed, &stats.Resolved); err != nil {
+		return FindingStats{}, fmt.Errorf("read finding statistics: %w", err)
+	}
+	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM commits WHERE status = 'skipped'`).Scan(&stats.Skipped); err != nil {
+		return FindingStats{}, fmt.Errorf("read skipped-commit statistics: %w", err)
+	}
+	return stats, nil
 }
 
 func validateReviewOutput(output ReviewOutput, allowedResolutions map[int64]struct{}) error {

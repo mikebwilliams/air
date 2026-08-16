@@ -95,6 +95,26 @@ func TestCLIInitScanAndQueries(t *testing.T) {
 	if !strings.Contains(stdout.String(), "Introduced:") || !strings.Contains(stdout.String(), "test finding") {
 		t.Fatalf("finding output:\n%s", stdout.String())
 	}
+
+	stdout.Reset()
+	if err := runCLI(ctx, []string{"stats"}, environment); err != nil {
+		t.Fatalf("stats: %v", err)
+	}
+	if !strings.Contains(stdout.String(), "Reviews: 1 attempts across 1 commits") ||
+		!strings.Contains(stdout.String(), "Tokens: 100 input (25 cached), 10 cache writes, 20 output (5 reasoning)") ||
+		!strings.Contains(stdout.String(), "Estimated cost: $0.000040 USD") ||
+		!strings.Contains(stdout.String(), "gpt-5.6-luna: 1 attempts") {
+		t.Fatalf("stats output:\n%s", stdout.String())
+	}
+
+	stdout.Reset()
+	if err := runCLI(ctx, []string{"cost", "--model", "gpt-5.6-luna", "--since", "2026-08-14"}, environment); err != nil {
+		t.Fatalf("cost: %v", err)
+	}
+	if !strings.Contains(stdout.String(), "Estimated cost: $0.000040 USD") ||
+		!strings.Contains(stdout.String(), "Reviews: 1 attempts across 1 commits") {
+		t.Fatalf("cost output:\n%s", stdout.String())
+	}
 }
 
 func TestCLIScanDefaultsToCodex(t *testing.T) {

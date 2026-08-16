@@ -60,6 +60,45 @@ type ReviewAttempt struct {
 	Current                  bool
 }
 
+type ReviewStats struct {
+	Attempts              int
+	Commits               int
+	InputTokens           int64
+	CachedInputTokens     int64
+	CacheWriteTokens      int64
+	CacheWritesUnreported int
+	OutputTokens          int64
+	ReasoningOutputTokens int64
+	MinimumCostMicrousd   int64
+	MaximumCostMicrousd   int64
+	PricedAttempts        int
+	UnknownCostAttempts   int
+	Groups                []ReviewStatsGroup
+}
+
+type ReviewStatsGroup struct {
+	Model                 string
+	ReasoningEffort       string
+	Attempts              int
+	InputTokens           int64
+	CachedInputTokens     int64
+	CacheWriteTokens      int64
+	CacheWritesUnreported int
+	OutputTokens          int64
+	ReasoningOutputTokens int64
+	MinimumCostMicrousd   int64
+	MaximumCostMicrousd   int64
+	PricedAttempts        int
+	UnknownCostAttempts   int
+}
+
+type FindingStats struct {
+	Open      int
+	Dismissed int
+	Resolved  int
+	Skipped   int
+}
+
 type ReviewIdentity struct {
 	Model           Model
 	ReasoningEffort string
