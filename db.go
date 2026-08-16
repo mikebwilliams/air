@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/url"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -144,6 +145,10 @@ PRAGMA user_version = 2;
 `
 
 func CreateStore(ctx context.Context, databasePath, startSHA string) (*Store, error) {
+	databaseDirectory := filepath.Dir(databasePath)
+	if err := os.Mkdir(databaseDirectory, 0o700); err != nil && !errors.Is(err, os.ErrExist) {
+		return nil, fmt.Errorf("create AIR state directory: %w", err)
+	}
 	file, err := os.OpenFile(databasePath, os.O_CREATE|os.O_EXCL|os.O_RDWR, 0o600)
 	if err != nil {
 		if errors.Is(err, os.ErrExist) {

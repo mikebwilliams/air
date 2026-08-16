@@ -5,9 +5,50 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
+
+func TestRepositoryStateLivesUnderPrivateAirDirectory(t *testing.T) {
+	repository, directory := newTestGitRepository(t)
+	base := testCommitFile(t, directory, "app.txt", []byte("base\n"), "base")
+	stateDirectory := filepath.Join(repository.CommonDir, "air")
+	if got, want := repository.DatabasePath(), filepath.Join(stateDirectory, "reviews.sqlite"); got != want {
+		t.Fatalf("database path = %q, want %q", got, want)
+	}
+	if got, want := repository.LockPath(), filepath.Join(stateDirectory, "scan.lock"); got != want {
+		t.Fatalf("lock path = %q, want %q", got, want)
+	}
+	store, err := CreateStore(context.Background(), repository.DatabasePath(), base)
+	if err != nil {
+		t.Fatalf("CreateStore: %v", err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatalf("close store: %v", err)
+	}
+	lock, err := acquireScanLock(repository.LockPath())
+	if err != nil {
+		t.Fatalf("acquireScanLock: %v", err)
+	}
+	defer lock.Close()
+
+	if runtime.GOOS != "windows" {
+		for name, expectedMode := range map[string]os.FileMode{
+			stateDirectory:            0o700,
+			repository.DatabasePath(): 0o600,
+			repository.LockPath():     0o600,
+		} {
+			info, err := os.Stat(name)
+			if err != nil {
+				t.Fatalf("stat %s: %v", name, err)
+			}
+			if mode := info.Mode().Perm(); mode != expectedMode {
+				t.Errorf("mode of %s = %04o, want %04o", name, mode, expectedMode)
+			}
+		}
+	}
+}
 
 func TestEnumerateDefaultAndExplicitRange(t *testing.T) {
 	repository, directory := newTestGitRepository(t)

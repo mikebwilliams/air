@@ -8,10 +8,12 @@ and findings in SQLite.
 The database lives at:
 
 ```text
-<git-common-dir>/ai-review.sqlite
+<git-common-dir>/air/reviews.sqlite
 ```
 
-It is shared by worktrees and does not modify tracked files.
+AIR's scan lock is stored beside it as `<git-common-dir>/air/scan.lock`. The
+state directory is private to the user, shared by worktrees, and does not
+modify tracked files.
 
 ## Requirements
 

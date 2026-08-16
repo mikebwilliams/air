@@ -108,10 +108,14 @@ git rev-parse --git-common-dir
 Default database path:
 
 ```text
-<git-common-dir>/ai-review.sqlite
+<git-common-dir>/air/reviews.sqlite
 ```
 
-This ensures multiple Git worktrees belonging to the same repository share review state.
+The scan lock lives at `<git-common-dir>/air/scan.lock`. AIR creates the state
+directory with mode `0700` and the database and lock with mode `0600`. This
+ensures multiple Git worktrees belonging to the same repository share review
+state without placing AIR artifacts at the top level of the Git common
+directory.
 
 The database must not modify or require files in the tracked working tree.
 
