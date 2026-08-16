@@ -100,7 +100,7 @@ always redacted in `config get` and `config list` output.
 | `effort` | `--effort` | `AIR_REASONING_EFFORT` | none |
 | `codex-bin` | `--codex-bin` | `AIR_CODEX_BIN` | `codex` |
 | `codex-profile` | `--codex-profile` | `AIR_CODEX_PROFILE` | none |
-| `codex-timeout` | `--codex-timeout` | `AIR_CODEX_TIMEOUT` | `10m` |
+| `codex-timeout` | `--codex-timeout` | `AIR_CODEX_TIMEOUT` | `20m` |
 | `base-url` | `--base-url` | `AIR_BASE_URL` | `https://api.openai.com/v1` |
 | `api-key-env` | `--api-key-env` | `AIR_API_KEY_ENV` | none |
 | `api-key` | `--api-key` | `AIR_API_KEY`, then `OPENAI_API_KEY` | none |
@@ -116,7 +116,7 @@ Additional optional configuration:
 ```bash
 air config set codex-bin /path/to/codex
 air config set codex-profile air-review
-air config set codex-timeout 10m
+air config set codex-timeout 20m
 ```
 
 The corresponding flags are `--model`, `--effort`, `--codex-bin`,
@@ -127,7 +127,7 @@ air scan --model your-codex-model --effort high
 ```
 
 AIR passes both values explicitly to Codex and records them on every reviewed
-commit. The timeout applies independently to each commit and defaults to ten
+commit. The timeout applies independently to each commit and defaults to twenty
 minutes. AIR does not read or copy Codex credentials.
 
 AIR records input, cached-input, cache-write, output, and reasoning-output token
@@ -372,6 +372,10 @@ check and a nonzero exit.
   based on their textual changes.
 - Binary-only, empty, and textual diffs larger than 256 KiB are recorded as
   skipped.
+- Comments, string-content changes, translations/localization resources, and
+  documentation remain in the review input but are explicitly out of scope.
+  For a mixed commit, the reviewer considers only executable behavior. For a
+  commit containing only excluded content, it returns a clean review.
 - A failed model call or invalid response is retained in `air failures` without
   marking the commit processed. It stops the scan unless `--continue-on-error`
   is set; default scanning or `air retry` can try it again.

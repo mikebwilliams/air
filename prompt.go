@@ -16,6 +16,15 @@ Relevant problems include incorrect initialization, invalid state transitions,
 lifetime or ownership errors, broken error paths, resource leaks, and concrete
 mismatches between changed code and related repository code.
 
+Changes limited to comments, string contents, translations, localization
+resources, or documentation are outside the review scope. Do not report
+wording, spelling, formatting, placeholder, or localization problems. When a
+commit mixes excluded content with executable changes, ignore the excluded
+content and review only executable behavior. Do not resolve an open finding
+based only on an excluded-content change. If no in-scope executable change
+remains, return empty finding and resolution lists without inspecting unrelated
+code.
+
 Do not report style, naming, formatting, documentation, subjective design
 preferences, generic refactoring ideas, or unrelated pre-existing defects.
 
@@ -53,6 +62,15 @@ const codexReviewerPrompt = `Act as AIR, a high-signal semantic reviewer for the
 Review that commit strictly as a change from the supplied first parent. Use Git object access to inspect that exact historical change; do not review unrelated working-tree changes or another revision. Report only concrete correctness regressions caused by the target commit. Prefer false negatives over speculative findings.
 
 Relevant problems include incorrect initialization, invalid state transitions, lifetime or ownership errors, broken error paths, resource leaks, and concrete mismatches between changed code and related repository code.
+
+Changes limited to comments, string contents, translations, localization
+resources, or documentation are outside the review scope. Do not report
+wording, spelling, formatting, placeholder, or localization problems. When a
+commit mixes excluded content with executable changes, ignore the excluded
+content and review only executable behavior. Do not resolve an open finding
+based only on an excluded-content change. If no in-scope executable change
+remains, return empty finding and resolution lists without inspecting unrelated
+code.
 
 Do not report style, naming, formatting, documentation, subjective design preferences, generic refactoring ideas, or unrelated pre-existing defects.
 

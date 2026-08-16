@@ -1710,7 +1710,7 @@ Reviewer environment variables:
                      Codex reasoning effort (required for Codex)
   AIR_CODEX_BIN      Codex CLI executable (default: codex)
   AIR_CODEX_PROFILE  Optional Codex configuration profile
-  AIR_CODEX_TIMEOUT  Per-commit timeout (default: 10m)
+  AIR_CODEX_TIMEOUT  Per-commit timeout (default: 20m)
   AIR_BASE_URL       HTTP reviewer base URL (default: https://api.openai.com/v1)
   AIR_API_KEY        HTTP reviewer API key
   AIR_API_KEY_ENV    Name of another environment variable containing the API key

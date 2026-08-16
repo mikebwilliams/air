@@ -6,7 +6,7 @@ import (
 )
 
 const (
-	promptVersion = "2"
+	promptVersion = "3"
 	masterRef     = "refs/heads/master"
 	maxDiffBytes  = 256 * 1024
 	maxToolBytes  = 64 * 1024

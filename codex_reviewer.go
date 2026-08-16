@@ -19,7 +19,7 @@ const (
 	maxCodexResultBytes     = 2 * 1024 * 1024
 	maxCodexTranscriptBytes = 8 * 1024 * 1024
 	maxCodexStderrBytes     = 64 * 1024
-	defaultCodexTimeout     = 10 * time.Minute
+	defaultCodexTimeout     = 20 * time.Minute
 )
 
 type commandContextFunc func(context.Context, string, ...string) *exec.Cmd

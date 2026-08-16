@@ -44,6 +44,11 @@ func TestSettingPrecedence(t *testing.T) {
 	if err != nil || resolved.Value != "codex" || resolved.Source != "built-in" {
 		t.Fatalf("built-in resolution = %+v, %v", resolved, err)
 	}
+	timeout, _ := settingByKey("codex-timeout")
+	resolved, err = resolveSettingValue(ctx, store, func(string) string { return "" }, timeout, "", false)
+	if err != nil || resolved.Value != "20m0s" || resolved.Source != "built-in" {
+		t.Fatalf("built-in timeout = %+v, %v", resolved, err)
+	}
 }
 
 func TestSettingValidationIdentifiesSource(t *testing.T) {

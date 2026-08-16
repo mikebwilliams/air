@@ -511,6 +511,20 @@ but they produce no findings or finding events.
 An empty commit is likewise recorded as skipped with `empty diff` as its
 reason.
 
+### 8.2 Excluded content
+
+Comments, string-content changes, translations, localization resources, and
+documentation are outside review scope. AIR passes the textual diff through
+unchanged, subject only to the binary and size transport limits above, and both
+reviewer backends enforce these exclusions semantically. AIR deliberately does
+not use path, extension, comment, or string heuristics that could hide relevant
+executable context.
+
+For a commit containing only excluded content, the reviewer returns no findings
+or resolutions and the commit is recorded as a successful clean review rather
+than skipped. In a mixed commit, the reviewer considers executable behavior
+only.
+
 ## 9. LLM Reviewer Responsibilities
 
 For every commit, the model should perform two tasks:
@@ -1049,7 +1063,7 @@ command-line flag > environment variable > database > built-in default
 | `effort` | `--effort` | `AIR_REASONING_EFFORT` | none |
 | `codex-bin` | `--codex-bin` | `AIR_CODEX_BIN` | `codex` |
 | `codex-profile` | `--codex-profile` | `AIR_CODEX_PROFILE` | none |
-| `codex-timeout` | `--codex-timeout` | `AIR_CODEX_TIMEOUT` | `10m` |
+| `codex-timeout` | `--codex-timeout` | `AIR_CODEX_TIMEOUT` | `20m` |
 | `base-url` | `--base-url` | `AIR_BASE_URL` | `https://api.openai.com/v1` |
 | `api-key-env` | `--api-key-env` | `AIR_API_KEY_ENV` | none |
 | `api-key` | `--api-key` | `AIR_API_KEY`, then `OPENAI_API_KEY` | none |
@@ -1107,6 +1121,13 @@ prompt_version = 3
 ```
 
 Changing reviewer instructions should increment this value.
+
+Prompt version 3 excludes comments, string-content changes, translations,
+localization resources, and documentation as a model review policy. AIR does
+not use path, extension, comment, or string heuristics to filter the textual
+diff before reviewer invocation. The reviewer must return no findings or
+resolutions for excluded-only changes and review only executable behavior in
+mixed commits.
 
 This allows later analysis of behavior differences between review generations.
 
