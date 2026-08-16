@@ -81,7 +81,7 @@ func TestScanRepositoryLifecycleSkipsAndResume(t *testing.T) {
 		Output: &output,
 		Now:    func() time.Time { now = now.Add(time.Second); return now },
 		NewReviewer: func() (Reviewer, ReviewIdentity, error) {
-			return reviewer, ReviewIdentity{Model: "fake-model", ReasoningEffort: "low"}, nil
+			return reviewer, ReviewIdentity{Model: modelByName("fake-model"), ReasoningEffort: "low"}, nil
 		},
 	})
 	if err != nil {
@@ -113,7 +113,7 @@ func TestScanRepositoryLifecycleSkipsAndResume(t *testing.T) {
 	if err := scanRepository(ctx, repository, store, scanOptions{
 		Output: &output,
 		NewReviewer: func() (Reviewer, ReviewIdentity, error) {
-			return reviewer, ReviewIdentity{Model: "fake-model", ReasoningEffort: "low"}, nil
+			return reviewer, ReviewIdentity{Model: modelByName("fake-model"), ReasoningEffort: "low"}, nil
 		},
 	}); err != nil {
 		t.Fatalf("second scan: %v", err)
@@ -148,7 +148,7 @@ func TestScanStopsAtFailureAndRetriesFailedCommit(t *testing.T) {
 	err = scanRepository(ctx, repository, store, scanOptions{
 		Output: &bytes.Buffer{},
 		NewReviewer: func() (Reviewer, ReviewIdentity, error) {
-			return reviewer, ReviewIdentity{Model: "fake-model", ReasoningEffort: "low"}, nil
+			return reviewer, ReviewIdentity{Model: modelByName("fake-model"), ReasoningEffort: "low"}, nil
 		},
 	})
 	if err == nil || !strings.Contains(err.Error(), "temporary model failure") {
@@ -170,7 +170,7 @@ func TestScanStopsAtFailureAndRetriesFailedCommit(t *testing.T) {
 	if err := scanRepository(ctx, repository, store, scanOptions{
 		Output: &bytes.Buffer{},
 		NewReviewer: func() (Reviewer, ReviewIdentity, error) {
-			return successReviewer, ReviewIdentity{Model: "fake-model", ReasoningEffort: "low"}, nil
+			return successReviewer, ReviewIdentity{Model: modelByName("fake-model"), ReasoningEffort: "low"}, nil
 		},
 	}); err != nil {
 		t.Fatalf("resume scan: %v", err)
@@ -197,7 +197,7 @@ func TestScanLimitProcessesOldestCommitsAndResumes(t *testing.T) {
 		return cleanReview("Reviewed " + shortSHA(input.Commit.SHA) + "."), nil
 	}}
 	newReviewer := func() (Reviewer, ReviewIdentity, error) {
-		return reviewer, ReviewIdentity{Model: "fake-model", ReasoningEffort: "low"}, nil
+		return reviewer, ReviewIdentity{Model: modelByName("fake-model"), ReasoningEffort: "low"}, nil
 	}
 	if err := scanRepository(ctx, repository, store, scanOptions{
 		Limit:       2,

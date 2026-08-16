@@ -141,7 +141,58 @@ Optional keys may later include:
 default_model
 ```
 
-### 5.2 `commits`
+### 5.2 `models`
+
+Every model used for a review has one configuration record. Known models store
+a complete, dated pricing snapshot; other model identifiers are stored with
+explicitly unknown pricing.
+
+```sql
+CREATE TABLE models (
+    name                                TEXT PRIMARY KEY,
+    pricing_status                      TEXT NOT NULL,
+    service_tier                        TEXT,
+    pricing_source                      TEXT,
+    pricing_as_of                       TEXT,
+    long_context_input_tokens           INTEGER,
+    short_input_nanousd_per_token       INTEGER,
+    short_cached_nanousd_per_token      INTEGER,
+    short_cache_write_nanousd_per_token INTEGER,
+    short_output_nanousd_per_token      INTEGER,
+    long_input_nanousd_per_token        INTEGER,
+    long_cached_nanousd_per_token       INTEGER,
+    long_cache_write_nanousd_per_token  INTEGER,
+    long_output_nanousd_per_token       INTEGER
+);
+```
+
+`pricing_status` is `known` or `unknown`. All pricing columns are populated for
+known pricing and null for unknown pricing. Rates are integer nanodollars per
+token, which exactly represents the published decimal USD-per-million-token
+rates without floating-point storage. The initial built-in configurations use
+the OpenAI Standard API prices retrieved from
+`https://developers.openai.com/api/docs/pricing` on 2026-08-15. They cover
+`gpt-5.6-sol`, its `gpt-5.6` alias, `gpt-5.6-terra`, and `gpt-5.6-luna`, with
+272,000 input tokens as the boundary above which long-context pricing applies.
+
+Prices in USD per million tokens:
+
+| Model | Context | Input | Cached input | Cache writes | Output |
+| --- | --- | ---: | ---: | ---: | ---: |
+| `gpt-5.6-sol` | short | 5.00 | 0.50 | 6.25 | 30.00 |
+| `gpt-5.6-sol` | long | 10.00 | 1.00 | 12.50 | 45.00 |
+| `gpt-5.6-terra` | short | 2.00 | 0.20 | 2.50 | 12.00 |
+| `gpt-5.6-terra` | long | 4.00 | 0.40 | 5.00 | 18.00 |
+| `gpt-5.6-luna` | short | 0.20 | 0.02 | 0.25 | 1.20 |
+| `gpt-5.6-luna` | long | 0.40 | 0.04 | 0.50 | 1.80 |
+
+The `gpt-5.6` alias uses the Sol rows.
+
+The model configuration is inserted or refreshed transactionally whenever a
+review using that model is recorded. Review rows retain their computed cost,
+so a later pricing update affects only later reviews.
+
+### 5.3 `commits`
 
 ```sql
 CREATE TABLE commits (
@@ -157,9 +208,15 @@ CREATE TABLE commits (
     raw_response    TEXT,
     input_tokens            INTEGER,
     cached_input_tokens     INTEGER,
+    cache_write_tokens      INTEGER,
     output_tokens           INTEGER,
     reasoning_output_tokens INTEGER,
-    estimated_cost_microusd INTEGER
+    estimated_cost_microusd INTEGER,
+    estimated_cost_max_microusd INTEGER,
+    cost_context            TEXT,
+    cost_complete           INTEGER,
+
+    FOREIGN KEY(model) REFERENCES models(name)
 );
 ```
 
@@ -182,12 +239,21 @@ Fields:
   cached input tokens; null for a skipped commit.
 - `cached_input_tokens`: cached subset of `input_tokens`; null for a skipped
   commit.
+- `cache_write_tokens`: subset of `input_tokens` newly written to the prompt
+  cache; null when the backend does not report it or for a skipped commit.
 - `output_tokens`: total output tokens reported by the reviewer, including
   reasoning output tokens; null for a skipped commit.
 - `reasoning_output_tokens`: reasoning subset of `output_tokens`; null for a
   skipped commit.
 - `estimated_cost_microusd`: optional estimated cost rounded to millionths of
-  a US dollar; null when pricing was not configured or for a skipped commit.
+  a US dollar; the lower bound when cache-write usage is unavailable, and null
+  when model pricing is unknown or for a skipped commit.
+- `estimated_cost_max_microusd`: upper estimate bound. It equals
+  `estimated_cost_microusd` when every billing category was reported.
+- `cost_context`: `short` or `long`, recording the price tier selected from the
+  review's reported input-token count.
+- `cost_complete`: true when cache-write usage was reported and the two cost
+  bounds are therefore equal.
 
 A skipped commit remains in the table so later scans do not retry it
 automatically.
@@ -196,7 +262,7 @@ Token usage and estimated cost are properties of the single stored review for
 a commit. If a future rescan replaces that review, it replaces these values as
 well; usage is not accumulated and no separate accounting history is kept.
 
-### 5.3 `findings`
+### 5.4 `findings`
 
 ```sql
 CREATE TABLE findings (
@@ -225,7 +291,7 @@ error
 
 Severity should describe likely impact, not model confidence.
 
-### 5.4 `finding_events`
+### 5.5 `finding_events`
 
 ```sql
 CREATE TABLE finding_events (
@@ -785,9 +851,6 @@ AIR_BASE_URL
 AIR_API_KEY
 AIR_API_KEY_ENV
 OPENAI_API_KEY
-AIR_INPUT_USD_PER_MILLION
-AIR_CACHED_INPUT_USD_PER_MILLION
-AIR_OUTPUT_USD_PER_MILLION
 ```
 
 `AIR_REVIEWER` defaults to `codex`. `AIR_CODEX_BIN` defaults to `codex`, and
@@ -809,9 +872,6 @@ The corresponding scan flags are:
 --codex-timeout
 --base-url
 --api-key-env
---input-usd-per-million
---cached-input-usd-per-million
---output-usd-per-million
 ```
 
 The `http` reviewer remains as an explicit fallback. For that backend,
@@ -821,27 +881,21 @@ The HTTP reviewer requires `AIR_MODEL` and an API key and uses an
 OpenAI-compatible `/chat/completions` endpoint with function tool calls.
 
 Both reviewers must report token usage. AIR records input, cached-input,
-output, and reasoning-output counts for every reviewed commit. HTTP usage is
-summed across all tool-call and repair rounds for that commit. A Codex JSONL
-review uses the usage in its final `turn.completed` event.
+cache-write, output, and reasoning-output counts for every reviewed commit.
+HTTP usage is summed across all tool-call and repair rounds for that commit. A
+Codex JSONL review uses the usage in its final `turn.completed` event.
 
 Neither backend reports an authoritative monetary charge. In particular,
 Codex authenticated through a ChatGPT account consumes plan limits or credits,
-not a distinct per-run USD bill. AIR therefore estimates USD cost only when
-all three rates are explicitly configured through:
+not a distinct per-run USD bill. AIR's model registry therefore produces an
+API-equivalent estimate from a dated Standard price snapshot.
 
-```text
-AIR_INPUT_USD_PER_MILLION
-AIR_CACHED_INPUT_USD_PER_MILLION
-AIR_OUTPUT_USD_PER_MILLION
-```
-
-The three corresponding flags are listed above. Cost is calculated as
-uncached input at the input rate, cached input at the cached-input rate, and
-all output at the output rate. Reasoning output is already included in output
-and is not added again. Prices are not hard-coded because they vary by model,
-account arrangement, and time. Without a complete set of rates, cost remains
-null and `air show` reports it as unavailable.
+Cached reads, cache writes, ordinary input, and output are separate billing
+categories. Reasoning output is already included in output and is not added
+again. When cache-write tokens are unavailable, AIR stores the range obtained
+by treating the uncategorized input as ordinary input at one bound and cache
+writes at the other. Unknown model pricing produces a null cost rather than a
+fabricated estimate. `air show` identifies ranges and unknown costs clearly.
 
 No model-specific behavior is embedded into the database schema. A Codex
 review records the exact supplied model identifier and reasoning effort. The

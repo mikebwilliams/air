@@ -76,7 +76,8 @@ type chatResponse struct {
 		PromptTokens     int64 `json:"prompt_tokens"`
 		CompletionTokens int64 `json:"completion_tokens"`
 		PromptDetails    struct {
-			CachedTokens int64 `json:"cached_tokens"`
+			CachedTokens     int64  `json:"cached_tokens"`
+			CacheWriteTokens *int64 `json:"cache_write_tokens"`
 		} `json:"prompt_tokens_details"`
 		CompletionDetails struct {
 			ReasoningTokens int64 `json:"reasoning_tokens"`
@@ -118,7 +119,8 @@ func (r *HTTPReviewer) Review(ctx context.Context, input ReviewInput) (ReviewRes
 		client = &http.Client{Timeout: 2 * time.Minute}
 	}
 	var rawResponses []json.RawMessage
-	var totalUsage TokenUsage
+	zeroCacheWrites := int64(0)
+	totalUsage := TokenUsage{CacheWriteTokens: &zeroCacheWrites}
 	repairAttempted := false
 
 	for round := 0; round < maxRounds; round++ {
@@ -133,6 +135,7 @@ func (r *HTTPReviewer) Review(ctx context.Context, input ReviewInput) (ReviewRes
 		responseUsage := TokenUsage{
 			InputTokens:           response.Usage.PromptTokens,
 			CachedInputTokens:     response.Usage.PromptDetails.CachedTokens,
+			CacheWriteTokens:      response.Usage.PromptDetails.CacheWriteTokens,
 			OutputTokens:          response.Usage.CompletionTokens,
 			ReasoningOutputTokens: response.Usage.CompletionDetails.ReasoningTokens,
 		}

@@ -110,7 +110,7 @@ func TestCodexHelperProcess(t *testing.T) {
 		os.Exit(96)
 	}
 	fmt.Fprintln(os.Stdout, `{"type":"thread.started","thread_id":"test"}`)
-	fmt.Fprintln(os.Stdout, `{"type":"turn.completed","usage":{"input_tokens":10,"cached_input_tokens":4,"output_tokens":5,"reasoning_output_tokens":2}}`)
+	fmt.Fprintln(os.Stdout, `{"type":"turn.completed","usage":{"input_tokens":10,"cached_input_tokens":4,"cache_write_tokens":2,"output_tokens":5,"reasoning_output_tokens":2}}`)
 	os.Exit(0)
 }
 
@@ -202,7 +202,9 @@ func TestCodexReviewerRunsReadOnlyEphemeralCommitReview(t *testing.T) {
 	if !strings.Contains(result.RawResponse, `"turn.completed"`) {
 		t.Fatalf("raw response = %q", result.RawResponse)
 	}
-	if result.Usage == nil || *result.Usage != (TokenUsage{10, 4, 5, 2}) {
+	if result.Usage == nil || result.Usage.InputTokens != 10 || result.Usage.CachedInputTokens != 4 ||
+		result.Usage.CacheWriteTokens == nil || *result.Usage.CacheWriteTokens != 2 ||
+		result.Usage.OutputTokens != 5 || result.Usage.ReasoningOutputTokens != 2 {
 		t.Fatalf("usage = %+v", result.Usage)
 	}
 	entries, err := os.ReadDir(temporaryRoot)
@@ -214,13 +216,14 @@ func TestCodexReviewerRunsReadOnlyEphemeralCommitReview(t *testing.T) {
 func TestParseCodexTokenUsageUsesLatestCompletedTurn(t *testing.T) {
 	usage, err := parseCodexTokenUsage([]byte(strings.Join([]string{
 		`{"type":"thread.started","thread_id":"test"}`,
-		`{"type":"turn.completed","usage":{"input_tokens":10,"cached_input_tokens":4,"output_tokens":5,"reasoning_output_tokens":2}}`,
-		`{"type":"turn.completed","usage":{"input_tokens":20,"cached_input_tokens":8,"output_tokens":7,"reasoning_output_tokens":3}}`,
+		`{"type":"turn.completed","usage":{"input_tokens":10,"cached_input_tokens":4,"cache_write_tokens":2,"output_tokens":5,"reasoning_output_tokens":2}}`,
+		`{"type":"turn.completed","usage":{"input_tokens":20,"cached_input_tokens":8,"cache_write_tokens":3,"output_tokens":7,"reasoning_output_tokens":3}}`,
 	}, "\n")))
 	if err != nil {
 		t.Fatalf("parseCodexTokenUsage: %v", err)
 	}
-	if usage != (TokenUsage{20, 8, 7, 3}) {
+	if usage.InputTokens != 20 || usage.CachedInputTokens != 8 || usage.CacheWriteTokens == nil ||
+		*usage.CacheWriteTokens != 3 || usage.OutputTokens != 7 || usage.ReasoningOutputTokens != 3 {
 		t.Fatalf("usage = %+v", usage)
 	}
 }

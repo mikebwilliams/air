@@ -82,23 +82,23 @@ AIR passes both values explicitly to Codex and records them on every reviewed
 commit. The timeout applies independently to each commit and defaults to ten
 minutes. AIR does not read or copy Codex credentials.
 
-AIR records input, cached-input, output, and reasoning-output token counts from
-each review. Codex does not report a monetary charge, and a ChatGPT-account run
-does not have an authoritative per-run USD cost. To also store a USD estimate,
-configure all three current per-million-token prices:
+AIR records input, cached-input, cache-write, output, and reasoning-output token
+counts from each review. Its model registry includes a dated snapshot of the
+Standard short- and long-context prices for `gpt-5.6-sol`, the `gpt-5.6` alias,
+`gpt-5.6-terra`, and `gpt-5.6-luna`. The selected model and its complete pricing
+configuration are stored in SQLite automatically; no pricing environment
+variables are required.
 
-```bash
-export AIR_INPUT_USD_PER_MILLION=1.25
-export AIR_CACHED_INPUT_USD_PER_MILLION=0.125
-export AIR_OUTPUT_USD_PER_MILLION=10
-```
+Requests above 272,000 input tokens use the stored long-context rates.
+Reasoning tokens are included in output tokens and are not charged twice. When
+the backend reports cache-write usage, AIR calculates one estimate. The Codex
+JSONL format may omit cache-write usage; in that case AIR stores a minimum and
+maximum estimate spanning ordinary-input and cache-write pricing. Models absent
+from AIR's registry remain usable and are stored with explicitly unknown
+pricing.
 
-The corresponding flags are `--input-usd-per-million`,
-`--cached-input-usd-per-million`, and `--output-usd-per-million`. These rates
-are deliberately supplied by the user rather than hard-coded, because model
-prices change. Cached tokens are removed from regular input before the two
-input rates are applied. Reasoning tokens are included in output tokens and are
-not charged twice. Without rates, the cost is stored as unknown.
+These are API-equivalent USD estimates. A Codex run authenticated through a
+ChatGPT account does not expose an authoritative per-run monetary charge.
 
 The original OpenAI-compatible HTTP reviewer remains available as an explicit
 fallback:

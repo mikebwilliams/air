@@ -44,7 +44,7 @@ func TestHTTPReviewerUsesReadOnlyToolAndParsesResult(t *testing.T) {
 		}
 		if callCount == 1 {
 			return JSONResponse(t, map[string]any{
-				"usage": chatUsage(100, 40, 15, 5),
+				"usage": chatUsage(100, 40, 10, 15, 5),
 				"choices": []any{map[string]any{
 					"message": map[string]any{
 						"role":    "assistant",
@@ -85,7 +85,7 @@ func TestHTTPReviewerUsesReadOnlyToolAndParsesResult(t *testing.T) {
 		}
 		content, _ := json.Marshal(final)
 		return JSONResponse(t, map[string]any{
-			"usage": chatUsage(80, 20, 10, 2),
+			"usage": chatUsage(80, 20, 5, 10, 2),
 			"choices": []any{map[string]any{
 				"message": map[string]any{
 					"role":    "assistant",
@@ -117,7 +117,9 @@ func TestHTTPReviewerUsesReadOnlyToolAndParsesResult(t *testing.T) {
 	if len(result.Output.NewFindings) != 1 || result.Output.NewFindings[0].Title != "state regression" {
 		t.Fatalf("unexpected output: %+v", result.Output)
 	}
-	if result.Usage == nil || *result.Usage != (TokenUsage{180, 60, 25, 7}) {
+	if result.Usage == nil || result.Usage.InputTokens != 180 || result.Usage.CachedInputTokens != 60 ||
+		result.Usage.CacheWriteTokens == nil || *result.Usage.CacheWriteTokens != 15 ||
+		result.Usage.OutputTokens != 25 || result.Usage.ReasoningOutputTokens != 7 {
 		t.Fatalf("usage = %+v", result.Usage)
 	}
 	var transcript []json.RawMessage
@@ -169,7 +171,7 @@ func TestHTTPReviewerRepairsInvalidFindingResolution(t *testing.T) {
 		content, _ := json.Marshal(responses[callCount])
 		callCount++
 		return JSONResponse(t, map[string]any{
-			"usage": chatUsage(50, 10, 8, 2),
+			"usage": chatUsage(50, 10, 4, 8, 2),
 			"choices": []any{map[string]any{
 				"message":       map[string]any{"role": "assistant", "content": string(content)},
 				"finish_reason": "stop",
@@ -235,12 +237,13 @@ func JSONResponse(t *testing.T, value any) *http.Response {
 	}
 }
 
-func chatUsage(prompt, cached, completion, reasoning int64) map[string]any {
+func chatUsage(prompt, cached, cacheWrites, completion, reasoning int64) map[string]any {
 	return map[string]any{
 		"prompt_tokens":     prompt,
 		"completion_tokens": completion,
 		"prompt_tokens_details": map[string]any{
-			"cached_tokens": cached,
+			"cached_tokens":      cached,
+			"cache_write_tokens": cacheWrites,
 		},
 		"completion_tokens_details": map[string]any{
 			"reasoning_tokens": reasoning,

@@ -164,10 +164,14 @@ func (r *CodexReviewer) Review(ctx context.Context, input ReviewInput) (ReviewRe
 
 func parseCodexTokenUsage(transcript []byte) (TokenUsage, error) {
 	type wireTokenUsage struct {
-		InputTokens           int64 `json:"input_tokens"`
-		CachedInputTokens     int64 `json:"cached_input_tokens"`
-		OutputTokens          int64 `json:"output_tokens"`
-		ReasoningOutputTokens int64 `json:"reasoning_output_tokens"`
+		InputTokens           int64  `json:"input_tokens"`
+		CachedInputTokens     int64  `json:"cached_input_tokens"`
+		CacheWriteTokens      *int64 `json:"cache_write_tokens"`
+		OutputTokens          int64  `json:"output_tokens"`
+		ReasoningOutputTokens int64  `json:"reasoning_output_tokens"`
+		InputTokenDetails     *struct {
+			CacheWriteTokens *int64 `json:"cache_write_tokens"`
+		} `json:"input_tokens_details"`
 	}
 	type wireEvent struct {
 		Type  string          `json:"type"`
@@ -195,8 +199,12 @@ func parseCodexTokenUsage(transcript []byte) (TokenUsage, error) {
 		candidate := TokenUsage{
 			InputTokens:           event.Usage.InputTokens,
 			CachedInputTokens:     event.Usage.CachedInputTokens,
+			CacheWriteTokens:      event.Usage.CacheWriteTokens,
 			OutputTokens:          event.Usage.OutputTokens,
 			ReasoningOutputTokens: event.Usage.ReasoningOutputTokens,
+		}
+		if candidate.CacheWriteTokens == nil && event.Usage.InputTokenDetails != nil {
+			candidate.CacheWriteTokens = event.Usage.InputTokenDetails.CacheWriteTokens
 		}
 		if err := validateTokenUsage(candidate); err != nil {
 			return TokenUsage{}, fmt.Errorf("invalid Codex token usage: %w", err)

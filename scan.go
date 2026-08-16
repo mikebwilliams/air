@@ -12,7 +12,6 @@ type reviewerFactory func() (Reviewer, ReviewIdentity, error)
 type scanOptions struct {
 	RevisionRange string
 	Limit         int
-	Pricing       *Pricing
 	Output        io.Writer
 	Now           func() time.Time
 	NewReviewer   reviewerFactory
@@ -132,13 +131,6 @@ func scanRepository(
 		}
 		if result.Usage == nil {
 			return fmt.Errorf("review commit %s: reviewer did not report token usage", shortSHA(sha))
-		}
-		if options.Pricing != nil {
-			cost, err := options.Pricing.EstimateMicrousd(*result.Usage)
-			if err != nil {
-				return fmt.Errorf("review commit %s: estimate cost: %w", shortSHA(sha), err)
-			}
-			result.EstimatedCostMicrousd = &cost
 		}
 		newIDs, err := store.ApplyReview(ctx, metadata, identity, result, now())
 		if err != nil {

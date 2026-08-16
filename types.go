@@ -21,24 +21,27 @@ type CommitMetadata struct {
 }
 
 type CommitRecord struct {
-	SHA                   string
-	ParentSHA             string
-	ProcessedAt           time.Time
-	Status                string
-	SkipReason            string
-	Model                 string
-	ReasoningEffort       string
-	PromptVersion         string
-	Summary               string
-	RawResponse           string
-	Usage                 *TokenUsage
-	EstimatedCostMicrousd *int64
-	NewCount              int
-	ResolvedCount         int
+	SHA                      string
+	ParentSHA                string
+	ProcessedAt              time.Time
+	Status                   string
+	SkipReason               string
+	Model                    string
+	ReasoningEffort          string
+	PromptVersion            string
+	Summary                  string
+	RawResponse              string
+	Usage                    *TokenUsage
+	EstimatedCostMicrousd    *int64
+	EstimatedCostMaxMicrousd *int64
+	CostContext              string
+	CostComplete             bool
+	NewCount                 int
+	ResolvedCount            int
 }
 
 type ReviewIdentity struct {
-	Model           string
+	Model           Model
 	ReasoningEffort string
 }
 
@@ -81,15 +84,15 @@ type ReviewInput struct {
 }
 
 type ReviewResult struct {
-	Output                ReviewOutput
-	RawResponse           string
-	Usage                 *TokenUsage
-	EstimatedCostMicrousd *int64
+	Output      ReviewOutput
+	RawResponse string
+	Usage       *TokenUsage
 }
 
 type TokenUsage struct {
 	InputTokens           int64
 	CachedInputTokens     int64
+	CacheWriteTokens      *int64
 	OutputTokens          int64
 	ReasoningOutputTokens int64
 }

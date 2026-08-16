@@ -2,52 +2,87 @@ package main
 
 import (
 	"errors"
-	"fmt"
 	"math"
-	"strconv"
 	"strings"
 )
 
-// Pricing contains estimated USD prices per million tokens. Reasoning tokens
-// are already included in output tokens and are not charged a second time.
-type Pricing struct {
-	InputUSDPerMillion       float64
-	CachedInputUSDPerMillion float64
-	OutputUSDPerMillion      float64
+const (
+	standardServiceTier      = "standard"
+	longContextInputTokens   = 272_000
+	openAIPricingSource      = "https://developers.openai.com/api/docs/pricing"
+	openAIPricingSnapshotDay = "2026-08-15"
+)
+
+// Model is the complete AIR configuration for a model identifier. A nil
+// Pricing value explicitly means that AIR does not know how to price it.
+type Model struct {
+	Name    string
+	Pricing *ModelPricing
 }
 
-func parsePricing(input, cachedInput, output string) (*Pricing, error) {
-	values := []string{
-		strings.TrimSpace(input),
-		strings.TrimSpace(cachedInput),
-		strings.TrimSpace(output),
-	}
-	provided := 0
-	for _, value := range values {
-		if value != "" {
-			provided++
-		}
-	}
-	if provided == 0 {
-		return nil, nil
-	}
-	if provided != len(values) {
-		return nil, errors.New("input, cached-input, and output token prices must all be configured")
-	}
+// ModelPricing stores an immutable pricing snapshot. Rates use nanodollars per
+// token so all published per-million-token decimal prices remain exact.
+type ModelPricing struct {
+	ServiceTier            string
+	Source                 string
+	AsOf                   string
+	LongContextInputTokens int64
+	ShortContext           TokenPrices
+	LongContext            TokenPrices
+}
 
-	parsed := make([]float64, len(values))
-	for index, value := range values {
-		price, err := strconv.ParseFloat(value, 64)
-		if err != nil || math.IsNaN(price) || math.IsInf(price, 0) || price < 0 {
-			return nil, fmt.Errorf("token prices must be non-negative decimal numbers")
-		}
-		parsed[index] = price
+type TokenPrices struct {
+	InputNanousdPerToken       int64
+	CachedInputNanousdPerToken int64
+	CacheWriteNanousdPerToken  int64
+	OutputNanousdPerToken      int64
+}
+
+type CostEstimate struct {
+	MinimumMicrousd int64
+	MaximumMicrousd int64
+	Context         string
+	Complete        bool
+}
+
+var builtinModels = map[string]Model{
+	"gpt-5.6-sol":   pricedModel("gpt-5.6-sol", tokenPrices(5, 0.5, 6.25, 30), tokenPrices(10, 1, 12.5, 45)),
+	"gpt-5.6":       pricedModel("gpt-5.6", tokenPrices(5, 0.5, 6.25, 30), tokenPrices(10, 1, 12.5, 45)),
+	"gpt-5.6-terra": pricedModel("gpt-5.6-terra", tokenPrices(2, 0.2, 2.5, 12), tokenPrices(4, 0.4, 5, 18)),
+	"gpt-5.6-luna":  pricedModel("gpt-5.6-luna", tokenPrices(0.2, 0.02, 0.25, 1.2), tokenPrices(0.4, 0.04, 0.5, 1.8)),
+}
+
+func pricedModel(name string, shortContext, longContext TokenPrices) Model {
+	return Model{
+		Name: name,
+		Pricing: &ModelPricing{
+			ServiceTier:            standardServiceTier,
+			Source:                 openAIPricingSource,
+			AsOf:                   openAIPricingSnapshotDay,
+			LongContextInputTokens: longContextInputTokens,
+			ShortContext:           shortContext,
+			LongContext:            longContext,
+		},
 	}
-	return &Pricing{
-		InputUSDPerMillion:       parsed[0],
-		CachedInputUSDPerMillion: parsed[1],
-		OutputUSDPerMillion:      parsed[2],
-	}, nil
+}
+
+func tokenPrices(input, cachedInput, cacheWrite, output float64) TokenPrices {
+	return TokenPrices{
+		InputNanousdPerToken:       int64(math.Round(input * 1_000)),
+		CachedInputNanousdPerToken: int64(math.Round(cachedInput * 1_000)),
+		CacheWriteNanousdPerToken:  int64(math.Round(cacheWrite * 1_000)),
+		OutputNanousdPerToken:      int64(math.Round(output * 1_000)),
+	}
+}
+
+func modelByName(name string) Model {
+	name = strings.TrimSpace(name)
+	if model, ok := builtinModels[name]; ok {
+		pricing := *model.Pricing
+		model.Pricing = &pricing
+		return model
+	}
+	return Model{Name: name}
 }
 
 func validateTokenUsage(usage TokenUsage) error {
@@ -55,8 +90,15 @@ func validateTokenUsage(usage TokenUsage) error {
 		usage.OutputTokens < 0 || usage.ReasoningOutputTokens < 0 {
 		return errors.New("token counts must not be negative")
 	}
+	if usage.CacheWriteTokens != nil && *usage.CacheWriteTokens < 0 {
+		return errors.New("cache-write token count must not be negative")
+	}
 	if usage.CachedInputTokens > usage.InputTokens {
 		return errors.New("cached input tokens exceed input tokens")
+	}
+	if usage.CacheWriteTokens != nil &&
+		*usage.CacheWriteTokens > usage.InputTokens-usage.CachedInputTokens {
+		return errors.New("cached input and cache-write tokens exceed input tokens")
 	}
 	if usage.ReasoningOutputTokens > usage.OutputTokens {
 		return errors.New("reasoning output tokens exceed output tokens")
@@ -64,31 +106,107 @@ func validateTokenUsage(usage TokenUsage) error {
 	return nil
 }
 
-// EstimateMicrousd returns an estimate rounded to the nearest millionth of a
-// US dollar. Prices are supplied per million tokens, so token*price is already
-// denominated in microdollars.
-func (pricing Pricing) EstimateMicrousd(usage TokenUsage) (int64, error) {
+func (model Model) EstimateCost(usage TokenUsage) (*CostEstimate, error) {
 	if err := validateTokenUsage(usage); err != nil {
-		return 0, err
+		return nil, err
 	}
-	rates := []float64{
-		pricing.InputUSDPerMillion,
-		pricing.CachedInputUSDPerMillion,
-		pricing.OutputUSDPerMillion,
+	if model.Pricing == nil {
+		return nil, nil
 	}
-	for _, rate := range rates {
-		if math.IsNaN(rate) || math.IsInf(rate, 0) || rate < 0 {
-			return 0, errors.New("token prices must be non-negative finite numbers")
+	pricing := model.Pricing
+	prices := pricing.ShortContext
+	contextClass := "short"
+	if usage.InputTokens > pricing.LongContextInputTokens {
+		prices = pricing.LongContext
+		contextClass = "long"
+	}
+
+	fixed, err := costNanousd(usage.CachedInputTokens, prices.CachedInputNanousdPerToken)
+	if err != nil {
+		return nil, err
+	}
+	outputCost, err := costNanousd(usage.OutputTokens, prices.OutputNanousdPerToken)
+	if err != nil {
+		return nil, err
+	}
+	fixed, err = addNanousd(fixed, outputCost)
+	if err != nil {
+		return nil, err
+	}
+
+	if usage.CacheWriteTokens != nil {
+		ordinaryInput := usage.InputTokens - usage.CachedInputTokens - *usage.CacheWriteTokens
+		ordinaryCost, err := costNanousd(ordinaryInput, prices.InputNanousdPerToken)
+		if err != nil {
+			return nil, err
 		}
+		writeCost, err := costNanousd(*usage.CacheWriteTokens, prices.CacheWriteNanousdPerToken)
+		if err != nil {
+			return nil, err
+		}
+		total, err := addNanousd(fixed, ordinaryCost, writeCost)
+		if err != nil {
+			return nil, err
+		}
+		cost := roundNanousdToMicrousd(total)
+		return &CostEstimate{
+			MinimumMicrousd: cost,
+			MaximumMicrousd: cost,
+			Context:         contextClass,
+			Complete:        true,
+		}, nil
 	}
-	uncachedInput := usage.InputTokens - usage.CachedInputTokens
-	estimate := float64(uncachedInput)*pricing.InputUSDPerMillion +
-		float64(usage.CachedInputTokens)*pricing.CachedInputUSDPerMillion +
-		float64(usage.OutputTokens)*pricing.OutputUSDPerMillion
-	if estimate > math.MaxInt64 {
+
+	uncategorizedInput := usage.InputTokens - usage.CachedInputTokens
+	minimumRate := min(prices.InputNanousdPerToken, prices.CacheWriteNanousdPerToken)
+	maximumRate := max(prices.InputNanousdPerToken, prices.CacheWriteNanousdPerToken)
+	minimumInput, err := costNanousd(uncategorizedInput, minimumRate)
+	if err != nil {
+		return nil, err
+	}
+	maximumInput, err := costNanousd(uncategorizedInput, maximumRate)
+	if err != nil {
+		return nil, err
+	}
+	minimumTotal, err := addNanousd(fixed, minimumInput)
+	if err != nil {
+		return nil, err
+	}
+	maximumTotal, err := addNanousd(fixed, maximumInput)
+	if err != nil {
+		return nil, err
+	}
+	return &CostEstimate{
+		MinimumMicrousd: roundNanousdToMicrousd(minimumTotal),
+		MaximumMicrousd: roundNanousdToMicrousd(maximumTotal),
+		Context:         contextClass,
+		Complete:        false,
+	}, nil
+}
+
+func costNanousd(tokens, rate int64) (int64, error) {
+	if tokens < 0 || rate < 0 {
+		return 0, errors.New("tokens and prices must not be negative")
+	}
+	if rate != 0 && tokens > math.MaxInt64/rate {
 		return 0, errors.New("estimated review cost exceeds storage range")
 	}
-	return int64(math.Round(estimate)), nil
+	return tokens * rate, nil
+}
+
+func addNanousd(values ...int64) (int64, error) {
+	var total int64
+	for _, value := range values {
+		if value > math.MaxInt64-total {
+			return 0, errors.New("estimated review cost exceeds storage range")
+		}
+		total += value
+	}
+	return total, nil
+}
+
+func roundNanousdToMicrousd(value int64) int64 {
+	return value/1_000 + (value%1_000)/500
 }
 
 func totalTokens(usage TokenUsage) int64 {
@@ -96,6 +214,9 @@ func totalTokens(usage TokenUsage) int64 {
 }
 
 func addTokenUsage(total, additional TokenUsage) (TokenUsage, error) {
+	if err := validateTokenUsage(total); err != nil {
+		return TokenUsage{}, err
+	}
 	if err := validateTokenUsage(additional); err != nil {
 		return TokenUsage{}, err
 	}
@@ -118,6 +239,13 @@ func addTokenUsage(total, additional TokenUsage) (TokenUsage, error) {
 	}
 	if result.ReasoningOutputTokens, err = add(total.ReasoningOutputTokens, additional.ReasoningOutputTokens); err != nil {
 		return TokenUsage{}, err
+	}
+	if total.CacheWriteTokens != nil && additional.CacheWriteTokens != nil {
+		cacheWrites, err := add(*total.CacheWriteTokens, *additional.CacheWriteTokens)
+		if err != nil {
+			return TokenUsage{}, err
+		}
+		result.CacheWriteTokens = &cacheWrites
 	}
 	return result, nil
 }
