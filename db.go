@@ -20,7 +20,7 @@ type Store struct {
 	db *sql.DB
 }
 
-const schemaVersion = 3
+const schemaVersion = 4
 
 const schemaSQL = `
 CREATE TABLE config (
@@ -184,11 +184,23 @@ CREATE TABLE finding_events (
     FOREIGN KEY(sha) REFERENCES commits(sha) ON DELETE CASCADE
 );
 
+CREATE TABLE scan_failures (
+	sha              TEXT PRIMARY KEY,
+	parent_sha       TEXT,
+	failed_at        TEXT NOT NULL,
+	attempt_count    INTEGER NOT NULL CHECK(attempt_count > 0),
+	error            TEXT NOT NULL,
+	model            TEXT,
+	reasoning_effort TEXT,
+	force            INTEGER NOT NULL CHECK(force IN (0, 1))
+);
+
 CREATE INDEX findings_open_idx ON findings(resolved_sha);
 CREATE INDEX finding_events_finding_idx ON finding_events(finding_id, id);
 CREATE INDEX review_attempts_commit_idx ON review_attempts(commit_sha, id);
 CREATE INDEX finding_events_review_idx ON finding_events(review_id, id);
-PRAGMA user_version = 3;
+CREATE INDEX scan_failures_failed_at_idx ON scan_failures(failed_at, sha);
+PRAGMA user_version = 4;
 `
 
 func CreateStore(ctx context.Context, databasePath, startSHA string) (*Store, error) {
@@ -380,6 +392,114 @@ func (s *Store) CommitSHAs(ctx context.Context) ([]string, error) {
 		return nil, fmt.Errorf("list stored commits: %w", err)
 	}
 	return result, nil
+}
+
+func (s *Store) ScanFailureSHAs(ctx context.Context) ([]string, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT sha FROM scan_failures ORDER BY sha`)
+	if err != nil {
+		return nil, fmt.Errorf("list failed commits: %w", err)
+	}
+	defer rows.Close()
+	result := make([]string, 0)
+	for rows.Next() {
+		var sha string
+		if err := rows.Scan(&sha); err != nil {
+			return nil, fmt.Errorf("list failed commits: %w", err)
+		}
+		result = append(result, sha)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("list failed commits: %w", err)
+	}
+	return result, nil
+}
+
+func (s *Store) ScanFailures(ctx context.Context) ([]ScanFailure, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT sha, parent_sha, failed_at, attempt_count, error, model, reasoning_effort, force
+		FROM scan_failures ORDER BY failed_at, sha`)
+	if err != nil {
+		return nil, fmt.Errorf("list scan failures: %w", err)
+	}
+	defer rows.Close()
+	failures := make([]ScanFailure, 0)
+	for rows.Next() {
+		var failure ScanFailure
+		var parent, model, effort sql.NullString
+		var failedAt string
+		if err := rows.Scan(&failure.SHA, &parent, &failedAt, &failure.AttemptCount,
+			&failure.Error, &model, &effort, &failure.Force); err != nil {
+			return nil, fmt.Errorf("list scan failures: %w", err)
+		}
+		failure.ParentSHA = parent.String
+		failure.Model = model.String
+		failure.ReasoningEffort = effort.String
+		parsed, err := time.Parse(time.RFC3339Nano, failedAt)
+		if err != nil {
+			return nil, fmt.Errorf("parse scan failure timestamp: %w", err)
+		}
+		failure.FailedAt = parsed
+		failures = append(failures, failure)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("list scan failures: %w", err)
+	}
+	return failures, nil
+}
+
+func (s *Store) RecordScanFailure(ctx context.Context, sha, parentSHA string,
+	identity ReviewIdentity, force bool, failure error, now time.Time,
+) error {
+	if strings.TrimSpace(sha) == "" {
+		return errors.New("failed commit SHA must not be empty")
+	}
+	if failure == nil || strings.TrimSpace(failure.Error()) == "" {
+		return errors.New("scan failure must not be empty")
+	}
+	_, err := s.db.ExecContext(ctx, `
+		INSERT INTO scan_failures(
+			sha, parent_sha, failed_at, attempt_count, error, model, reasoning_effort, force
+		) VALUES(?, NULLIF(?, ''), ?, 1, ?, NULLIF(?, ''), NULLIF(?, ''), ?)
+		ON CONFLICT(sha) DO UPDATE SET
+			parent_sha = excluded.parent_sha,
+			failed_at = excluded.failed_at,
+			attempt_count = scan_failures.attempt_count + 1,
+			error = excluded.error,
+			model = excluded.model,
+			reasoning_effort = excluded.reasoning_effort,
+			force = excluded.force`,
+		sha, parentSHA, formatTime(now), failure.Error(), identity.Model.Name, identity.ReasoningEffort, force)
+	if err != nil {
+		return fmt.Errorf("record scan failure for %s: %w", shortSHA(sha), err)
+	}
+	return nil
+}
+
+func (s *Store) DeleteScanFailures(ctx context.Context, shas []string) (int, error) {
+	if len(shas) == 0 {
+		return 0, nil
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, fmt.Errorf("delete scan failures: %w", err)
+	}
+	defer tx.Rollback()
+	deleted := 0
+	for _, sha := range shas {
+		result, err := tx.ExecContext(ctx, `DELETE FROM scan_failures WHERE sha = ?`, sha)
+		if err != nil {
+			return 0, fmt.Errorf("delete scan failure %s: %w", shortSHA(sha), err)
+		}
+		count, err := result.RowsAffected()
+		if err != nil {
+			return 0, fmt.Errorf("count deleted scan failure %s: %w", shortSHA(sha), err)
+		}
+		deleted += int(count)
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, fmt.Errorf("delete scan failures: %w", err)
+	}
+	return deleted, nil
 }
 
 func (s *Store) DeleteCommits(ctx context.Context, shas []string) (int, error) {
@@ -695,6 +815,9 @@ func (s *Store) InsertSkipped(ctx context.Context, metadata CommitMetadata, reas
 		metadata.SHA, metadata.ParentSHA, formatTime(now), reason)
 	if err != nil {
 		return fmt.Errorf("record skipped commit %s: %w", shortSHA(metadata.SHA), err)
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM scan_failures WHERE sha = ?`, metadata.SHA); err != nil {
+		return fmt.Errorf("clear scan failure for %s: %w", shortSHA(metadata.SHA), err)
 	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("record skipped commit %s: %w", shortSHA(metadata.SHA), err)
@@ -1085,6 +1208,9 @@ func (s *Store) ApplyReview(
 		UPDATE review_attempts SET new_count = ?, resolved_count = ? WHERE id = ?`,
 		len(newIDs), len(result.Output.ResolvedFindings), attemptID); err != nil {
 		return nil, fmt.Errorf("record review attempt counts: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM scan_failures WHERE sha = ?`, metadata.SHA); err != nil {
+		return nil, fmt.Errorf("clear scan failure for %s: %w", shortSHA(metadata.SHA), err)
 	}
 
 	if err := tx.Commit(); err != nil {

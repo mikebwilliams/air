@@ -199,6 +199,24 @@ Review every unprocessed commit between the baseline and local `master`:
 air scan
 ```
 
+Reviewer and validation failures are retained without marking the commit as
+processed. By default the scan stops at the first failure. To finish the rest
+of a batch while still returning a nonzero result at the end:
+
+```bash
+air scan --continue-on-error
+air failures
+air retry --continue-on-error
+```
+
+`air failures --json` exposes the same queue to automation. Each record keeps
+the latest error, timestamp, model/effort, whether it was a rescan, and the
+number of failed attempts. `air retry` processes live failed commits oldest
+first using current reviewer configuration and accepts the normal reviewer,
+model, effort, timeout, and limit overrides. A successful review or intentional
+skip atomically removes its failure record. `air clean` removes failure records
+whose commits no longer exist on master.
+
 Preview the same work without creating a reviewer or changing the database:
 
 ```bash
@@ -311,8 +329,10 @@ Run `air help` for the concise command reference.
   based on their textual changes.
 - Binary-only, empty, and textual diffs larger than 256 KiB are recorded as
   skipped.
-- A failed model call, invalid response, or database transaction stops the
-  scan. The failed commit is retried on the next invocation.
+- A failed model call or invalid response is retained in `air failures` without
+  marking the commit processed. It stops the scan unless `--continue-on-error`
+  is set; default scanning or `air retry` can try it again.
+- A database transaction failure always stops the scan.
 - Disjoint scans do not trigger historical lifecycle reconciliation. Scan
   chronologically when accurate finding resolution matters.
 

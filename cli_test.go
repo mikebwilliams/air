@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"os"
 	"strconv"
@@ -620,6 +621,95 @@ func TestCLICleanPrunesCommitsOutsideMaster(t *testing.T) {
 	}
 	if open, err := store.OpenFindings(ctx); err != nil || len(open) != 0 {
 		t.Fatalf("stale findings survived clean: %+v, %v", open, err)
+	}
+}
+
+func TestCLIFailuresAndRetryIncludingFailedRescan(t *testing.T) {
+	ctx := context.Background()
+	repository, directory := newTestGitRepository(t)
+	base := testCommitFile(t, directory, "app.txt", []byte("base\n"), "base")
+	head := testCommitFile(t, directory, "app.txt", []byte("changed\n"), "change")
+	command, _ := newCodexTestCommand(t, ReviewOutput{
+		NewFindings:      []NewFinding{},
+		ResolvedFindings: []ResolvedFinding{},
+		Summary:          "Successful retry.",
+	}, "")
+	now := time.Date(2026, 8, 16, 17, 0, 0, 0, time.UTC)
+	var stdout bytes.Buffer
+	environment := cliEnvironment{
+		Cwd: directory, Stdout: &stdout, Stderr: &bytes.Buffer{},
+		Getenv: func(string) string { return "" }, CodexCommand: command,
+		Now: func() time.Time { now = now.Add(time.Minute); return now },
+	}
+	if err := runCLI(ctx, []string{"init", base}, environment); err != nil {
+		t.Fatal(err)
+	}
+	store, err := OpenStore(ctx, repository.DatabasePath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	identity := ReviewIdentity{Model: modelByName("retry-model"), ReasoningEffort: "low"}
+	if err := store.RecordScanFailure(ctx, head, base, identity, false,
+		errors.New("temporary failure"), now); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	stdout.Reset()
+	if err := runCLI(ctx, []string{"failures"}, environment); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(stdout.String(), "1 failed commits") ||
+		!strings.Contains(stdout.String(), "retry-model/low") ||
+		!strings.Contains(stdout.String(), "temporary failure") {
+		t.Fatalf("failures output:\n%s", stdout.String())
+	}
+	stdout.Reset()
+	if err := runCLI(ctx, []string{"failures", "--json"}, environment); err != nil {
+		t.Fatal(err)
+	}
+	var failureJSON struct {
+		Failures []ScanFailure `json:"failures"`
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &failureJSON); err != nil ||
+		len(failureJSON.Failures) != 1 || failureJSON.Failures[0].SHA != head {
+		t.Fatalf("failure JSON = %+v, %v; output=%s", failureJSON, err, stdout.String())
+	}
+	stdout.Reset()
+	if err := runCLI(ctx, []string{"retry", "--model", "retry-model", "--effort", "low"}, environment); err != nil {
+		t.Fatalf("retry: %v", err)
+	}
+	store, err = OpenStore(ctx, repository.DatabasePath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	attempts, err := store.ReviewAttempts(ctx, head)
+	if err != nil || len(attempts) != 1 {
+		t.Fatalf("retry attempts = %+v, %v", attempts, err)
+	}
+	if err := store.RecordScanFailure(ctx, head, base, identity, true,
+		errors.New("failed high-effort rescan"), now); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	stdout.Reset()
+	if err := runCLI(ctx, []string{"retry", "--model", "retry-model", "--effort", "low"}, environment); err != nil {
+		t.Fatalf("rescan retry: %v", err)
+	}
+	store, err = OpenStore(ctx, repository.DatabasePath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	attempts, err = store.ReviewAttempts(ctx, head)
+	if err != nil || len(attempts) != 2 {
+		t.Fatalf("rescan retry attempts = %+v, %v", attempts, err)
+	}
+	if failures, err := store.ScanFailures(ctx); err != nil || len(failures) != 0 {
+		t.Fatalf("successful retries left failures = %+v, %v", failures, err)
 	}
 }
 

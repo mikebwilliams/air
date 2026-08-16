@@ -160,6 +160,11 @@ func TestScanStopsAtFailureAndRetriesFailedCommit(t *testing.T) {
 	if _, err := store.Commit(ctx, second); err == nil {
 		t.Fatal("failed commit was recorded")
 	}
+	failures, err := store.ScanFailures(ctx)
+	if err != nil || len(failures) != 1 || failures[0].SHA != second ||
+		failures[0].AttemptCount != 1 || failures[0].Model != "fake-model" {
+		t.Fatalf("stored failure = %+v, %v", failures, err)
+	}
 
 	successReviewer := &fakeReviewer{review: func(input ReviewInput) (ReviewResult, error) {
 		if input.Commit.SHA != second {
@@ -177,6 +182,55 @@ func TestScanStopsAtFailureAndRetriesFailedCommit(t *testing.T) {
 	}
 	if len(successReviewer.calls) != 1 {
 		t.Fatalf("resume calls = %d, want 1", len(successReviewer.calls))
+	}
+	if failures, err := store.ScanFailures(ctx); err != nil || len(failures) != 0 {
+		t.Fatalf("failure survived successful retry = %+v, %v", failures, err)
+	}
+}
+
+func TestScanContinueOnErrorProcessesLaterCommits(t *testing.T) {
+	ctx := context.Background()
+	repository, directory := newTestGitRepository(t)
+	base := testCommitFile(t, directory, "app.txt", []byte("base\n"), "base")
+	first := testCommitFile(t, directory, "app.txt", []byte("first\n"), "first")
+	second := testCommitFile(t, directory, "app.txt", []byte("second\n"), "second")
+	third := testCommitFile(t, directory, "app.txt", []byte("third\n"), "third")
+	store, err := CreateStore(ctx, repository.DatabasePath(), base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	reviewer := &fakeReviewer{review: func(input ReviewInput) (ReviewResult, error) {
+		if input.Commit.SHA == first || input.Commit.SHA == third {
+			return ReviewResult{}, errors.New("transient backend failure")
+		}
+		return cleanReview("Reviewed middle commit."), nil
+	}}
+	var output bytes.Buffer
+	err = scanRepository(ctx, repository, store, scanOptions{
+		ContinueOnError: true,
+		Output:          &output,
+		NewReviewer: func() (Reviewer, ReviewIdentity, error) {
+			return reviewer, ReviewIdentity{Model: modelByName("fake-model"), ReasoningEffort: "high"}, nil
+		},
+	})
+	if err == nil || !strings.Contains(err.Error(), "2 commits failed") {
+		t.Fatalf("continued scan error = %v", err)
+	}
+	if _, err := store.Commit(ctx, second); err != nil {
+		t.Fatalf("middle commit was not retained: %v", err)
+	}
+	if _, err := store.Commit(ctx, first); err == nil {
+		t.Fatal("first failed commit was recorded as processed")
+	}
+	failures, err := store.ScanFailures(ctx)
+	if err != nil || len(failures) != 2 || failures[0].ReasoningEffort != "high" {
+		t.Fatalf("continued failures = %+v, %v", failures, err)
+	}
+	if !strings.Contains(output.String(), shortSHA(first)+"  failed:") ||
+		!strings.Contains(output.String(), shortSHA(second)+"  0 new, 0 resolved") ||
+		!strings.Contains(output.String(), shortSHA(third)+"  failed:") {
+		t.Fatalf("continued scan output:\n%s", output.String())
 	}
 }
 

@@ -359,6 +359,29 @@ The event table exists primarily for auditability.
 
 Normal commits should not generate `still_open` events.
 
+### 5.7 `scan_failures`
+
+```sql
+CREATE TABLE scan_failures (
+    sha              TEXT PRIMARY KEY,
+    parent_sha       TEXT,
+    failed_at        TEXT NOT NULL,
+    attempt_count    INTEGER NOT NULL,
+    error            TEXT NOT NULL,
+    model            TEXT,
+    reasoning_effort TEXT,
+    force            INTEGER NOT NULL
+);
+```
+
+A reviewer invocation, malformed structured response, missing token usage, or
+Git inspection failure is recorded here without adding the commit to
+`commits`. Repeated failures upsert the latest details and increment
+`attempt_count`. `force` distinguishes a failed rescan from an ordinary scan so
+retrying it preserves the user's request for another review attempt. Recording
+a successful review or intentional skip deletes the failure in the same SQLite
+transaction.
+
 Every SQLite connection must enable foreign-key enforcement:
 
 ```sql
@@ -443,6 +466,12 @@ air scan --limit N
 
 The default is `--limit 0`, meaning unlimited. Commits recorded as skipped
 count toward the limit because they are processed for resumability.
+
+Failed commits remain unprocessed and are naturally retried by a later default
+scan. `air retry` selects the explicit failure queue instead, filters it against
+the current first-parent history of master, and processes live failures oldest
+first. Current reviewer configuration and command-line overrides are used for
+the retry; the failed attempt's model and effort remain diagnostic metadata.
 
 ## 8. Commit Review
 
@@ -777,6 +806,25 @@ air scan <from>..<to>
 ```
 
 The range endpoints must both be on the first-parent history of `master`.
+
+By default, AIR records and stops at the first reviewer, response-validation,
+or Git-inspection failure. `air scan --continue-on-error` records each failure,
+continues through the selected batch, then returns a nonzero result summarizing
+the number of failed commits. Database failures and invalid global reviewer
+configuration always stop immediately.
+
+### Failed commits
+
+```bash
+air failures [--json]
+air retry [--continue-on-error] [reviewer flags]
+```
+
+`air failures` displays the durable failure queue. `air retry` processes only
+live failed commits, oldest first, and accepts `--limit` plus the same reviewer
+configuration overrides as `scan`. A failed rescan is retried as a rescan so
+the prior successful review remains current until the retry succeeds. Failure
+records for rewritten-away commits are left for `air clean`.
 
 ### Current findings
 

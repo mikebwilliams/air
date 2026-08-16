@@ -42,6 +42,10 @@ func runCLI(ctx context.Context, args []string, environment cliEnvironment) erro
 		return runInit(ctx, args[1:], environment)
 	case "scan":
 		return runScan(ctx, args[1:], environment)
+	case "retry":
+		return runRetry(ctx, args[1:], environment)
+	case "failures":
+		return runFailures(ctx, args[1:], environment)
 	case "pending":
 		return runPending(ctx, args[1:], environment)
 	case "clean":
@@ -601,25 +605,42 @@ func printTokenPrices(output io.Writer, contextName string, prices TokenPrices) 
 }
 
 func runScan(ctx context.Context, args []string, environment cliEnvironment) error {
-	return runScanCommand(ctx, args, environment, false)
+	return runScanCommand(ctx, args, environment, scanCommand)
 }
 
 func runRescan(ctx context.Context, args []string, environment cliEnvironment) error {
 	if len(args) > 1 && !strings.HasPrefix(args[0], "-") {
 		args = append(append([]string(nil), args[1:]...), args[0])
 	}
-	return runScanCommand(ctx, args, environment, true)
+	return runScanCommand(ctx, args, environment, rescanCommand)
 }
 
-func runScanCommand(ctx context.Context, args []string, environment cliEnvironment, rescan bool) error {
+func runRetry(ctx context.Context, args []string, environment cliEnvironment) error {
+	return runScanCommand(ctx, args, environment, retryCommand)
+}
+
+type scanCommandMode int
+
+const (
+	scanCommand scanCommandMode = iota
+	rescanCommand
+	retryCommand
+)
+
+func runScanCommand(ctx context.Context, args []string, environment cliEnvironment, mode scanCommandMode) error {
+	rescan := mode == rescanCommand
+	retry := mode == retryCommand
 	commandName := "scan"
 	if rescan {
 		commandName = "rescan"
+	} else if retry {
+		commandName = "retry"
 	}
 	flags := newFlagSet(commandName, environment.Stderr)
 	reviewerFlag := flags.String("reviewer", "", "review backend: codex or http")
 	limit := flags.Int("limit", 0, "maximum commits to process; zero means unlimited")
 	dryRun := flags.Bool("dry-run", false, "show pending work without reviewing or writing")
+	continueOnError := flags.Bool("continue-on-error", false, "record a failed commit and continue the batch")
 	modelFlag := flags.String("model", "", "model identifier")
 	effortFlag := flags.String("effort", "", "Codex reasoning effort")
 	codexBinaryFlag := flags.String("codex-bin", "", "Codex CLI executable")
@@ -641,14 +662,27 @@ func runScanCommand(ctx context.Context, args []string, environment cliEnvironme
 		if *dryRun {
 			return errors.New("--dry-run is not valid with air rescan")
 		}
+		if *continueOnError {
+			return errors.New("--continue-on-error is not valid with air rescan")
+		}
+	} else if retry {
+		if flags.NArg() != 0 {
+			return errors.New("usage: air retry [flags]")
+		}
+		if *dryRun {
+			return errors.New("--dry-run is not valid with air retry")
+		}
 	} else if flags.NArg() > 1 {
 		return errors.New("usage: air scan [flags] [<from>..<to>]")
+	}
+	if *dryRun && *continueOnError {
+		return errors.New("--continue-on-error is not valid with --dry-run")
 	}
 	if *limit < 0 {
 		return errors.New("--limit must not be negative")
 	}
 	revisionRange := ""
-	if !rescan && flags.NArg() == 1 {
+	if mode == scanCommand && flags.NArg() == 1 {
 		revisionRange = flags.Arg(0)
 	}
 	repository, err := DiscoverGitRepository(ctx, environment.Cwd)
@@ -661,6 +695,7 @@ func runScanCommand(ctx context.Context, args []string, environment cliEnvironme
 	}
 	defer store.Close()
 	var explicitCommits []string
+	forceCommits := make(map[string]bool)
 	if rescan {
 		sha, err := repository.ResolveCommit(ctx, flags.Arg(0))
 		if err != nil {
@@ -681,6 +716,39 @@ func runScanCommand(ctx context.Context, args []string, environment cliEnvironme
 			return fmt.Errorf("commit %s was skipped and has no review to rescan", shortSHA(sha))
 		}
 		explicitCommits = []string{sha}
+	} else if retry {
+		failures, err := store.ScanFailures(ctx)
+		if err != nil {
+			return err
+		}
+		if len(failures) == 0 {
+			fmt.Fprintln(environment.Stdout, "No failed commits.")
+			return nil
+		}
+		failedBySHA := make(map[string]ScanFailure, len(failures))
+		for _, failure := range failures {
+			failedBySHA[failure.SHA] = failure
+		}
+		history, err := repository.MasterHistory(ctx)
+		if err != nil {
+			return err
+		}
+		for i := len(history) - 1; i >= 0; i-- {
+			failure, exists := failedBySHA[history[i]]
+			if !exists {
+				continue
+			}
+			explicitCommits = append(explicitCommits, failure.SHA)
+			forceCommits[failure.SHA] = failure.Force
+			delete(failedBySHA, failure.SHA)
+		}
+		if len(failedBySHA) != 0 {
+			fmt.Fprintf(environment.Stdout, "Ignoring %d failed commits no longer on master; run air clean.\n", len(failedBySHA))
+		}
+		if len(explicitCommits) == 0 {
+			fmt.Fprintln(environment.Stdout, "No retryable failed commits.")
+			return nil
+		}
 	}
 	setFlags := visitedFlagNames(flags)
 	resolve := func(key, commandLineValue string) (resolvedSetting, error) {
@@ -776,15 +844,61 @@ func runScanCommand(ctx context.Context, args []string, environment cliEnvironme
 		}
 	}
 	return scanRepository(ctx, repository, store, scanOptions{
-		RevisionRange: revisionRange,
-		Commits:       explicitCommits,
-		Force:         rescan,
-		DryRun:        *dryRun,
-		Limit:         *limit,
-		Output:        environment.Stdout,
-		Now:           environment.Now,
-		NewReviewer:   factory,
+		RevisionRange:   revisionRange,
+		Commits:         explicitCommits,
+		Explicit:        rescan || retry,
+		Force:           rescan,
+		ForceCommits:    forceCommits,
+		DryRun:          *dryRun,
+		ContinueOnError: *continueOnError,
+		Limit:           *limit,
+		Output:          environment.Stdout,
+		Now:             environment.Now,
+		NewReviewer:     factory,
 	})
+}
+
+func runFailures(ctx context.Context, args []string, environment cliEnvironment) error {
+	flags := newFlagSet("failures", environment.Stderr)
+	jsonOutput := flags.Bool("json", false, "write machine-readable JSON")
+	if err := flags.Parse(args); err != nil {
+		return err
+	}
+	if flags.NArg() != 0 {
+		return errors.New("usage: air failures [--json]")
+	}
+	_, store, closeStore, err := openRepositoryStore(ctx, environment.Cwd)
+	if err != nil {
+		return err
+	}
+	defer closeStore()
+	failures, err := store.ScanFailures(ctx)
+	if err != nil {
+		return err
+	}
+	if *jsonOutput {
+		return writeJSON(environment.Stdout, struct {
+			Failures []ScanFailure `json:"failures"`
+		}{Failures: failures})
+	}
+	fmt.Fprintf(environment.Stdout, "%d failed commits\n", len(failures))
+	for _, failure := range failures {
+		identity := ""
+		if failure.Model != "" {
+			identity = " " + failure.Model
+			if failure.ReasoningEffort != "" {
+				identity += "/" + failure.ReasoningEffort
+			}
+		}
+		kind := "scan"
+		if failure.Force {
+			kind = "rescan"
+		}
+		fmt.Fprintf(environment.Stdout, "\n%s  %s failed %d times at %s%s\n    %s\n",
+			shortSHA(failure.SHA), kind, failure.AttemptCount,
+			failure.FailedAt.Format(time.RFC3339), identity, failure.Error)
+	}
+	return nil
 }
 
 func runPending(ctx context.Context, args []string, environment cliEnvironment) error {
@@ -847,6 +961,19 @@ func runClean(ctx context.Context, args []string, environment cliEnvironment) er
 	if err != nil {
 		return err
 	}
+	failed, err := store.ScanFailureSHAs(ctx)
+	if err != nil {
+		return err
+	}
+	storedSet := make(map[string]struct{}, len(stored)+len(failed))
+	for _, sha := range append(stored, failed...) {
+		storedSet[sha] = struct{}{}
+	}
+	stored = stored[:0]
+	for sha := range storedSet {
+		stored = append(stored, sha)
+	}
+	sort.Strings(stored)
 	stale := make([]string, 0)
 	for _, sha := range stored {
 		if _, exists := present[sha]; !exists {
@@ -872,7 +999,14 @@ func runClean(ctx context.Context, args []string, environment cliEnvironment) er
 	if err != nil {
 		return err
 	}
-	fmt.Fprintf(environment.Stdout, "Removed %d stale commits.\n", deleted)
+	failedDeleted, err := store.DeleteScanFailures(ctx, stale)
+	if err != nil {
+		return err
+	}
+	if deleted == 0 && failedDeleted == 0 {
+		return errors.New("stale AIR state changed during cleanup")
+	}
+	fmt.Fprintf(environment.Stdout, "Removed %d stale commits.\n", len(stale))
 	return nil
 }
 
@@ -1530,6 +1664,8 @@ func printUsage(output io.Writer) {
 Usage:
   air init <commit-ish>
   air scan [flags] [<from>..<to>]
+  air retry [flags]
+  air failures [--json]
   air pending [--limit N] [<from>..<to>]
   air rescan <commit-ish> [flags]
   air clean [--dry-run]

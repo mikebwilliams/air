@@ -99,6 +99,17 @@ type FindingStats struct {
 	Skipped   int
 }
 
+type ScanFailure struct {
+	SHA             string    `json:"sha"`
+	ParentSHA       string    `json:"parent_sha,omitempty"`
+	FailedAt        time.Time `json:"failed_at"`
+	AttemptCount    int       `json:"attempt_count"`
+	Error           string    `json:"error"`
+	Model           string    `json:"model,omitempty"`
+	ReasoningEffort string    `json:"reasoning_effort,omitempty"`
+	Force           bool      `json:"force"`
+}
+
 type ReviewIdentity struct {
 	Model           Model
 	ReasoningEffort string
