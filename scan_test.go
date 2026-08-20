@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -126,12 +127,65 @@ func TestScanRepositoryLifecycleSkipsAndResume(t *testing.T) {
 	}
 }
 
-func TestScanStopsAtFailureAndRetriesFailedCommit(t *testing.T) {
+func TestScanBoundsResolutionCandidatesToChangedFiles(t *testing.T) {
+	ctx := context.Background()
+	repository, directory := newTestGitRepository(t)
+	base := testCommitFile(t, directory, "app.txt", []byte("base\n"), "base")
+	head := testCommitFile(t, directory, "app.txt", []byte("changed\n"), "change app")
+	store, err := CreateStore(ctx, repository.DatabasePath(), base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	seed := cleanReview("Seed open findings.")
+	for index := 0; index < maxResolutionCandidates+2; index++ {
+		seed.Output.NewFindings = append(seed.Output.NewFindings, NewFinding{
+			Severity: "warning", Title: fmt.Sprintf("app finding %d", index),
+			Description: "Candidate associated with the changed file.", File: stringPointer("app.txt"),
+		})
+	}
+	seed.Output.NewFindings = append(seed.Output.NewFindings,
+		NewFinding{Severity: "warning", Title: "other file", Description: "Not associated with the change.", File: stringPointer("other.txt")},
+		NewFinding{Severity: "warning", Title: "unlocated", Description: "No recorded file."},
+	)
+	if _, err := store.ApplyReview(ctx, CommitMetadata{SHA: base},
+		ReviewIdentity{Model: modelByName("seed-model")}, seed, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+
+	reviewer := &fakeReviewer{review: func(input ReviewInput) (ReviewResult, error) {
+		if input.Commit.SHA != head || len(input.OpenFindings) != maxResolutionCandidates {
+			t.Fatalf("review input = %+v", input)
+		}
+		for index, finding := range input.OpenFindings {
+			if finding.ID != int64(index+1) || finding.File == nil || *finding.File != "app.txt" {
+				t.Fatalf("candidate %d = %+v", index, finding)
+			}
+		}
+		return cleanReview("Reviewed bounded candidates."), nil
+	}}
+	var output bytes.Buffer
+	if err := scanRepository(ctx, repository, store, scanOptions{
+		Output: &output,
+		NewReviewer: func() (Reviewer, ReviewIdentity, error) {
+			return reviewer, ReviewIdentity{Model: modelByName("review-model")}, nil
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(output.String(), "resolution candidates: 50 supplied, 4 deferred") {
+		t.Fatalf("scan output:\n%s", output.String())
+	}
+}
+
+func TestScanSkipsFailedCommitUntilExplicitRetry(t *testing.T) {
 	ctx := context.Background()
 	repository, directory := newTestGitRepository(t)
 	base := testCommitFile(t, directory, "app.txt", []byte("base\n"), "base")
 	first := testCommitFile(t, directory, "app.txt", []byte("first\n"), "first")
 	second := testCommitFile(t, directory, "app.txt", []byte("second\n"), "second")
+	third := testCommitFile(t, directory, "app.txt", []byte("third\n"), "third")
 	store, err := CreateStore(ctx, repository.DatabasePath(), base)
 	if err != nil {
 		t.Fatal(err)
@@ -166,22 +220,64 @@ func TestScanStopsAtFailureAndRetriesFailedCommit(t *testing.T) {
 		t.Fatalf("stored failure = %+v, %v", failures, err)
 	}
 
-	successReviewer := &fakeReviewer{review: func(input ReviewInput) (ReviewResult, error) {
-		if input.Commit.SHA != second {
-			t.Fatalf("resume reviewed %s, want %s", input.Commit.SHA, second)
+	resumeReviewer := &fakeReviewer{review: func(input ReviewInput) (ReviewResult, error) {
+		if input.Commit.SHA != third {
+			t.Fatalf("resume reviewed %s, want %s", input.Commit.SHA, third)
 		}
-		return cleanReview("Reviewed retry."), nil
+		return cleanReview("Reviewed newer commit."), nil
 	}}
+	var output bytes.Buffer
 	if err := scanRepository(ctx, repository, store, scanOptions{
-		Output: &bytes.Buffer{},
+		Output: &output,
 		NewReviewer: func() (Reviewer, ReviewIdentity, error) {
-			return successReviewer, ReviewIdentity{Model: modelByName("fake-model"), ReasoningEffort: "low"}, nil
+			return resumeReviewer, ReviewIdentity{Model: modelByName("fake-model"), ReasoningEffort: "low"}, nil
 		},
 	}); err != nil {
 		t.Fatalf("resume scan: %v", err)
 	}
-	if len(successReviewer.calls) != 1 {
-		t.Fatalf("resume calls = %d, want 1", len(successReviewer.calls))
+	if len(resumeReviewer.calls) != 1 {
+		t.Fatalf("resume calls = %d, want 1", len(resumeReviewer.calls))
+	}
+	if !strings.Contains(output.String(), "Deferred 1 failed commit; run air retry.") {
+		t.Fatalf("resume output = %q", output.String())
+	}
+	if failures, err := store.ScanFailures(ctx); err != nil || len(failures) != 1 || failures[0].SHA != second {
+		t.Fatalf("normal scan changed failures = %+v, %v", failures, err)
+	}
+	output.Reset()
+	if err := scanRepository(ctx, repository, store, scanOptions{
+		Output: &output,
+		NewReviewer: func() (Reviewer, ReviewIdentity, error) {
+			t.Fatal("scan with only a recorded failure constructed a reviewer")
+			return nil, ReviewIdentity{}, nil
+		},
+	}); err != nil {
+		t.Fatalf("scan with only a recorded failure: %v", err)
+	}
+	if !strings.Contains(output.String(), "Deferred 1 failed commit; run air retry.") ||
+		!strings.Contains(output.String(), "No unprocessed commits.") {
+		t.Fatalf("failure-only scan output = %q", output.String())
+	}
+
+	retryReviewer := &fakeReviewer{review: func(input ReviewInput) (ReviewResult, error) {
+		if input.Commit.SHA != second {
+			t.Fatalf("retry reviewed %s, want %s", input.Commit.SHA, second)
+		}
+		return cleanReview("Reviewed retry."), nil
+	}}
+	if err := scanRepository(ctx, repository, store, scanOptions{
+		Commits:         []string{second},
+		Explicit:        true,
+		IncludeFailures: true,
+		Output:          &bytes.Buffer{},
+		NewReviewer: func() (Reviewer, ReviewIdentity, error) {
+			return retryReviewer, ReviewIdentity{Model: modelByName("fake-model"), ReasoningEffort: "low"}, nil
+		},
+	}); err != nil {
+		t.Fatalf("retry scan: %v", err)
+	}
+	if len(retryReviewer.calls) != 1 {
+		t.Fatalf("retry calls = %d, want 1", len(retryReviewer.calls))
 	}
 	if failures, err := store.ScanFailures(ctx); err != nil || len(failures) != 0 {
 		t.Fatalf("failure survived successful retry = %+v, %v", failures, err)
@@ -301,6 +397,7 @@ func TestForcedScanCreatesReviewAttemptAndExcludesSameCommitFindings(t *testing.
 		result := cleanReview("Initial review.")
 		result.Output.NewFindings = []NewFinding{{
 			Severity: "warning", Title: "initial finding", Description: "Initial review finding.",
+			File: stringPointer("app.txt"),
 		}}
 		return result, nil
 	}}

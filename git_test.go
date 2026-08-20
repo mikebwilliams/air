@@ -132,6 +132,7 @@ func TestCommitDiffFiltersBinaryAndCapsLargeText(t *testing.T) {
 	if strings.Contains(diff.Text, "image.bin") {
 		t.Fatalf("binary path leaked into textual diff:\n%s", diff.Text)
 	}
+	assertStrings(t, diff.TextFiles, []string{"base.txt"})
 	assertStrings(t, diff.BinaryFiles, []string{"image.bin"})
 
 	large := bytes.Repeat([]byte("0123456789abcdef\n"), 20_000)
@@ -146,6 +147,7 @@ func TestCommitDiffFiltersBinaryAndCapsLargeText(t *testing.T) {
 	if len(diff.Text) != maxDiffBytes {
 		t.Fatalf("captured diff length = %d, want %d", len(diff.Text), maxDiffBytes)
 	}
+	assertStrings(t, diff.TextFiles, []string{"large.txt"})
 }
 
 func TestCommitDiffDoesNotRunTextconv(t *testing.T) {

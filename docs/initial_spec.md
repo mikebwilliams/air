@@ -121,7 +121,11 @@ The database must not modify or require files in the tracked working tree.
 
 ## 5. SQLite Schema
 
-The initial schema should remain intentionally small.
+The schema should remain intentionally small. Schema version 5 adds the
+nullable `review_attempts.duration_ms` column. Opening a version-4 database
+upgrades it transactionally without rewriting or deleting review data;
+historical attempts retain a null, explicitly unknown duration. Other schema
+version mismatches remain errors.
 
 ### 5.1 `config`
 
@@ -290,8 +294,10 @@ simple without losing historical accounting.
 `review_attempts` contains one immutable row for every successful model call.
 It stores the commit SHA, review timestamp, model, effort, prompt version, raw
 response, summary, all token and cost fields, and the attempt's new/resolved
-finding counts. Rows are ordered by their integer ID within a commit; the last
-row is current and must match the denormalized review fields on `commits`.
+finding counts. `duration_ms` records elapsed wall time for new successful
+attempts and is null for attempts created before schema version 5. Rows are
+ordered by their integer ID within a commit; the last row is current and must
+match the denormalized review fields on `commits`.
 
 ### 5.5 `findings`
 
@@ -467,11 +473,13 @@ air scan --limit N
 The default is `--limit 0`, meaning unlimited. Commits recorded as skipped
 count toward the limit because they are processed for resumability.
 
-Failed commits remain unprocessed and are naturally retried by a later default
-scan. `air retry` selects the explicit failure queue instead, filters it against
-the current first-parent history of master, and processes live failures oldest
-first. Current reviewer configuration and command-line overrides are used for
-the retry; the failed attempt's model and effort remain diagnostic metadata.
+Failed commits remain unprocessed but are excluded from later ordinary scans,
+including explicit-range scans, dry runs, and `air pending`. They do not count
+toward `--limit`. `air retry` selects the explicit failure queue, filters it
+against the current first-parent history of master, and processes live failures
+oldest first. Current reviewer configuration and command-line overrides are
+used for the retry; the failed attempt's model and effort remain diagnostic
+metadata.
 
 ## 8. Commit Review
 
@@ -524,6 +532,15 @@ For a commit containing only excluded content, the reviewer returns no findings
 or resolutions and the commit is recorded as a successful clean review rather
 than skipped. In a mixed commit, the reviewer considers executable behavior
 only.
+
+### 8.3 Successful scan timing
+
+For each reviewable commit, AIR starts a monotonic wall-time measurement before
+reading commit metadata and the diff. It ends after the reviewer response and
+its output/usage validation, immediately before the successful database
+transaction. AIR stores the elapsed whole milliseconds only when that
+transaction succeeds. Failed attempts and skipped commits do not receive a
+duration record.
 
 ## 9. LLM Reviewer Responsibilities
 
@@ -579,7 +596,7 @@ The initial model context should contain:
 
 - commit metadata;
 - commit message;
-- current open findings.
+- a bounded set of open resolution candidates associated with changed files.
 
 AIR computes and bounds the textual diff to decide whether the commit should be
 reviewed, but it does not embed that diff in the Codex prompt. AIR supplies the
@@ -702,7 +719,11 @@ commit D
 
 ## 14. Open Findings Supplied to Reviews
 
-The simplest implementation should supply all open findings to each review.
+AIR supplies only open findings whose recorded repository-relative `file`
+exactly matches a textual file changed by the target commit. Findings without a
+file, findings in other files, and matches beyond the first 50 IDs are deferred
+without a state change. For a rescan, findings introduced by the target commit
+are excluded before this filtering is applied.
 
 An open finding may be represented compactly:
 
@@ -715,9 +736,12 @@ Early return can leave m_bar uninitialized.
 The destructor later assumes m_bar was initialized.
 ```
 
-If the number of open findings eventually becomes large, filtering can be introduced later.
-
-No filtering system should be part of the initial architecture unless demonstrated necessary.
+The reviewer treats the supplied list as the complete set of IDs it may resolve
+for that attempt and must not inspect AIR's database for other IDs. AIR
+validates that every returned resolution belongs to the supplied set. Scan
+output reports how many candidates were supplied and how many otherwise-open
+findings were deferred. This deliberately prefers missed cross-file resolutions
+over context growth and incorrect finding IDs.
 
 Finding state reflects the order in which commits are processed. When ranges
 are scanned out of historical order, the tool does not revisit commits that
@@ -752,12 +776,10 @@ START
  master
 ```
 
-The database retains the entire history.
-
-Default user-facing status at the end should report only findings currently
-recorded as open in the database.
-
-Thus temporary bugs that appeared and were subsequently fixed during historical scanning do not clutter normal output.
+The database retains the entire history. Default user-facing status reports
+aggregate finding counts rather than individual findings, so temporary bugs
+that appeared and were subsequently fixed during historical scanning do not
+clutter normal output.
 
 ## 16. Continuous Operation
 
@@ -847,8 +869,9 @@ The range endpoints must both be on the first-parent history of `master`.
 By default, AIR records and stops at the first reviewer, response-validation,
 or Git-inspection failure. `air scan --continue-on-error` records each failure,
 continues through the selected batch, then returns a nonzero result summarizing
-the number of failed commits. Database failures and invalid global reviewer
-configuration always stop immediately.
+the number of failed commits. Subsequent ordinary scans defer recorded failures
+and report their count; only `air retry` attempts them again. Database failures
+and invalid global reviewer configuration always stop immediately.
 
 ### Failed commits
 
@@ -863,7 +886,7 @@ configuration overrides as `scan`. A failed rescan is retried as a rescan so
 the prior successful review remains current until the retry succeeds. Failure
 records for rewritten-away commits are left for `air clean`.
 
-### Current findings
+### Repository status
 
 ```bash
 air status
@@ -872,14 +895,19 @@ air status
 Example:
 
 ```text
-4 open findings
-
-#17 warning  pcbnew/foo.cpp
-    Early constructor exit may leave m_bar uninitialized.
-
-#31 error    common/cache.cpp
-    Failure path can retain a dangling pointer.
+Findings: 12 total (4 open, 3 dismissed, 5 resolved)
+Commits: 7 unscanned, 2 failed, 1 deferred
+Estimated remaining scan time: 38m30s (14 timing samples)
 ```
+
+Status is intentionally aggregate-only. `unscanned` counts commits ready for
+an ordinary scan. `failed` counts the complete durable failure queue, including
+failed rescans and stale failures. `deferred` counts the live, unprocessed
+failed commits omitted by ordinary scans, and is therefore a subset of
+`failed`. Use `air findings`, `air finding <id>`, or `air export` for finding
+details. The remaining-time estimate multiplies the unscanned count by the
+average duration of all successful timed attempts. It excludes deferred
+failures and is unknown when no timing samples exist.
 
 ### Review history
 
@@ -957,7 +985,8 @@ operations as `air finding dismiss`, `reopen`, and `note`. It makes no reviewer
 or network calls.
 
 The browser requires both input and output to be interactive terminals. Scripts
-should use `air status --json` or `air export` instead.
+should use `air status --json` for aggregate counts or `air export` for detailed
+open findings.
 
 ### Manual lifecycle overrides
 
@@ -969,11 +998,12 @@ air finding diff 17
 air finding open 17
 ```
 
-Dismissal requires a reason and hides the finding from normal status and model
-context without pretending that a commit resolved it. Reopening clears either
-a dismissal or a recorded resolution. Notes do not change disposition. Manual
-events have no commit or review ID, but always retain their timestamp, action,
-and note in `finding_events`; `air finding <id>` displays that audit history.
+Dismissal requires a reason and removes the finding from the open status count
+and model context without pretending that a commit resolved it. It remains in
+the total and dismissed status counts. Reopening clears either a dismissal or a
+recorded resolution. Notes do not change disposition. Manual events have no
+commit or review ID, but always retain their timestamp, action, and note in
+`finding_events`; `air finding <id>` displays that audit history.
 
 `air finding diff <id>` launches `git difftool --no-prompt` for the finding's
 introducing commit against its first parent, using the user's configured Git
@@ -1016,7 +1046,9 @@ and reasoning-output tokens and are grouped by model and reasoning effort.
 Costs are summed as lower and upper bounds from the estimates stored on each
 attempt. Attempts with unknown prices and attempts whose backend omitted
 cache-write usage are counted explicitly. `--since` accepts either a UTC date
-or an RFC3339 timestamp; `--model` is an exact model identifier match.
+or an RFC3339 timestamp; `--model` is an exact model identifier match. `stats`
+reports average scan time per commit across successful timed attempts selected
+by those filters and separately counts historical attempts without timing.
 
 `air stats` also reports current open, dismissed, and resolved finding counts
 and the number of skipped commits. These repository-state counts are not
@@ -1032,10 +1064,13 @@ air export --format sarif
 ```
 
 JSON uses documented snake-case field names rather than mirroring Go field
-names. The status and export views contain only current open findings. Show
-JSON includes commit metadata, the current commit record, findings introduced
-or resolved by the selected review, and retained attempts when `--reviews` is
-given. `--review N --json` selects a historical attempt.
+names. Status JSON contains `findings` and `commits` objects with the same
+aggregate counts, timing-sample count, and nullable millisecond estimate as
+text output; it contains no finding log. Export contains current open findings.
+Show JSON includes commit metadata, the current commit record, findings
+introduced or resolved by the selected review, and retained attempts when
+`--reviews` is given. Current and retained review records include `duration_ms`
+when known. `--review N --json` selects a historical attempt.
 
 SARIF export uses version 2.1.0. Each open finding becomes one result with AIR's
 severity mapped to SARIF `error`, `warning`, or `note`, a stable finding-ID
@@ -1117,7 +1152,7 @@ Every review must record a prompt version.
 Example:
 
 ```text
-prompt_version = 3
+prompt_version = 4
 ```
 
 Changing reviewer instructions should increment this value.
@@ -1128,6 +1163,10 @@ not use path, extension, comment, or string heuristics to filter the textual
 diff before reviewer invocation. The reviewer must return no findings or
 resolutions for excluded-only changes and review only executable behavior in
 mixed commits.
+
+Prompt version 4 retains that scope policy and defines the supplied open
+findings as the only permitted resolution candidates. Other open findings may
+exist but are explicitly out of scope for that review.
 
 This allows later analysis of behavior differences between review generations.
 
@@ -1165,8 +1204,8 @@ Rebases and force-pushes may cause processed commits to leave the current
 first-parent history of `refs/heads/master`.
 
 Scanning does not delete or automatically reconcile those records. Until they
-are cleaned, stale findings may remain visible in `status` and may be supplied
-to reviews.
+are cleaned, stale findings remain included in `status` counts and may be
+supplied to reviews.
 
 The maintenance command is:
 
@@ -1320,7 +1359,7 @@ The implementation should preserve these rules:
 5. A reviewed commit may resolve an open finding known when that commit is
    processed.
 6. Unchanged findings generate no ongoing database activity.
-7. Historical transient problems remain queryable but do not appear in normal current-status output.
+7. Historical transient problems remain queryable and contribute only aggregate counts to normal status output.
 8. Each reviewed or skipped commit is processed atomically.
 9. Review behavior is reproducible enough to identify the model and prompt version responsible.
 10. The tool should remain a semantic linter, not evolve unnecessarily into an issue tracker or code-review platform.

@@ -29,6 +29,7 @@ type cliEnvironment struct {
 	Now             func() time.Time
 	FindingsUI      findingsUIRunner
 	ExternalCommand commandContextFunc
+	ElapsedNow      func() time.Time
 }
 
 func runCLI(ctx context.Context, args []string, environment cliEnvironment) error {
@@ -104,6 +105,7 @@ func runStats(ctx context.Context, args []string, environment cliEnvironment) er
 		return err
 	}
 	fmt.Fprintf(environment.Stdout, "Reviews: %d attempts across %d commits\n", reviews.Attempts, reviews.Commits)
+	printReviewDurationStats(environment.Stdout, reviews)
 	printTokenTotals(environment.Stdout, reviews.InputTokens, reviews.CachedInputTokens,
 		reviews.CacheWriteTokens, reviews.CacheWritesUnreported, reviews.OutputTokens,
 		reviews.ReasoningOutputTokens)
@@ -179,6 +181,21 @@ func printCostTotals(output io.Writer, minimum, maximum int64, priced, unknown i
 		fmt.Fprintf(output, " plus %d attempts with unknown cost", unknown)
 	}
 	fmt.Fprintf(output, " (%d priced attempts)\n", priced)
+}
+
+func printReviewDurationStats(output io.Writer, stats ReviewStats) {
+	if stats.TimedAttempts == 0 {
+		fmt.Fprintf(output, "Average scan time per commit: unknown (0 timed, %d without timing)\n",
+			stats.UntimedAttempts)
+		return
+	}
+	averageMilliseconds := stats.DurationMilliseconds / int64(stats.TimedAttempts)
+	fmt.Fprintf(output, "Average scan time per commit: %s (%d timed, %d without timing)\n",
+		formatMilliseconds(averageMilliseconds), stats.TimedAttempts, stats.UntimedAttempts)
+}
+
+func formatMilliseconds(milliseconds int64) string {
+	return (time.Duration(milliseconds) * time.Millisecond).String()
 }
 
 func printReviewGroups(output io.Writer, groups []ReviewStatsGroup) {
@@ -857,11 +874,13 @@ func runScanCommand(ctx context.Context, args []string, environment cliEnvironme
 		Explicit:        rescan || retry,
 		Force:           rescan,
 		ForceCommits:    forceCommits,
+		IncludeFailures: retry,
 		DryRun:          *dryRun,
 		ContinueOnError: *continueOnError,
 		Limit:           *limit,
 		Output:          environment.Stdout,
 		Now:             environment.Now,
+		ElapsedNow:      environment.ElapsedNow,
 		NewReviewer:     factory,
 	})
 }
@@ -1084,32 +1103,115 @@ func runStatus(ctx context.Context, args []string, environment cliEnvironment) e
 	if flags.NArg() != 0 {
 		return errors.New("usage: air status [--json]")
 	}
-	_, store, closeStore, err := openRepositoryStore(ctx, environment.Cwd)
+	repository, store, closeStore, err := openRepositoryStore(ctx, environment.Cwd)
 	if err != nil {
 		return err
 	}
 	defer closeStore()
-	findings, err := store.OpenFindings(ctx)
+	status, err := repositoryStatus(ctx, repository, store)
 	if err != nil {
 		return err
 	}
 	if *jsonOutput {
-		return writeJSON(environment.Stdout, struct {
-			OpenFindings []Finding `json:"open_findings"`
-		}{OpenFindings: findings})
+		return writeJSON(environment.Stdout, status)
 	}
-	fmt.Fprintf(environment.Stdout, "%d open findings\n", len(findings))
-	for _, finding := range findings {
-		location := "(no file)"
-		if finding.File != nil {
-			location = *finding.File
-			if finding.Line != nil {
-				location += ":" + strconv.Itoa(*finding.Line)
-			}
+	fmt.Fprintf(environment.Stdout, "Findings: %d total (%d open, %d dismissed, %d resolved)\n",
+		status.Findings.Total, status.Findings.Open, status.Findings.Dismissed, status.Findings.Resolved)
+	fmt.Fprintf(environment.Stdout, "Commits: %d unscanned, %d failed, %d deferred\n",
+		status.Commits.Unscanned, status.Commits.Failed, status.Commits.Deferred)
+	if status.Commits.EstimatedScanMilliseconds == nil {
+		fmt.Fprintln(environment.Stdout, "Estimated remaining scan time: unknown (no successful scan timings)")
+	} else if status.Commits.Unscanned == 0 {
+		fmt.Fprintln(environment.Stdout, "Estimated remaining scan time: 0s")
+	} else {
+		sampleLabel := "samples"
+		if status.Commits.TimingSamples == 1 {
+			sampleLabel = "sample"
 		}
-		fmt.Fprintf(environment.Stdout, "\n#%d %-7s %s\n    %s\n", finding.ID, finding.Severity, location, finding.Title)
+		fmt.Fprintf(environment.Stdout, "Estimated remaining scan time: %s (%d timing %s)\n",
+			formatMilliseconds(*status.Commits.EstimatedScanMilliseconds),
+			status.Commits.TimingSamples, sampleLabel)
 	}
 	return nil
+}
+
+type statusFindingCounts struct {
+	Total     int `json:"total"`
+	Open      int `json:"open"`
+	Dismissed int `json:"dismissed"`
+	Resolved  int `json:"resolved"`
+}
+
+type statusCommitCounts struct {
+	Unscanned                 int    `json:"unscanned"`
+	Failed                    int    `json:"failed"`
+	Deferred                  int    `json:"deferred"`
+	EstimatedScanMilliseconds *int64 `json:"estimated_scan_ms"`
+	TimingSamples             int    `json:"timing_samples"`
+}
+
+type statusOutput struct {
+	Findings statusFindingCounts `json:"findings"`
+	Commits  statusCommitCounts  `json:"commits"`
+}
+
+func repositoryStatus(ctx context.Context, repository *GitRepository, store *Store) (statusOutput, error) {
+	findingStats, err := store.FindingStats(ctx)
+	if err != nil {
+		return statusOutput{}, err
+	}
+	startSHA, err := store.Config(ctx, "start_sha")
+	if err != nil {
+		return statusOutput{}, err
+	}
+	commits, err := repository.EnumerateDefault(ctx, startSHA)
+	if err != nil {
+		return statusOutput{}, err
+	}
+	processed, err := store.ProcessedSHAs(ctx)
+	if err != nil {
+		return statusOutput{}, err
+	}
+	failureSHAs, err := store.ScanFailureSHAs(ctx)
+	if err != nil {
+		return statusOutput{}, err
+	}
+	failed := make(map[string]struct{}, len(failureSHAs))
+	for _, sha := range failureSHAs {
+		failed[sha] = struct{}{}
+	}
+
+	status := statusOutput{
+		Findings: statusFindingCounts{
+			Total:     findingStats.Open + findingStats.Dismissed + findingStats.Resolved,
+			Open:      findingStats.Open,
+			Dismissed: findingStats.Dismissed,
+			Resolved:  findingStats.Resolved,
+		},
+		Commits: statusCommitCounts{Failed: len(failureSHAs)},
+	}
+	for _, sha := range commits {
+		if _, exists := processed[sha]; exists {
+			continue
+		}
+		if _, exists := failed[sha]; exists {
+			status.Commits.Deferred++
+			continue
+		}
+		status.Commits.Unscanned++
+	}
+	timing, err := store.ReviewDurationStats(ctx)
+	if err != nil {
+		return statusOutput{}, err
+	}
+	status.Commits.TimingSamples = timing.TimedAttempts
+	if status.Commits.Unscanned == 0 {
+		status.Commits.EstimatedScanMilliseconds = int64Pointer(0)
+	} else if timing.TimedAttempts != 0 {
+		estimate := timing.TotalMilliseconds * int64(status.Commits.Unscanned) / int64(timing.TimedAttempts)
+		status.Commits.EstimatedScanMilliseconds = int64Pointer(estimate)
+	}
+	return status, nil
 }
 
 func runLog(ctx context.Context, args []string, environment cliEnvironment) error {
@@ -1214,7 +1316,7 @@ func runShow(ctx context.Context, args []string, environment cliEnvironment) err
 		fmt.Fprintf(environment.Stdout, "\nReview attempt #%d%s\n", attempt.Number, current)
 		printReviewAccounting(environment.Stdout, attempt.Model, attempt.ReasoningEffort,
 			&attempt.Usage, attempt.EstimatedCostMicrousd, attempt.EstimatedCostMaxMicrousd,
-			attempt.CostContext, attempt.CostComplete)
+			attempt.CostContext, attempt.CostComplete, attempt.DurationMilliseconds)
 		printReviewResult(environment.Stdout, introduced, resolved, attempt.Summary)
 		return nil
 	}
@@ -1246,7 +1348,7 @@ func runShow(ctx context.Context, args []string, environment cliEnvironment) err
 	fmt.Fprintf(environment.Stdout, "%s %s\n\n", shortSHA(sha), subject)
 	printReviewAccounting(environment.Stdout, record.Model, record.ReasoningEffort,
 		record.Usage, record.EstimatedCostMicrousd, record.EstimatedCostMaxMicrousd,
-		record.CostContext, record.CostComplete)
+		record.CostContext, record.CostComplete, record.DurationMilliseconds)
 	printReviewResult(environment.Stdout, introduced, resolved, record.Summary)
 	if *listReviews {
 		fmt.Fprintln(environment.Stdout, "\nReview attempts:")
@@ -1259,8 +1361,9 @@ func runShow(ctx context.Context, args []string, environment cliEnvironment) err
 			if attempt.ReasoningEffort != "" {
 				effort = "/" + attempt.ReasoningEffort
 			}
-			fmt.Fprintf(environment.Stdout, "  #%d  %s  %s%s  %d new, %d resolved%s\n",
+			fmt.Fprintf(environment.Stdout, "  #%d  %s  %s%s  %s  %d new, %d resolved%s\n",
 				attempt.Number, attempt.ReviewedAt.Format(time.RFC3339), attempt.Model, effort,
+				formatOptionalMilliseconds(attempt.DurationMilliseconds),
 				attempt.NewCount, attempt.ResolvedCount, current)
 		}
 	}
@@ -1293,6 +1396,7 @@ func printReviewAccounting(
 	minimumCost, maximumCost *int64,
 	costContext string,
 	costComplete bool,
+	durationMilliseconds *int64,
 ) {
 	fmt.Fprintf(output, "Model: %s\n", model)
 	if reasoningEffort != "" {
@@ -1309,6 +1413,7 @@ func printReviewAccounting(
 		fmt.Fprintf(output, "%d output, %d reasoning output)\n",
 			usage.OutputTokens, usage.ReasoningOutputTokens)
 	}
+	fmt.Fprintf(output, "Scan time: %s\n", formatOptionalMilliseconds(durationMilliseconds))
 	if minimumCost == nil {
 		fmt.Fprintln(output, "Estimated cost: unavailable (model pricing unknown)")
 		return
@@ -1331,6 +1436,13 @@ func printReviewAccounting(
 		fmt.Fprint(output, ")")
 	}
 	fmt.Fprintln(output)
+}
+
+func formatOptionalMilliseconds(milliseconds *int64) string {
+	if milliseconds == nil {
+		return "unknown"
+	}
+	return formatMilliseconds(*milliseconds)
 }
 
 func printReviewResult(output io.Writer, introduced, resolved []Finding, summary string) {

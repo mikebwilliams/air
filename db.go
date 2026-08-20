@@ -20,7 +20,7 @@ type Store struct {
 	db *sql.DB
 }
 
-const schemaVersion = 4
+const schemaVersion = 5
 
 const schemaSQL = `
 CREATE TABLE config (
@@ -132,6 +132,7 @@ CREATE TABLE review_attempts (
 	estimated_cost_max_microusd INTEGER CHECK(estimated_cost_max_microusd IS NULL OR estimated_cost_max_microusd >= 0),
 	cost_context                TEXT CHECK(cost_context IS NULL OR cost_context IN ('short', 'long')),
 	cost_complete               INTEGER CHECK(cost_complete IS NULL OR cost_complete IN (0, 1)),
+	duration_ms                 INTEGER CHECK(duration_ms IS NULL OR duration_ms >= 0),
 	new_count                   INTEGER NOT NULL DEFAULT 0 CHECK(new_count >= 0),
 	resolved_count              INTEGER NOT NULL DEFAULT 0 CHECK(resolved_count >= 0),
 
@@ -200,7 +201,7 @@ CREATE INDEX finding_events_finding_idx ON finding_events(finding_id, id);
 CREATE INDEX review_attempts_commit_idx ON review_attempts(commit_sha, id);
 CREATE INDEX finding_events_review_idx ON finding_events(review_id, id);
 CREATE INDEX scan_failures_failed_at_idx ON scan_failures(failed_at, sha);
-PRAGMA user_version = 4;
+PRAGMA user_version = 5;
 `
 
 func CreateStore(ctx context.Context, databasePath, startSHA string) (*Store, error) {
@@ -273,11 +274,38 @@ func OpenStore(ctx context.Context, databasePath string) (*Store, error) {
 		_ = store.Close()
 		return nil, fmt.Errorf("read schema version: %w", err)
 	}
+	if version == 4 {
+		if err := migrateSchema4To5(ctx, store); err != nil {
+			_ = store.Close()
+			return nil, err
+		}
+		version = 5
+	}
 	if version != schemaVersion {
 		_ = store.Close()
 		return nil, fmt.Errorf("unsupported AIR schema version %d", version)
 	}
 	return store, nil
+}
+
+func migrateSchema4To5(ctx context.Context, store *Store) error {
+	tx, err := store.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("upgrade AIR schema from 4 to 5: %w", err)
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, `
+		ALTER TABLE review_attempts ADD COLUMN duration_ms INTEGER
+		CHECK(duration_ms IS NULL OR duration_ms >= 0)`); err != nil {
+		return fmt.Errorf("upgrade AIR schema from 4 to 5: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `PRAGMA user_version = 5`); err != nil {
+		return fmt.Errorf("upgrade AIR schema from 4 to 5: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("upgrade AIR schema from 4 to 5: %w", err)
+	}
+	return nil
 }
 
 func openStoreFile(ctx context.Context, databasePath string) (*Store, error) {
@@ -1112,6 +1140,9 @@ func (s *Store) ApplyReview(
 	if result.Usage == nil {
 		return nil, errors.New("review token usage must be present")
 	}
+	if result.Duration < 0 {
+		return nil, errors.New("review duration must not be negative")
+	}
 	if err := validateTokenUsage(*result.Usage); err != nil {
 		return nil, fmt.Errorf("invalid review token usage: %w", err)
 	}
@@ -1186,8 +1217,8 @@ func (s *Store) ApplyReview(
 			summary, raw_response, input_tokens, cached_input_tokens,
 			cache_write_tokens, output_tokens, reasoning_output_tokens,
 			estimated_cost_microusd, estimated_cost_max_microusd,
-			cost_context, cost_complete
-		) VALUES(?, ?, ?, NULLIF(?, ''), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			cost_context, cost_complete, duration_ms
+		) VALUES(?, ?, ?, NULLIF(?, ''), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		metadata.SHA,
 		processedAt,
 		identity.Model.Name,
@@ -1204,6 +1235,7 @@ func (s *Store) ApplyReview(
 		costMaximum(estimate),
 		costContext(estimate),
 		costComplete(estimate),
+		result.Duration.Milliseconds(),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("record review attempt for %s: %w", shortSHA(metadata.SHA), err)
@@ -1292,6 +1324,8 @@ func (s *Store) Commit(ctx context.Context, sha string) (CommitRecord, error) {
 			c.input_tokens, c.cached_input_tokens, c.cache_write_tokens, c.output_tokens,
 			c.reasoning_output_tokens, c.estimated_cost_microusd,
 			c.estimated_cost_max_microusd, c.cost_context, c.cost_complete,
+			(SELECT a.duration_ms FROM review_attempts a
+			 WHERE a.commit_sha = c.sha ORDER BY a.id DESC LIMIT 1),
 			COALESCE((SELECT a.new_count FROM review_attempts a
 			          WHERE a.commit_sha = c.sha ORDER BY a.id DESC LIMIT 1), 0),
 			COALESCE((SELECT a.resolved_count FROM review_attempts a
@@ -1315,6 +1349,8 @@ func (s *Store) Log(ctx context.Context) ([]CommitRecord, error) {
 			c.input_tokens, c.cached_input_tokens, c.cache_write_tokens, c.output_tokens,
 			c.reasoning_output_tokens, c.estimated_cost_microusd,
 			c.estimated_cost_max_microusd, c.cost_context, c.cost_complete,
+			(SELECT a.duration_ms FROM review_attempts a
+			 WHERE a.commit_sha = c.sha ORDER BY a.id DESC LIMIT 1),
 			COALESCE((SELECT a.new_count FROM review_attempts a
 			          WHERE a.commit_sha = c.sha ORDER BY a.id DESC LIMIT 1), 0),
 			COALESCE((SELECT a.resolved_count FROM review_attempts a
@@ -1347,7 +1383,7 @@ func scanCommitRecord(row rowScanner) (CommitRecord, error) {
 	var processedAt string
 	var parent, skipReason, model, effort, version, summary, raw sql.NullString
 	var inputTokens, cachedInputTokens, cacheWriteTokens, outputTokens, reasoningOutputTokens sql.NullInt64
-	var estimatedCost, estimatedCostMaximum sql.NullInt64
+	var estimatedCost, estimatedCostMaximum, durationMilliseconds sql.NullInt64
 	var costContextValue sql.NullString
 	var costCompleteValue sql.NullBool
 	err := row.Scan(
@@ -1370,6 +1406,7 @@ func scanCommitRecord(row rowScanner) (CommitRecord, error) {
 		&estimatedCostMaximum,
 		&costContextValue,
 		&costCompleteValue,
+		&durationMilliseconds,
 		&record.NewCount,
 		&record.ResolvedCount,
 	)
@@ -1402,6 +1439,9 @@ func scanCommitRecord(row rowScanner) (CommitRecord, error) {
 	}
 	record.CostContext = costContextValue.String
 	record.CostComplete = costCompleteValue.Bool
+	if durationMilliseconds.Valid {
+		record.DurationMilliseconds = int64Pointer(durationMilliseconds.Int64)
+	}
 	record.ProcessedAt, err = time.Parse(time.RFC3339Nano, processedAt)
 	if err != nil {
 		return CommitRecord{}, fmt.Errorf("parse processed timestamp: %w", err)
@@ -1415,7 +1455,7 @@ func (s *Store) ReviewAttempts(ctx context.Context, sha string) ([]ReviewAttempt
 		       summary, raw_response, input_tokens, cached_input_tokens,
 		       cache_write_tokens, output_tokens, reasoning_output_tokens,
 		       estimated_cost_microusd, estimated_cost_max_microusd,
-		       cost_context, cost_complete, new_count, resolved_count
+		       cost_context, cost_complete, duration_ms, new_count, resolved_count
 		FROM review_attempts WHERE commit_sha = ? ORDER BY id`, sha)
 	if err != nil {
 		return nil, fmt.Errorf("list review attempts: %w", err)
@@ -1457,7 +1497,7 @@ func scanReviewAttempt(row rowScanner) (ReviewAttempt, error) {
 	var attempt ReviewAttempt
 	var reviewedAt string
 	var effort sql.NullString
-	var cacheWriteTokens, estimatedCost, estimatedCostMaximum sql.NullInt64
+	var cacheWriteTokens, estimatedCost, estimatedCostMaximum, durationMilliseconds sql.NullInt64
 	var costContextValue sql.NullString
 	var costCompleteValue sql.NullBool
 	if err := row.Scan(
@@ -1478,6 +1518,7 @@ func scanReviewAttempt(row rowScanner) (ReviewAttempt, error) {
 		&estimatedCostMaximum,
 		&costContextValue,
 		&costCompleteValue,
+		&durationMilliseconds,
 		&attempt.NewCount,
 		&attempt.ResolvedCount,
 	); err != nil {
@@ -1495,6 +1536,9 @@ func scanReviewAttempt(row rowScanner) (ReviewAttempt, error) {
 	}
 	attempt.CostContext = costContextValue.String
 	attempt.CostComplete = costCompleteValue.Bool
+	if durationMilliseconds.Valid {
+		attempt.DurationMilliseconds = int64Pointer(durationMilliseconds.Int64)
+	}
 	parsed, err := time.Parse(time.RFC3339Nano, reviewedAt)
 	if err != nil {
 		return ReviewAttempt{}, fmt.Errorf("parse review timestamp: %w", err)
@@ -1511,7 +1555,7 @@ func (s *Store) ReviewStats(ctx context.Context, modelFilter string, since *time
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT commit_sha, model, reasoning_effort, input_tokens, cached_input_tokens,
 		       cache_write_tokens, output_tokens, reasoning_output_tokens,
-		       estimated_cost_microusd, estimated_cost_max_microusd
+		       estimated_cost_microusd, estimated_cost_max_microusd, duration_ms
 		FROM review_attempts
 		WHERE (? = '' OR model = ?) AND (? = '' OR reviewed_at >= ?)
 		ORDER BY id`, modelFilter, modelFilter, sinceValue, sinceValue)
@@ -1530,9 +1574,9 @@ func (s *Store) ReviewStats(ctx context.Context, modelFilter string, since *time
 		var sha, model string
 		var effort sql.NullString
 		var input, cached, output, reasoning int64
-		var cacheWrite, minimumCost, maximumCost sql.NullInt64
+		var cacheWrite, minimumCost, maximumCost, durationMilliseconds sql.NullInt64
 		if err := rows.Scan(&sha, &model, &effort, &input, &cached, &cacheWrite,
-			&output, &reasoning, &minimumCost, &maximumCost); err != nil {
+			&output, &reasoning, &minimumCost, &maximumCost, &durationMilliseconds); err != nil {
 			return ReviewStats{}, fmt.Errorf("read review statistics: %w", err)
 		}
 		commits[sha] = struct{}{}
@@ -1570,6 +1614,12 @@ func (s *Store) ReviewStats(ctx context.Context, modelFilter string, since *time
 			stats.UnknownCostAttempts++
 			group.UnknownCostAttempts++
 		}
+		if durationMilliseconds.Valid {
+			stats.DurationMilliseconds += durationMilliseconds.Int64
+			stats.TimedAttempts++
+		} else {
+			stats.UntimedAttempts++
+		}
 	}
 	if err := rows.Err(); err != nil {
 		return ReviewStats{}, fmt.Errorf("read review statistics: %w", err)
@@ -1584,6 +1634,16 @@ func (s *Store) ReviewStats(ctx context.Context, modelFilter string, since *time
 		}
 		return stats.Groups[i].Model < stats.Groups[j].Model
 	})
+	return stats, nil
+}
+
+func (s *Store) ReviewDurationStats(ctx context.Context) (ReviewDurationStats, error) {
+	var stats ReviewDurationStats
+	if err := s.db.QueryRowContext(ctx, `
+		SELECT COALESCE(SUM(duration_ms), 0), COUNT(duration_ms)
+		FROM review_attempts`).Scan(&stats.TotalMilliseconds, &stats.TimedAttempts); err != nil {
+		return ReviewDurationStats{}, fmt.Errorf("read review duration statistics: %w", err)
+	}
 	return stats, nil
 }
 

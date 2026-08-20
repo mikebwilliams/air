@@ -165,6 +165,53 @@ func TestStoreConfigurationValues(t *testing.T) {
 	}
 }
 
+func TestOpenStoreMigratesSchema4WithoutLosingReviewAttempts(t *testing.T) {
+	ctx := context.Background()
+	databasePath := filepath.Join(t.TempDir(), "air.sqlite")
+	store, err := CreateStore(ctx, databasePath, strings.Repeat("0", 40))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.ApplyReview(ctx, testMetadata("a", "0"),
+		ReviewIdentity{Model: modelByName("test-model")}, cleanReview("Historical review."), time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.db.ExecContext(ctx, `ALTER TABLE review_attempts DROP COLUMN duration_ms`); err != nil {
+		t.Fatalf("recreate schema 4: %v", err)
+	}
+	if _, err := store.db.ExecContext(ctx, `PRAGMA user_version = 4`); err != nil {
+		t.Fatalf("set schema version 4: %v", err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	store, err = OpenStore(ctx, databasePath)
+	if err != nil {
+		t.Fatalf("OpenStore migration: %v", err)
+	}
+	defer store.Close()
+	var version int
+	if err := store.db.QueryRowContext(ctx, `PRAGMA user_version`).Scan(&version); err != nil || version != schemaVersion {
+		t.Fatalf("schema version = %d, %v", version, err)
+	}
+	attempts, err := store.ReviewAttempts(ctx, strings.Repeat("a", 40))
+	if err != nil || len(attempts) != 1 || attempts[0].DurationMilliseconds != nil {
+		t.Fatalf("migrated historical attempts = %+v, %v", attempts, err)
+	}
+	newReview := cleanReview("Timed review.")
+	newReview.Duration = 2500 * time.Millisecond
+	if _, err := store.ApplyReview(ctx, testMetadata("b", "a"),
+		ReviewIdentity{Model: modelByName("test-model")}, newReview, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	attempts, err = store.ReviewAttempts(ctx, strings.Repeat("b", 40))
+	if err != nil || len(attempts) != 1 || attempts[0].DurationMilliseconds == nil ||
+		*attempts[0].DurationMilliseconds != 2500 {
+		t.Fatalf("new timed attempts = %+v, %v", attempts, err)
+	}
+}
+
 func TestApplyReviewRollsBackWholeCommit(t *testing.T) {
 	ctx := context.Background()
 	store, err := CreateStore(ctx, filepath.Join(t.TempDir(), "air.sqlite"), strings.Repeat("0", 40))
@@ -351,17 +398,20 @@ func TestReviewStatsAggregateEveryAttemptAndPreserveUnknownCosts(t *testing.T) {
 	firstTime := time.Date(2026, 8, 15, 10, 0, 0, 0, time.UTC)
 	known := cleanReview("Known-price review.")
 	known.Usage = &TokenUsage{InputTokens: 1_000_000, OutputTokens: 1_000_000}
+	known.Duration = 10 * time.Second
 	metadata := testMetadata("h", "0")
 	if _, err := store.ApplyReview(ctx, metadata,
 		ReviewIdentity{Model: modelByName("gpt-5.6-luna"), ReasoningEffort: "low"}, known, firstTime); err != nil {
 		t.Fatal(err)
 	}
+	known.Duration = 20 * time.Second
 	if _, err := store.ApplyReview(ctx, metadata,
 		ReviewIdentity{Model: modelByName("gpt-5.6-luna"), ReasoningEffort: "xhigh"}, known, firstTime.Add(time.Hour)); err != nil {
 		t.Fatal(err)
 	}
 	unknown := cleanReview("Unknown-price review.")
 	unknown.Usage = &TokenUsage{InputTokens: 7, OutputTokens: 3}
+	unknown.Duration = 30 * time.Second
 	if _, err := store.ApplyReview(ctx, testMetadata("i", "h"),
 		ReviewIdentity{Model: modelByName("private-model")}, unknown, firstTime.Add(2*time.Hour)); err != nil {
 		t.Fatal(err)
@@ -374,7 +424,8 @@ func TestReviewStatsAggregateEveryAttemptAndPreserveUnknownCosts(t *testing.T) {
 	if stats.Attempts != 3 || stats.Commits != 2 || stats.InputTokens != 2_000_007 ||
 		stats.OutputTokens != 2_000_003 || stats.PricedAttempts != 2 ||
 		stats.UnknownCostAttempts != 1 || stats.MinimumCostMicrousd == 0 ||
-		stats.MaximumCostMicrousd < stats.MinimumCostMicrousd || len(stats.Groups) != 3 {
+		stats.MaximumCostMicrousd < stats.MinimumCostMicrousd || len(stats.Groups) != 3 ||
+		stats.DurationMilliseconds != 60_000 || stats.TimedAttempts != 3 || stats.UntimedAttempts != 0 {
 		t.Fatalf("review stats = %+v", stats)
 	}
 	since := firstTime.Add(90 * time.Minute)
@@ -383,7 +434,7 @@ func TestReviewStatsAggregateEveryAttemptAndPreserveUnknownCosts(t *testing.T) {
 		t.Fatal(err)
 	}
 	if filtered.Attempts != 1 || filtered.Commits != 1 || filtered.UnknownCostAttempts != 1 ||
-		filtered.InputTokens != 7 {
+		filtered.InputTokens != 7 || filtered.DurationMilliseconds != 30_000 || filtered.TimedAttempts != 1 {
 		t.Fatalf("filtered review stats = %+v", filtered)
 	}
 }

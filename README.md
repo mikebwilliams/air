@@ -43,6 +43,11 @@ make build
 sudo make install
 ```
 
+The first AIR command after this upgrade automatically advances a schema-v4
+database to schema v5 by adding a nullable duration field to successful review
+attempts. Existing reviews and findings are preserved; historical attempts
+have unknown duration.
+
 The install prefix is configurable. For example, a user-local or packaging
 install can use:
 
@@ -106,10 +111,11 @@ always redacted in `config get` and `config list` output.
 | `api-key` | `--api-key` | `AIR_API_KEY`, then `OPENAI_API_KEY` | none |
 
 Each commit gets an independent ephemeral `codex exec` session. AIR supplies
-the exact commit and first-parent identities, open findings, and a JSON output
-schema. Codex discovers the diff and related repository context itself. Its
-commands run with a read-only sandbox and an approval policy of `never`, so an
-unattended scan fails instead of pausing or modifying the repository.
+the exact commit and first-parent identities, bounded resolution candidates,
+and a JSON output schema. Codex discovers the diff and related repository
+context itself. Its commands run with a read-only sandbox and an approval
+policy of `never`, so an unattended scan fails instead of pausing or modifying
+the repository.
 
 Additional optional configuration:
 
@@ -206,8 +212,10 @@ air scan
 ```
 
 Reviewer and validation failures are retained without marking the commit as
-processed. By default the scan stops at the first failure. To finish the rest
-of a batch while still returning a nonzero result at the end:
+processed. By default the current scan stops at the first failure. Later scans
+defer recorded failures and continue with new commits; `air retry` is the
+explicit way to try them again. To finish the rest of the current batch while
+still returning a nonzero result at the end:
 
 ```bash
 air scan --continue-on-error
@@ -297,18 +305,30 @@ air show HEAD --json
 air export --format sarif
 ```
 
-`air show` includes the model, reasoning effort, token usage, and estimated
-cost used for that commit. `--reviews` lists retained attempts, and `--review N`
-shows the findings and accounting recorded by one attempt.
+`air show` includes the model, reasoning effort, token usage, elapsed scan time,
+and estimated cost used for that commit. `--reviews` lists retained attempts,
+and `--review N` shows the findings and accounting recorded by one attempt.
 
 `air stats` aggregates token usage and API-equivalent estimated cost across
 every retained review attempt, including superseded rescans, and shows the
 current repository finding counts. `air cost` provides the accounting-focused
 view. Both accept an exact `--model` filter and a `--since` date or RFC3339
 timestamp. Unknown model prices and unreported cache-write token counts remain
-explicit instead of being silently treated as zero.
+explicit instead of being silently treated as zero. `air stats` also reports
+average scan time per commit across successful attempts with timing data;
+historical attempts without timing remain explicit and do not count as zero.
+
+`air status` is a compact summary of total/open/dismissed/resolved findings and
+unscanned/failed/deferred commits. Unscanned commits are ready for an ordinary
+scan. Failed commits include the complete durable failure queue; deferred
+commits are the live unprocessed subset omitted by ordinary scans. Use
+`air findings`, `air finding`, or `air export` for finding details.
+Status also estimates the time needed for unscanned commits from the average of
+all successful timed attempts. Deferred failures are excluded from that
+estimate. If no timing samples exist, the estimate is reported as unknown.
 
 `status` and `show` support indented, stable-field-name JSON for automation.
+Status JSON contains the same aggregate counts as text output.
 `air export --format json` emits current open findings, while `--format sarif`
 emits SARIF 2.1.0 with file and line locations when the reviewer supplied them.
 Dismissed and resolved findings are excluded from both exports.
@@ -324,7 +344,8 @@ editor. Press `d` to dismiss with a required reason, `r` to reopen after
 confirmation, or `n` to add a note. Lifecycle actions use the same audit trail
 as `air finding`; `?` shows the complete key reference. The command requires an
 interactive terminal, while `air status --json` remains the non-interactive
-interface.
+summary interface and `air export --format json` provides detailed open
+findings.
 
 Triage findings without losing their audit history:
 
@@ -336,9 +357,10 @@ air finding diff 17
 air finding open 17
 ```
 
-Dismissed findings do not appear in `air status` and are not supplied to later
-reviews. Reopening clears either a manual dismissal or a model resolution.
-Every action and note is timestamped in the finding's displayed history.
+Dismissed findings contribute only to the aggregate status count and are not
+supplied to later reviews. Reopening clears either a manual dismissal or a
+model resolution. Every action and note is timestamped in the finding's
+displayed history.
 `diff` delegates the entire introducing commit to `git difftool`, honoring the
 user's Git diff-tool configuration. `open` uses `git var GIT_EDITOR` and opens
 the current working-tree file at the recorded line for common editors; it
@@ -376,19 +398,24 @@ check and a nonzero exit.
   documentation remain in the review input but are explicitly out of scope.
   For a mixed commit, the reviewer considers only executable behavior. For a
   commit containing only excluded content, it returns a clean review.
+- Resolution context is limited to at most 50 open findings whose recorded file
+  exactly matches a textual file changed by the commit. Unlocated, cross-file,
+  and over-limit findings are deferred without changing their state. Each scan
+  result reports supplied and deferred candidate counts.
 - A failed model call or invalid response is retained in `air failures` without
   marking the commit processed. It stops the scan unless `--continue-on-error`
-  is set; default scanning or `air retry` can try it again.
+  is set. Later ordinary scans defer it; `air retry` tries it again explicitly.
 - A database transaction failure always stops the scan.
 - Disjoint scans do not trigger historical lifecycle reconciliation. Scan
   chronologically when accurate finding resolution matters.
 
 ## Reviewer access
 
-The default reviewer receives commit metadata and all currently open findings.
-Codex is pointed at the exact commit and may inspect the diff, repository files,
-and Git history using its normal local tools. AIR does not check out historical
-commits.
+The default reviewer receives commit metadata and a bounded set of open
+resolution candidates associated with files changed by the commit. Codex is
+pointed at the exact commit and may inspect the diff, repository files, and Git
+history using its normal local tools. AIR does not check out historical commits
+or permit the reviewer to resolve findings outside the supplied candidate set.
 
 The Codex subprocess is ephemeral and read-only. AIR asks it not to run builds,
 tests, repository programs, or network commands. Local Codex configuration and

@@ -15,11 +15,13 @@ type scanOptions struct {
 	Explicit        bool
 	Force           bool
 	ForceCommits    map[string]bool
+	IncludeFailures bool
 	DryRun          bool
 	ContinueOnError bool
 	Limit           int
 	Output          io.Writer
 	Now             func() time.Time
+	ElapsedNow      func() time.Time
 	NewReviewer     reviewerFactory
 }
 
@@ -60,20 +62,44 @@ func scanRepository(
 		}
 	}
 	remaining := commits
+	deferredFailureCount := 0
 	if !options.Force {
 		processed, err := store.ProcessedSHAs(ctx)
 		if err != nil {
 			return err
 		}
+		failed := make(map[string]struct{})
+		if !options.IncludeFailures {
+			failureSHAs, err := store.ScanFailureSHAs(ctx)
+			if err != nil {
+				return err
+			}
+			for _, sha := range failureSHAs {
+				failed[sha] = struct{}{}
+			}
+		}
 		remaining = make([]string, 0, len(commits))
 		for _, sha := range commits {
-			if _, exists := processed[sha]; !exists || options.ForceCommits[sha] {
-				remaining = append(remaining, sha)
+			forceCommit := options.ForceCommits[sha]
+			if _, exists := processed[sha]; exists && !forceCommit {
+				continue
 			}
+			if _, exists := failed[sha]; exists && !forceCommit {
+				deferredFailureCount++
+				continue
+			}
+			remaining = append(remaining, sha)
 		}
 	}
 	if options.Limit > 0 && len(remaining) > options.Limit {
 		remaining = remaining[:options.Limit]
+	}
+	if deferredFailureCount != 0 {
+		commitLabel := "commits"
+		if deferredFailureCount == 1 {
+			commitLabel = "commit"
+		}
+		fmt.Fprintf(options.Output, "Deferred %d failed %s; run air retry.\n", deferredFailureCount, commitLabel)
 	}
 	if len(remaining) == 0 {
 		if options.DryRun {
@@ -88,6 +114,10 @@ func scanRepository(
 	if now == nil {
 		now = time.Now
 	}
+	elapsedNow := options.ElapsedNow
+	if elapsedNow == nil {
+		elapsedNow = time.Now
+	}
 	var reviewer Reviewer
 	var identity ReviewIdentity
 	failureCount := 0
@@ -97,6 +127,7 @@ func scanRepository(
 		if err := ctx.Err(); err != nil {
 			return err
 		}
+		scanStarted := elapsedNow()
 		metadata, err := repository.CommitMetadata(ctx, sha)
 		if err != nil {
 			continued, failureErr := recordCommitFailure(ctx, store, options, sha, "", identity, options.Force || options.ForceCommits[sha], err, now())
@@ -151,22 +182,23 @@ func scanRepository(
 				return err
 			}
 		}
-		var openFindings []Finding
+		var eligibleFindings []Finding
 		if force {
-			openFindings, err = store.OpenFindingsExcludingCommit(ctx, sha)
+			eligibleFindings, err = store.OpenFindingsExcludingCommit(ctx, sha)
 		} else {
-			openFindings, err = store.OpenFindings(ctx)
+			eligibleFindings, err = store.OpenFindings(ctx)
 		}
 		if err != nil {
 			return err
 		}
+		openFindings, deferredFindings := selectResolutionCandidates(eligibleFindings, diff.TextFiles)
 		result, err := reviewer.Review(ctx, ReviewInput{
 			Commit:       metadata,
 			Diff:         diff.Text,
 			OpenFindings: openFindings,
 		})
 		if err != nil {
-			failure := fmt.Errorf("review commit %s: %w", shortSHA(sha), err)
+			failure := reviewFailure(sha, len(openFindings), deferredFindings, err)
 			continued, failureErr := recordCommitFailure(ctx, store, options, sha, metadata.ParentSHA, identity, force, failure, now())
 			if failureErr != nil {
 				return failureErr
@@ -181,7 +213,7 @@ func scanRepository(
 			allowed[finding.ID] = struct{}{}
 		}
 		if err := validateReviewOutput(result.Output, allowed); err != nil {
-			failure := fmt.Errorf("review commit %s: %w", shortSHA(sha), err)
+			failure := reviewFailure(sha, len(openFindings), deferredFindings, err)
 			continued, failureErr := recordCommitFailure(ctx, store, options, sha, metadata.ParentSHA, identity, force, failure, now())
 			if failureErr != nil {
 				return failureErr
@@ -192,7 +224,8 @@ func scanRepository(
 			}
 		}
 		if result.Usage == nil {
-			failure := fmt.Errorf("review commit %s: reviewer did not report token usage", shortSHA(sha))
+			failure := reviewFailure(sha, len(openFindings), deferredFindings,
+				fmt.Errorf("reviewer did not report token usage"))
 			continued, failureErr := recordCommitFailure(ctx, store, options, sha, metadata.ParentSHA, identity, force, failure, now())
 			if failureErr != nil {
 				return failureErr
@@ -202,16 +235,22 @@ func scanRepository(
 				continue
 			}
 		}
+		result.Duration = elapsedNow().Sub(scanStarted)
+		if result.Duration < 0 {
+			return fmt.Errorf("measure review duration for commit %s: clock moved backwards", shortSHA(sha))
+		}
 		newIDs, err := store.ApplyReview(ctx, metadata, identity, result, now())
 		if err != nil {
 			return err
 		}
 		fmt.Fprintf(
 			options.Output,
-			"%s  %d new, %d resolved\n",
+			"%s  %d new, %d resolved; resolution candidates: %d supplied, %d deferred\n",
 			shortSHA(sha),
 			len(newIDs),
 			len(result.Output.ResolvedFindings),
+			len(openFindings),
+			deferredFindings,
 		)
 	}
 	if options.DryRun {
@@ -226,6 +265,31 @@ func scanRepository(
 		return fmt.Errorf("%d commits failed; run air failures for details", failureCount)
 	}
 	return nil
+}
+
+func selectResolutionCandidates(findings []Finding, changedFiles []string) ([]Finding, int) {
+	changed := make(map[string]struct{}, len(changedFiles))
+	for _, file := range changedFiles {
+		changed[file] = struct{}{}
+	}
+	candidates := make([]Finding, 0, min(len(findings), maxResolutionCandidates))
+	for _, finding := range findings {
+		if finding.File == nil {
+			continue
+		}
+		if _, exists := changed[*finding.File]; !exists {
+			continue
+		}
+		if len(candidates) < maxResolutionCandidates {
+			candidates = append(candidates, finding)
+		}
+	}
+	return candidates, len(findings) - len(candidates)
+}
+
+func reviewFailure(sha string, supplied, deferred int, err error) error {
+	return fmt.Errorf("review commit %s (resolution candidates: %d supplied, %d deferred): %w",
+		shortSHA(sha), supplied, deferred, err)
 }
 
 func recordCommitFailure(ctx context.Context, store *Store, options scanOptions,

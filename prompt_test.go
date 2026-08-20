@@ -5,7 +5,7 @@ import (
 	"testing"
 )
 
-func TestReviewerPromptsExcludeNonExecutableContent(t *testing.T) {
+func TestReviewerPromptsEnforceReviewScope(t *testing.T) {
 	for name, prompt := range map[string]string{
 		"http":  reviewerSystemPrompt,
 		"codex": codexReviewerPrompt,
@@ -16,6 +16,9 @@ func TestReviewerPromptsExcludeNonExecutableContent(t *testing.T) {
 				"ignore the excluded",
 				"Do not resolve an open finding",
 				"without inspecting unrelated",
+				"complete set of resolution candidates",
+				"inspect AIR's",
+				"database or return any finding ID",
 			} {
 				if !strings.Contains(prompt, phrase) {
 					t.Fatalf("prompt does not contain %q:\n%s", phrase, prompt)
@@ -23,7 +26,7 @@ func TestReviewerPromptsExcludeNonExecutableContent(t *testing.T) {
 			}
 		})
 	}
-	if promptVersion != "3" {
-		t.Fatalf("prompt version = %q, want 3", promptVersion)
+	if promptVersion != "4" {
+		t.Fatalf("prompt version = %q, want 4", promptVersion)
 	}
 }

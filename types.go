@@ -6,10 +6,11 @@ import (
 )
 
 const (
-	promptVersion = "3"
-	masterRef     = "refs/heads/master"
-	maxDiffBytes  = 256 * 1024
-	maxToolBytes  = 64 * 1024
+	promptVersion           = "4"
+	masterRef               = "refs/heads/master"
+	maxDiffBytes            = 256 * 1024
+	maxToolBytes            = 64 * 1024
+	maxResolutionCandidates = 50
 )
 
 type CommitMetadata struct {
@@ -36,6 +37,7 @@ type CommitRecord struct {
 	EstimatedCostMaxMicrousd *int64      `json:"estimated_cost_max_microusd,omitempty"`
 	CostContext              string      `json:"cost_context,omitempty"`
 	CostComplete             bool        `json:"cost_complete"`
+	DurationMilliseconds     *int64      `json:"duration_ms,omitempty"`
 	NewCount                 int         `json:"new_count"`
 	ResolvedCount            int         `json:"resolved_count"`
 }
@@ -55,6 +57,7 @@ type ReviewAttempt struct {
 	EstimatedCostMaxMicrousd *int64     `json:"estimated_cost_max_microusd,omitempty"`
 	CostContext              string     `json:"cost_context,omitempty"`
 	CostComplete             bool       `json:"cost_complete"`
+	DurationMilliseconds     *int64     `json:"duration_ms,omitempty"`
 	NewCount                 int        `json:"new_count"`
 	ResolvedCount            int        `json:"resolved_count"`
 	Current                  bool       `json:"current"`
@@ -73,6 +76,9 @@ type ReviewStats struct {
 	MaximumCostMicrousd   int64
 	PricedAttempts        int
 	UnknownCostAttempts   int
+	DurationMilliseconds  int64
+	TimedAttempts         int
+	UntimedAttempts       int
 	Groups                []ReviewStatsGroup
 }
 
@@ -90,6 +96,11 @@ type ReviewStatsGroup struct {
 	MaximumCostMicrousd   int64
 	PricedAttempts        int
 	UnknownCostAttempts   int
+}
+
+type ReviewDurationStats struct {
+	TotalMilliseconds int64
+	TimedAttempts     int
 }
 
 type FindingStats struct {
@@ -178,6 +189,7 @@ type ReviewResult struct {
 	Output      ReviewOutput
 	RawResponse string
 	Usage       *TokenUsage
+	Duration    time.Duration
 }
 
 type TokenUsage struct {

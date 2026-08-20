@@ -20,6 +20,7 @@ type GitRepository struct {
 
 type DiffResult struct {
 	Text        string
+	TextFiles   []string
 	BinaryFiles []string
 	Empty       bool
 	Oversized   bool
@@ -241,6 +242,7 @@ func (r *GitRepository) CommitDiff(ctx context.Context, parentSHA, sha string) (
 	}
 	return DiffResult{
 		Text:        string(diff.data),
+		TextFiles:   textPaths,
 		BinaryFiles: binaryPaths,
 		Oversized:   diff.exceeded,
 	}, nil

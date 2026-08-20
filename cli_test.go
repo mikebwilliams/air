@@ -46,6 +46,7 @@ func TestCLIInitScanAndQueries(t *testing.T) {
 		"AIR_BASE_URL": "https://model.example/v1",
 		"AIR_API_KEY":  "secret",
 	}
+	elapsedNow := time.Date(2026, 8, 14, 11, 0, 0, 0, time.UTC)
 	environment := cliEnvironment{
 		Cwd:        directory,
 		Stdout:     &stdout,
@@ -53,6 +54,10 @@ func TestCLIInitScanAndQueries(t *testing.T) {
 		Getenv:     func(key string) string { return values[key] },
 		HTTPClient: client,
 		Now:        func() time.Time { return time.Date(2026, 8, 14, 12, 0, 0, 0, time.UTC) },
+		ElapsedNow: func() time.Time {
+			elapsedNow = elapsedNow.Add(45 * time.Second)
+			return elapsedNow
+		},
 	}
 	if err := runCLI(ctx, []string{"init", base}, environment); err != nil {
 		t.Fatalf("init: %v", err)
@@ -75,18 +80,22 @@ func TestCLIInitScanAndQueries(t *testing.T) {
 	if err := runCLI(ctx, []string{"status"}, environment); err != nil {
 		t.Fatalf("status: %v", err)
 	}
-	if !strings.Contains(stdout.String(), "1 open findings") || !strings.Contains(stdout.String(), "test finding") {
+	if !strings.Contains(stdout.String(), "Findings: 1 total (1 open, 0 dismissed, 0 resolved)") ||
+		!strings.Contains(stdout.String(), "Commits: 0 unscanned, 0 failed, 0 deferred") ||
+		strings.Contains(stdout.String(), "test finding") {
 		t.Fatalf("status output:\n%s", stdout.String())
 	}
 	stdout.Reset()
 	if err := runCLI(ctx, []string{"status", "--json"}, environment); err != nil {
 		t.Fatalf("status JSON: %v", err)
 	}
-	var statusJSON struct {
-		OpenFindings []Finding `json:"open_findings"`
-	}
-	if err := json.Unmarshal(stdout.Bytes(), &statusJSON); err != nil || len(statusJSON.OpenFindings) != 1 ||
-		statusJSON.OpenFindings[0].Title != "test finding" {
+	var statusJSON statusOutput
+	if err := json.Unmarshal(stdout.Bytes(), &statusJSON); err != nil ||
+		statusJSON.Findings.Total != 1 || statusJSON.Findings.Open != 1 ||
+		statusJSON.Commits.Unscanned != 0 || statusJSON.Commits.Failed != 0 ||
+		statusJSON.Commits.Deferred != 0 || statusJSON.Commits.TimingSamples != 1 ||
+		statusJSON.Commits.EstimatedScanMilliseconds == nil ||
+		*statusJSON.Commits.EstimatedScanMilliseconds != 0 || strings.Contains(stdout.String(), "test finding") {
 		t.Fatalf("status JSON = %+v, %v; output=%s", statusJSON, err, stdout.String())
 	}
 
@@ -96,6 +105,7 @@ func TestCLIInitScanAndQueries(t *testing.T) {
 	}
 	if !strings.Contains(stdout.String(), "Model: gpt-5.6-luna") ||
 		!strings.Contains(stdout.String(), "Tokens: 120 total (100 input, 25 cached input, 10 cache writes, 20 output, 5 reasoning output)") ||
+		!strings.Contains(stdout.String(), "Scan time: 45s") ||
 		!strings.Contains(stdout.String(), "Estimated cost: $0.000040 USD (short context)") ||
 		!strings.Contains(stdout.String(), "Reviewed app.txt.") ||
 		!strings.Contains(stdout.String(), "#1 warning") {
@@ -108,7 +118,9 @@ func TestCLIInitScanAndQueries(t *testing.T) {
 	var showJSON showJSONOutput
 	if err := json.Unmarshal(stdout.Bytes(), &showJSON); err != nil || showJSON.Commit.SHA != head ||
 		showJSON.Record.Model != "gpt-5.6-luna" || len(showJSON.IntroducedFindings) != 1 ||
-		len(showJSON.Reviews) != 1 || showJSON.Reviews[0].Usage.InputTokens != 100 {
+		showJSON.Record.DurationMilliseconds == nil || *showJSON.Record.DurationMilliseconds != 45_000 ||
+		len(showJSON.Reviews) != 1 || showJSON.Reviews[0].Usage.InputTokens != 100 ||
+		showJSON.Reviews[0].DurationMilliseconds == nil || *showJSON.Reviews[0].DurationMilliseconds != 45_000 {
 		t.Fatalf("show JSON = %+v, %v; output=%s", showJSON, err, stdout.String())
 	}
 
@@ -137,6 +149,7 @@ func TestCLIInitScanAndQueries(t *testing.T) {
 		t.Fatalf("stats: %v", err)
 	}
 	if !strings.Contains(stdout.String(), "Reviews: 1 attempts across 1 commits") ||
+		!strings.Contains(stdout.String(), "Average scan time per commit: 45s (1 timed, 0 without timing)") ||
 		!strings.Contains(stdout.String(), "Tokens: 100 input (25 cached), 10 cache writes, 20 output (5 reasoning)") ||
 		!strings.Contains(stdout.String(), "Estimated cost: $0.000040 USD") ||
 		!strings.Contains(stdout.String(), "gpt-5.6-luna: 1 attempts") {
@@ -590,7 +603,7 @@ func TestCLIFindingTriageCommands(t *testing.T) {
 	if err := runCLI(ctx, []string{"status"}, environment); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(stdout.String(), "0 open findings") {
+	if !strings.Contains(stdout.String(), "Findings: 1 total (0 open, 1 dismissed, 0 resolved)") {
 		t.Fatalf("status after dismissal:\n%s", stdout.String())
 	}
 	if err := runCLI(ctx, []string{"finding", "reopen", id}, environment); err != nil {
@@ -600,8 +613,57 @@ func TestCLIFindingTriageCommands(t *testing.T) {
 	if err := runCLI(ctx, []string{"status"}, environment); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(stdout.String(), "1 open findings") {
+	if !strings.Contains(stdout.String(), "Findings: 1 total (1 open, 0 dismissed, 0 resolved)") {
 		t.Fatalf("status after reopen:\n%s", stdout.String())
+	}
+}
+
+func TestCLIStatusCountsUnscannedFailedAndDeferredCommits(t *testing.T) {
+	ctx := context.Background()
+	repository, directory := newTestGitRepository(t)
+	base := testCommitFile(t, directory, "app.txt", []byte("base\n"), "base")
+	deferred := testCommitFile(t, directory, "app.txt", []byte("deferred\n"), "deferred")
+	unscanned := testCommitFile(t, directory, "app.txt", []byte("unscanned\n"), "unscanned")
+	reviewed := testCommitFile(t, directory, "app.txt", []byte("reviewed\n"), "reviewed")
+	var stdout bytes.Buffer
+	environment := cliEnvironment{
+		Cwd: directory, Stdout: &stdout, Stderr: &bytes.Buffer{},
+		Getenv: func(string) string { return "" },
+	}
+	if err := runCLI(ctx, []string{"init", base}, environment); err != nil {
+		t.Fatal(err)
+	}
+	store, err := OpenStore(ctx, repository.DatabasePath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	identity := ReviewIdentity{Model: modelByName("status-model"), ReasoningEffort: "low"}
+	timedReview := cleanReview("Reviewed.")
+	timedReview.Duration = 2 * time.Minute
+	if _, err := store.ApplyReview(ctx, CommitMetadata{SHA: reviewed, ParentSHA: unscanned},
+		identity, timedReview, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.RecordScanFailure(ctx, deferred, base, identity, false,
+		errors.New("ordinary failure"), time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.RecordScanFailure(ctx, reviewed, unscanned, identity, true,
+		errors.New("failed rescan"), time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	stdout.Reset()
+	if err := runCLI(ctx, []string{"status"}, environment); err != nil {
+		t.Fatalf("status: %v", err)
+	}
+	if !strings.Contains(stdout.String(), "Findings: 0 total (0 open, 0 dismissed, 0 resolved)") ||
+		!strings.Contains(stdout.String(), "Commits: 1 unscanned, 2 failed, 1 deferred") ||
+		!strings.Contains(stdout.String(), "Estimated remaining scan time: 2m0s (1 timing sample)") {
+		t.Fatalf("status output:\n%s", stdout.String())
 	}
 }
 
@@ -617,6 +679,14 @@ func TestCLIPendingAndScanDryRun(t *testing.T) {
 	}
 	if err := runCLI(ctx, []string{"init", base}, environment); err != nil {
 		t.Fatal(err)
+	}
+	stdout.Reset()
+	if err := runCLI(ctx, []string{"status"}, environment); err != nil {
+		t.Fatalf("status before timing data: %v", err)
+	}
+	if !strings.Contains(stdout.String(), "Commits: 1 unscanned, 0 failed, 0 deferred") ||
+		!strings.Contains(stdout.String(), "Estimated remaining scan time: unknown (no successful scan timings)") {
+		t.Fatalf("status before timing data:\n%s", stdout.String())
 	}
 	stdout.Reset()
 	if err := runCLI(ctx, []string{"pending"}, environment); err != nil {
