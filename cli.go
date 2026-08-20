@@ -81,6 +81,8 @@ func runCLI(ctx context.Context, args []string, environment cliEnvironment) erro
 		return runFindings(ctx, args[1:], environment)
 	case "rescan":
 		return runRescan(ctx, args[1:], environment)
+	case "recheck":
+		return runRecheck(ctx, args[1:], environment)
 	default:
 		return fmt.Errorf("unknown command %q; run air help", args[0])
 	}
@@ -105,6 +107,7 @@ func runStats(ctx context.Context, args []string, environment cliEnvironment) er
 		return err
 	}
 	fmt.Fprintf(environment.Stdout, "Reviews: %d attempts across %d commits\n", reviews.Attempts, reviews.Commits)
+	fmt.Fprintf(environment.Stdout, "Rechecks: %d attempts\n", reviews.RecheckAttempts)
 	printReviewDurationStats(environment.Stdout, reviews)
 	printTokenTotals(environment.Stdout, reviews.InputTokens, reviews.CachedInputTokens,
 		reviews.CacheWriteTokens, reviews.CacheWritesUnreported, reviews.OutputTokens,
@@ -135,6 +138,7 @@ func runCost(ctx context.Context, args []string, environment cliEnvironment) err
 	printCostTotals(environment.Stdout, reviews.MinimumCostMicrousd, reviews.MaximumCostMicrousd,
 		reviews.PricedAttempts, reviews.UnknownCostAttempts)
 	fmt.Fprintf(environment.Stdout, "Reviews: %d attempts across %d commits\n", reviews.Attempts, reviews.Commits)
+	fmt.Fprintf(environment.Stdout, "Rechecks: %d attempts\n", reviews.RecheckAttempts)
 	printReviewGroups(environment.Stdout, reviews.Groups)
 	return nil
 }
@@ -814,59 +818,13 @@ func runScanCommand(ctx context.Context, args []string, environment cliEnvironme
 	}
 
 	factory := func() (Reviewer, ReviewIdentity, error) {
-		switch reviewerName.Value {
-		case "codex":
-			configuredModel := strings.TrimSpace(model.Value)
-			if configuredModel == "" {
-				return nil, ReviewIdentity{}, errors.New("model is required for the Codex reviewer; configure it, set AIR_MODEL, or pass --model")
-			}
-			configuredEffort := strings.TrimSpace(effort.Value)
-			if configuredEffort == "" {
-				return nil, ReviewIdentity{}, errors.New("reasoning effort is required for the Codex reviewer; configure it, set AIR_REASONING_EFFORT, or pass --effort")
-			}
-			reviewModel, err := modelForReview(ctx, store, configuredModel)
-			if err != nil {
-				return nil, ReviewIdentity{}, err
-			}
-			return &CodexReviewer{
-				Repository:     repository,
-				Binary:         codexBinary.Value,
-				Model:          configuredModel,
-				Effort:         configuredEffort,
-				Profile:        codexProfile.Value,
-				Timeout:        codexTimeout,
-				CommandContext: environment.CodexCommand,
-			}, ReviewIdentity{Model: reviewModel, ReasoningEffort: configuredEffort}, nil
-		case "http":
-			configuredModel := strings.TrimSpace(model.Value)
-			if configuredModel == "" {
-				return nil, ReviewIdentity{}, errors.New("model is required for the HTTP reviewer; configure it, set AIR_MODEL, or pass --model")
-			}
-			apiKey, _, err := configuredAPIKey(
-				ctx, store, environment.Getenv,
-				*apiKeyFlag, setFlags["api-key"],
-				*apiKeyEnvFlag, setFlags["api-key-env"],
-			)
-			if err != nil {
-				return nil, ReviewIdentity{}, err
-			}
-			if apiKey == "" {
-				return nil, ReviewIdentity{}, errors.New("API key is required for the HTTP reviewer; configure it, set AIR_API_KEY or OPENAI_API_KEY, or pass --api-key/--api-key-env")
-			}
-			reviewModel, err := modelForReview(ctx, store, configuredModel)
-			if err != nil {
-				return nil, ReviewIdentity{}, err
-			}
-			return &HTTPReviewer{
-				Repository: repository,
-				Model:      configuredModel,
-				BaseURL:    baseURL.Value,
-				APIKey:     apiKey,
-				Client:     environment.HTTPClient,
-			}, ReviewIdentity{Model: reviewModel}, nil
-		default:
-			return nil, ReviewIdentity{}, fmt.Errorf("unknown reviewer %q; expected codex or http", reviewerName.Value)
-		}
+		backend, identity, err := newReviewerBackend(
+			ctx, repository, store, environment,
+			reviewerName.Value, model.Value, effort.Value,
+			codexBinary.Value, codexProfile.Value, codexTimeout, baseURL.Value,
+			*apiKeyFlag, setFlags["api-key"], *apiKeyEnvFlag, setFlags["api-key-env"],
+		)
+		return backend, identity, err
 	}
 	return scanRepository(ctx, repository, store, scanOptions{
 		RevisionRange:   revisionRange,
@@ -882,6 +840,173 @@ func runScanCommand(ctx context.Context, args []string, environment cliEnvironme
 		Now:             environment.Now,
 		ElapsedNow:      environment.ElapsedNow,
 		NewReviewer:     factory,
+	})
+}
+
+func newReviewerBackend(
+	ctx context.Context,
+	repository *GitRepository,
+	store *Store,
+	environment cliEnvironment,
+	reviewerName, model, effort, codexBinary, codexProfile string,
+	codexTimeout time.Duration,
+	baseURL, apiKeyFlag string,
+	apiKeySet bool,
+	apiKeyEnvFlag string,
+	apiKeyEnvSet bool,
+) (ReviewerBackend, ReviewIdentity, error) {
+	configuredModel := strings.TrimSpace(model)
+	switch reviewerName {
+	case "codex":
+		if configuredModel == "" {
+			return nil, ReviewIdentity{}, errors.New("model is required for the Codex reviewer; configure it, set AIR_MODEL, or pass --model")
+		}
+		configuredEffort := strings.TrimSpace(effort)
+		if configuredEffort == "" {
+			return nil, ReviewIdentity{}, errors.New("reasoning effort is required for the Codex reviewer; configure it, set AIR_REASONING_EFFORT, or pass --effort")
+		}
+		reviewModel, err := modelForReview(ctx, store, configuredModel)
+		if err != nil {
+			return nil, ReviewIdentity{}, err
+		}
+		return &CodexReviewer{
+			Repository: repository, Binary: codexBinary, Model: configuredModel,
+			Effort: configuredEffort, Profile: codexProfile, Timeout: codexTimeout,
+			CommandContext: environment.CodexCommand,
+		}, ReviewIdentity{Model: reviewModel, ReasoningEffort: configuredEffort}, nil
+	case "http":
+		if configuredModel == "" {
+			return nil, ReviewIdentity{}, errors.New("model is required for the HTTP reviewer; configure it, set AIR_MODEL, or pass --model")
+		}
+		apiKey, _, err := configuredAPIKey(ctx, store, environment.Getenv,
+			apiKeyFlag, apiKeySet, apiKeyEnvFlag, apiKeyEnvSet)
+		if err != nil {
+			return nil, ReviewIdentity{}, err
+		}
+		if apiKey == "" {
+			return nil, ReviewIdentity{}, errors.New("API key is required for the HTTP reviewer; configure it, set AIR_API_KEY or OPENAI_API_KEY, or pass --api-key/--api-key-env")
+		}
+		reviewModel, err := modelForReview(ctx, store, configuredModel)
+		if err != nil {
+			return nil, ReviewIdentity{}, err
+		}
+		return &HTTPReviewer{
+			Repository: repository, Model: configuredModel, BaseURL: baseURL,
+			APIKey: apiKey, Client: environment.HTTPClient,
+		}, ReviewIdentity{Model: reviewModel}, nil
+	default:
+		return nil, ReviewIdentity{}, fmt.Errorf("unknown reviewer %q; expected codex or http", reviewerName)
+	}
+}
+
+func runRecheck(ctx context.Context, args []string, environment cliEnvironment) error {
+	flags := newFlagSet("recheck", environment.Stderr)
+	reviewerFlag := flags.String("reviewer", "", "review backend: codex or http")
+	limit := flags.Int("limit", 0, "maximum findings to recheck; zero means unlimited")
+	batchSize := flags.Int("batch-size", defaultRecheckBatchSize, "findings per model call")
+	force := flags.Bool("force", false, "repeat checks already completed with this model at HEAD")
+	dryRun := flags.Bool("dry-run", false, "show pending work without reviewing or writing")
+	continueOnError := flags.Bool("continue-on-error", false, "continue after a failed model batch")
+	modelFlag := flags.String("model", "", "model identifier")
+	effortFlag := flags.String("effort", "", "Codex reasoning effort")
+	codexBinaryFlag := flags.String("codex-bin", "", "Codex CLI executable")
+	codexProfileFlag := flags.String("codex-profile", "", "Codex configuration profile")
+	codexTimeoutFlag := flags.String("codex-timeout", "", "per-batch Codex timeout")
+	baseURLFlag := flags.String("base-url", "", "OpenAI-compatible API base URL")
+	apiKeyEnvFlag := flags.String("api-key-env", "", "environment variable containing the API key")
+	apiKeyFlag := flags.String("api-key", "", "HTTP reviewer API key (prefer an environment variable)")
+	if err := flags.Parse(args); err != nil {
+		return err
+	}
+	if *limit < 0 {
+		return errors.New("--limit must not be negative")
+	}
+	if *batchSize <= 0 || *batchSize > maxRecheckBatchSize {
+		return fmt.Errorf("--batch-size must be between 1 and %d", maxRecheckBatchSize)
+	}
+	if *dryRun && *continueOnError {
+		return errors.New("--continue-on-error is not valid with --dry-run")
+	}
+	ids := make([]int64, 0, flags.NArg())
+	for _, value := range flags.Args() {
+		id, err := parseFindingID(value)
+		if err != nil {
+			return fmt.Errorf("invalid recheck finding %q: %w", value, err)
+		}
+		ids = append(ids, id)
+	}
+	repository, err := DiscoverGitRepository(ctx, environment.Cwd)
+	if err != nil {
+		return err
+	}
+	store, err := OpenStore(ctx, repository.DatabasePath())
+	if err != nil {
+		return err
+	}
+	defer store.Close()
+	setFlags := visitedFlagNames(flags)
+	resolve := func(key, commandLineValue string) (resolvedSetting, error) {
+		setting, _ := settingByKey(key)
+		return resolveSettingValue(ctx, store, environment.Getenv, setting, commandLineValue, setFlags[key])
+	}
+	reviewerName, err := resolve("reviewer", *reviewerFlag)
+	if err != nil {
+		return err
+	}
+	model, err := resolve("model", *modelFlag)
+	if err != nil {
+		return err
+	}
+	effort, err := resolve("effort", *effortFlag)
+	if err != nil {
+		return err
+	}
+	codexBinary, err := resolve("codex-bin", *codexBinaryFlag)
+	if err != nil {
+		return err
+	}
+	codexProfile, err := resolve("codex-profile", *codexProfileFlag)
+	if err != nil {
+		return err
+	}
+	codexTimeoutValue, err := resolve("codex-timeout", *codexTimeoutFlag)
+	if err != nil {
+		return err
+	}
+	codexTimeout, err := time.ParseDuration(codexTimeoutValue.Value)
+	if err != nil {
+		return fmt.Errorf("parse codex-timeout: %w", err)
+	}
+	baseURL, err := resolve("base-url", *baseURLFlag)
+	if err != nil {
+		return err
+	}
+	configuredModel := strings.TrimSpace(model.Value)
+	if configuredModel == "" {
+		return fmt.Errorf("model is required for the %s reviewer; configure it, set AIR_MODEL, or pass --model", reviewerName.Value)
+	}
+	configuredEffort := ""
+	if reviewerName.Value == "codex" {
+		configuredEffort = strings.TrimSpace(effort.Value)
+		if configuredEffort == "" {
+			return errors.New("reasoning effort is required for the Codex reviewer; configure it, set AIR_REASONING_EFFORT, or pass --effort")
+		}
+	}
+	factory := func() (RecheckReviewer, ReviewIdentity, error) {
+		backend, identity, err := newReviewerBackend(
+			ctx, repository, store, environment,
+			reviewerName.Value, configuredModel, configuredEffort,
+			codexBinary.Value, codexProfile.Value, codexTimeout, baseURL.Value,
+			*apiKeyFlag, setFlags["api-key"], *apiKeyEnvFlag, setFlags["api-key-env"],
+		)
+		return backend, identity, err
+	}
+	return recheckRepository(ctx, repository, store, recheckOptions{
+		FindingIDs: ids, Reviewer: reviewerName.Value, Model: configuredModel,
+		ReasoningEffort: configuredEffort, Limit: *limit, BatchSize: *batchSize,
+		Force: *force, DryRun: *dryRun, ContinueOnError: *continueOnError,
+		Output: environment.Stdout, Now: environment.Now, ElapsedNow: environment.ElapsedNow,
+		NewReviewer: factory,
 	})
 }
 
@@ -1783,7 +1908,7 @@ func visitedFlagNames(flags *flag.FlagSet) map[string]bool {
 }
 
 func printUsage(output io.Writer) {
-	fmt.Fprintln(output, `AIR reviews commits on the first-parent history of master.
+	fmt.Fprintln(output, `AIR reviews commits and rechecks findings on master.
 
 Usage:
   air init <commit-ish>
@@ -1792,6 +1917,7 @@ Usage:
   air failures [--json]
   air pending [--limit N] [<from>..<to>]
   air rescan <commit-ish> [flags]
+  air recheck [flags] [<finding-id> ...]
   air clean [--dry-run]
   air reset [--force]
   air config <get|set|unset|list> ...
@@ -1822,7 +1948,7 @@ Reviewer environment variables:
                      Codex reasoning effort (required for Codex)
   AIR_CODEX_BIN      Codex CLI executable (default: codex)
   AIR_CODEX_PROFILE  Optional Codex configuration profile
-  AIR_CODEX_TIMEOUT  Per-commit timeout (default: 20m)
+  AIR_CODEX_TIMEOUT  Per-review or recheck-batch timeout (default: 20m)
   AIR_BASE_URL       HTTP reviewer base URL (default: https://api.openai.com/v1)
   AIR_API_KEY        HTTP reviewer API key
   AIR_API_KEY_ENV    Name of another environment variable containing the API key

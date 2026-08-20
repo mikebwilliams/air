@@ -43,10 +43,10 @@ make build
 sudo make install
 ```
 
-The first AIR command after this upgrade automatically advances a schema-v4
-database to schema v5 by adding a nullable duration field to successful review
-attempts. Existing reviews and findings are preserved; historical attempts
-have unknown duration.
+The first AIR command after this upgrade automatically advances schema-v4 or
+schema-v5 databases to schema v6. The migrations add successful scan timing and
+separate HEAD-recheck history without rewriting existing reviews or findings.
+Historical review attempts retain an explicitly unknown duration.
 
 The install prefix is configurable. For example, a user-local or packaging
 install can use:
@@ -132,9 +132,10 @@ The corresponding flags are `--model`, `--effort`, `--codex-bin`,
 air scan --model your-codex-model --effort high
 ```
 
-AIR passes both values explicitly to Codex and records them on every reviewed
-commit. The timeout applies independently to each commit and defaults to twenty
-minutes. AIR does not read or copy Codex credentials.
+AIR passes both values explicitly to Codex and records them on every commit
+review or HEAD recheck. The timeout applies independently to each commit review
+or recheck batch and defaults to twenty minutes. AIR does not read or copy
+Codex credentials.
 
 AIR records input, cached-input, cache-write, output, and reasoning-output token
 counts from each review. Its model registry includes a dated snapshot of the
@@ -287,6 +288,36 @@ attempt retains its model, effort, prompt version, token usage, cost, summary,
 and raw response. Finding updates are conservative and additive: rescanning
 does not silently delete findings created by an earlier attempt.
 
+Reconcile current open findings against the exact `HEAD` snapshot, optionally
+using a stronger model than the ordinary scanner:
+
+```bash
+air recheck --model gpt-5.6-sol --effort xhigh
+air recheck --model gpt-5.6-sol --effort xhigh 17 31 562
+air recheck --limit 50
+air recheck --dry-run
+```
+
+With no IDs, `recheck` processes all eligible open findings. It requires `HEAD`
+to be the tip of `master`, pins that SHA for the entire invocation, and uses
+the same reviewer configuration precedence as `scan`. Findings are processed
+in batches of 20 by default; `--batch-size N` accepts 1 through 50.
+
+Every finding receives one recorded outcome: `resolved`, `still_present`, or
+`uncertain`. Only `resolved` closes a finding. The other outcomes leave it open,
+and all outcomes and reasons appear in `air finding` and the interactive
+browser history. Recheck never creates findings and does not restrict model
+inspection to the recorded file, allowing it to recognize renames and
+cross-file fixes.
+
+Successful results are resumable per finding. A later invocation skips a
+finding already checked at the same HEAD with the same reviewer, model, effort,
+and recheck prompt version. A changed HEAD or different model/effort checks it
+again; `--force` repeats an otherwise identical check. Each successful batch
+is committed independently, and `--continue-on-error` continues after a failed
+model batch. Failed batches do not change finding state; rerunning naturally
+selects them while skipping successful batches.
+
 Inspect results:
 
 ```bash
@@ -310,13 +341,15 @@ and estimated cost used for that commit. `--reviews` lists retained attempts,
 and `--review N` shows the findings and accounting recorded by one attempt.
 
 `air stats` aggregates token usage and API-equivalent estimated cost across
-every retained review attempt, including superseded rescans, and shows the
-current repository finding counts. `air cost` provides the accounting-focused
-view. Both accept an exact `--model` filter and a `--since` date or RFC3339
-timestamp. Unknown model prices and unreported cache-write token counts remain
-explicit instead of being silently treated as zero. `air stats` also reports
-average scan time per commit across successful attempts with timing data;
-historical attempts without timing remain explicit and do not count as zero.
+every retained commit-review and HEAD-recheck attempt, including superseded
+rescans, and shows the current repository finding counts. `air cost` provides
+the accounting-focused view. Both accept an exact `--model` filter and a
+`--since` date or RFC3339 timestamp. Unknown model prices and unreported
+cache-write token counts remain explicit instead of being silently treated as
+zero. Recheck attempts are reported separately from commit-review attempts.
+`air stats` computes average scan time per commit only from successful commit
+reviews; recheck batch timings do not affect that estimate. Historical commit
+attempts without timing remain explicit and do not count as zero.
 
 `air status` is a compact summary of total/open/dismissed/resolved findings and
 unscanned/failed/deferred commits. Unscanned commits are ready for an ordinary
@@ -358,9 +391,9 @@ air finding open 17
 ```
 
 Dismissed findings contribute only to the aggregate status count and are not
-supplied to later reviews. Reopening clears either a manual dismissal or a
-model resolution. Every action and note is timestamped in the finding's
-displayed history.
+supplied to later reviews. Reopening clears either a manual dismissal, commit
+resolution, or HEAD-recheck resolution. Every action, recheck outcome, and note
+is timestamped in the finding's displayed history.
 `diff` delegates the entire introducing commit to `git difftool`, honoring the
 user's Git diff-tool configuration. `open` uses `git var GIT_EDITOR` and opens
 the current working-tree file at the recorded line for common editors; it

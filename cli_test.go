@@ -554,6 +554,116 @@ func TestCLIRescanAndReviewAttemptDisplay(t *testing.T) {
 	}
 }
 
+func TestCLIRecheckUsesModelOverridesAndResumesAtHEAD(t *testing.T) {
+	ctx := context.Background()
+	repository, directory := newTestGitRepository(t)
+	base := testCommitFile(t, directory, "app.go", []byte("package app\n"), "base")
+	head := testCommitFile(t, directory, "app.go", []byte("package app\n\nfunc fixed() {}\n"), "head")
+	var stdout bytes.Buffer
+	now := time.Date(2026, 8, 20, 15, 0, 0, 0, time.UTC)
+	environment := cliEnvironment{
+		Cwd: directory, Stdout: &stdout, Stderr: &bytes.Buffer{},
+		Getenv: func(string) string { return "" }, Now: func() time.Time { return now },
+	}
+	if err := runCLI(ctx, []string{"init", base}, environment); err != nil {
+		t.Fatal(err)
+	}
+	store, err := OpenStore(ctx, repository.DatabasePath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	seed := cleanReview("Seed findings.")
+	seed.Output.NewFindings = []NewFinding{
+		{Severity: "warning", Title: "fixed failure", Description: "The old path fails.", File: stringPointer("app.go")},
+		{Severity: "warning", Title: "remaining failure", Description: "Another path fails.", File: stringPointer("app.go")},
+	}
+	if _, err := store.ApplyReview(ctx, CommitMetadata{SHA: base},
+		ReviewIdentity{Model: modelByName("seed-model")}, seed, now); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	firstCommand, firstInvocation := newCodexTestCommand(t, RecheckOutput{
+		Findings: []RecheckFindingResult{
+			{ID: 1, Outcome: "resolved", Reason: "The failing path was removed."},
+			{ID: 2, Outcome: "still_present", Reason: "The second path remains."},
+		},
+		Summary: "Checked both findings.",
+	}, "")
+	environment.CodexCommand = firstCommand
+	stdout.Reset()
+	if err := runCLI(ctx, []string{
+		"recheck", "--model", "gpt-5.6-luna", "--effort", "low", "--batch-size", "2",
+	}, environment); err != nil {
+		t.Fatalf("recheck: %v", err)
+	}
+	if firstInvocation.Name == "" ||
+		!strings.Contains(stdout.String(), "1 resolved, 1 still present, 0 uncertain") ||
+		!strings.Contains(stdout.String(), "Rechecked 2 findings at "+shortSHA(head)+" with gpt-5.6-luna/low") {
+		t.Fatalf("first recheck output:\n%s", stdout.String())
+	}
+
+	secondCommand, secondInvocation := newCodexTestCommand(t, RecheckOutput{}, "should not run")
+	environment.CodexCommand = secondCommand
+	stdout.Reset()
+	if err := runCLI(ctx, []string{"recheck", "--model", "gpt-5.6-luna", "--effort", "low"}, environment); err != nil {
+		t.Fatalf("resumed recheck: %v", err)
+	}
+	if secondInvocation.Name != "" || !strings.Contains(stdout.String(), "1 already checked") {
+		t.Fatalf("resumed recheck invocation=%q output=%q", secondInvocation.Name, stdout.String())
+	}
+
+	strongCommand, _ := newCodexTestCommand(t, RecheckOutput{
+		Findings: []RecheckFindingResult{
+			{ID: 2, Outcome: "uncertain", Reason: "The necessary generated code is unavailable."},
+		},
+		Summary: "Rechecked the remaining finding.",
+	}, "")
+	environment.CodexCommand = strongCommand
+	stdout.Reset()
+	if err := runCLI(ctx, []string{"recheck", "--model", "gpt-5.6-sol", "--effort", "xhigh", "2"}, environment); err != nil {
+		t.Fatalf("strong recheck: %v", err)
+	}
+	if !strings.Contains(stdout.String(), "gpt-5.6-sol/xhigh") || !strings.Contains(stdout.String(), "1 uncertain") {
+		t.Fatalf("strong recheck output:\n%s", stdout.String())
+	}
+	stdout.Reset()
+	if err := runCLI(ctx, []string{"finding", "2"}, environment); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(stdout.String(), "recheck still present (gpt-5.6-luna/low)") ||
+		!strings.Contains(stdout.String(), "recheck uncertain (gpt-5.6-sol/xhigh)") {
+		t.Fatalf("finding recheck history:\n%s", stdout.String())
+	}
+	stdout.Reset()
+	if err := runCLI(ctx, []string{"stats"}, environment); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(stdout.String(), "Rechecks: 2 attempts") {
+		t.Fatalf("stats with rechecks:\n%s", stdout.String())
+	}
+}
+
+func TestCLIRecheckRequiresHEADAtMasterTip(t *testing.T) {
+	ctx := context.Background()
+	_, directory := newTestGitRepository(t)
+	base := testCommitFile(t, directory, "app.go", []byte("package app\n"), "base")
+	testGit(t, directory, "switch", "-c", "topic")
+	testCommitFile(t, directory, "app.go", []byte("package app\n// topic\n"), "topic")
+	environment := cliEnvironment{
+		Cwd: directory, Stdout: &bytes.Buffer{}, Stderr: &bytes.Buffer{},
+		Getenv: func(string) string { return "" },
+	}
+	if err := runCLI(ctx, []string{"init", base}, environment); err != nil {
+		t.Fatal(err)
+	}
+	err := runCLI(ctx, []string{"recheck", "--model", "test-model", "--effort", "low"}, environment)
+	if err == nil || !strings.Contains(err.Error(), "is not the tip of master") {
+		t.Fatalf("recheck branch error = %v", err)
+	}
+}
+
 func TestCLIFindingTriageCommands(t *testing.T) {
 	ctx := context.Background()
 	repository, directory := newTestGitRepository(t)

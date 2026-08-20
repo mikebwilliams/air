@@ -86,14 +86,20 @@ A finding has a lifecycle beginning with the commit believed to have introduced 
 
 ### Open finding
 
-A finding for which no resolving commit has been recorded.
+A finding for which neither a resolving commit nor a resolving HEAD recheck has
+been recorded and which has not been manually dismissed.
 
 ### Review
 
 A single LLM analysis of a Git commit.
 
-The initial implementation stores at most one review for a commit. Rescanning
-and review history are deferred.
+Successful rescans retain immutable review-attempt history while replacing the
+commit's current review fields.
+
+### Recheck
+
+A model assessment of one or more existing open findings against an exact HEAD
+snapshot. A recheck never discovers new findings or replaces a commit review.
 
 ## 4. Repository Storage
 
@@ -122,10 +128,12 @@ The database must not modify or require files in the tracked working tree.
 ## 5. SQLite Schema
 
 The schema should remain intentionally small. Schema version 5 adds the
-nullable `review_attempts.duration_ms` column. Opening a version-4 database
-upgrades it transactionally without rewriting or deleting review data;
-historical attempts retain a null, explicitly unknown duration. Other schema
-version mismatches remain errors.
+nullable `review_attempts.duration_ms` column. Schema version 6 adds separate
+HEAD-recheck attempts and per-finding results plus a nullable finding link for
+recheck resolutions. Opening a version-4 or version-5 database upgrades it
+transactionally without rewriting or deleting review data; historical review
+attempts retain a null, explicitly unknown duration. Other schema version
+mismatches remain errors.
 
 ### 5.1 `config`
 
@@ -208,8 +216,8 @@ Prices in USD per million tokens:
 The `gpt-5.6` alias uses the Sol rows.
 
 The model configuration is inserted or refreshed transactionally whenever a
-review using that model is recorded. Review rows retain their computed cost,
-so a later pricing update affects only later reviews.
+review or recheck using that model is recorded. Attempt rows retain their
+computed cost, so a later pricing update affects only later attempts.
 
 `air model list` merges compiled models with database records, with the
 database authoritative on name collisions. `air model show` displays all
@@ -307,6 +315,7 @@ CREATE TABLE findings (
     introduced_sha  TEXT NOT NULL,
 	introduced_review_id INTEGER NOT NULL,
     resolved_sha    TEXT,
+	resolved_recheck_id INTEGER,
 	dismissed_at      TEXT,
 	dismiss_reason    TEXT,
     severity        TEXT NOT NULL,
@@ -318,7 +327,8 @@ CREATE TABLE findings (
 
 	FOREIGN KEY(introduced_sha) REFERENCES commits(sha) ON DELETE CASCADE,
 	FOREIGN KEY(introduced_review_id) REFERENCES review_attempts(id) ON DELETE CASCADE,
-    FOREIGN KEY(resolved_sha) REFERENCES commits(sha) ON DELETE SET NULL
+    FOREIGN KEY(resolved_sha) REFERENCES commits(sha) ON DELETE SET NULL,
+	FOREIGN KEY(resolved_recheck_id) REFERENCES recheck_attempts(id) ON DELETE SET NULL
 );
 ```
 
@@ -387,6 +397,59 @@ Git inspection failure is recorded here without adding the commit to
 retrying it preserves the user's request for another review attempt. Recording
 a successful review or intentional skip deletes the failure in the same SQLite
 transaction.
+
+### 5.8 `recheck_attempts` and `recheck_results`
+
+Schema version 6 stores HEAD reconciliation independently of commit reviews:
+
+```sql
+CREATE TABLE recheck_attempts (
+    id                      INTEGER PRIMARY KEY,
+    head_sha                TEXT NOT NULL,
+    checked_at              TEXT NOT NULL,
+    reviewer                TEXT NOT NULL,
+    model                   TEXT NOT NULL,
+    reasoning_effort        TEXT,
+    prompt_version          TEXT NOT NULL,
+    summary                 TEXT NOT NULL,
+    raw_response            TEXT NOT NULL,
+    input_tokens            INTEGER NOT NULL,
+    cached_input_tokens     INTEGER NOT NULL,
+    cache_write_tokens      INTEGER,
+    output_tokens           INTEGER NOT NULL,
+    reasoning_output_tokens INTEGER NOT NULL,
+    estimated_cost_microusd INTEGER,
+    estimated_cost_max_microusd INTEGER,
+    cost_context            TEXT,
+    cost_complete           INTEGER,
+    duration_ms             INTEGER NOT NULL,
+    finding_count           INTEGER NOT NULL,
+    resolved_count          INTEGER NOT NULL,
+    still_present_count     INTEGER NOT NULL,
+    uncertain_count         INTEGER NOT NULL,
+
+    FOREIGN KEY(model) REFERENCES models(name)
+);
+
+CREATE TABLE recheck_results (
+    id          INTEGER PRIMARY KEY,
+    recheck_id  INTEGER NOT NULL,
+    finding_id  INTEGER NOT NULL,
+    outcome     TEXT NOT NULL,
+    reason      TEXT NOT NULL,
+
+    FOREIGN KEY(recheck_id) REFERENCES recheck_attempts(id) ON DELETE CASCADE,
+    FOREIGN KEY(finding_id) REFERENCES findings(id) ON DELETE CASCADE,
+    UNIQUE(recheck_id, finding_id)
+);
+```
+
+`outcome` is `resolved`, `still_present`, or `uncertain`. Only `resolved`
+populates `findings.resolved_recheck_id`. The effective resolving SHA is the
+attempt's `head_sha`; that SHA deliberately has no `commits` foreign key because
+HEAD may not have received a commit review. Finding-history queries synthesize
+recheck entries from these immutable result rows, including model, effort,
+outcome, reason, timestamp, and HEAD SHA.
 
 Every SQLite connection must enable foreign-key enforcement:
 
@@ -696,6 +759,12 @@ and:
 ```text
 finding_events.action = resolved
 ```
+
+A HEAD recheck resolving the finding leaves `resolved_sha` null and sets
+`resolved_recheck_id` to its immutable attempt. The effective resolving SHA is
+the recheck's target HEAD, and history output is synthesized from the retained
+recheck result. Reopening clears either resolution field without deleting that
+historical assessment.
 
 A finding not mentioned by a later review remains open.
 
@@ -1033,6 +1102,43 @@ air show <commit-ish> --reviews
 air show <commit-ish> --review 2
 ```
 
+### Recheck open findings at HEAD
+
+```bash
+air recheck [reviewer flags] [<finding-id> ...]
+air recheck --model gpt-5.6-sol --effort xhigh
+air recheck --model gpt-5.6-sol --effort xhigh 17 31 562
+```
+
+With no IDs, the command selects all current open findings. Explicit IDs must
+also be open. AIR resolves `HEAD` once, requires it to equal the tip of
+`refs/heads/master`, and directs the reviewer to inspect that exact Git object
+rather than unrelated working-tree contents. The finding's recorded location
+is only a starting point; the reviewer may inspect related files and history to
+recognize moved code, renames, and cross-file fixes. It must not discover or
+return new findings.
+
+The structured response contains exactly one result per supplied finding with
+an outcome of `resolved`, `still_present`, or `uncertain` and a concrete reason.
+Only `resolved` changes finding disposition. All successful outcomes are
+retained for auditability and shown by `air finding` and the interactive
+browser.
+
+AIR processes batches of 20 findings by default. `--batch-size N` accepts 1
+through 50, `--limit N` bounds the number of findings selected by one command,
+and `--dry-run` reports pending work without invoking a reviewer or writing.
+Each successful batch is committed atomically. `--continue-on-error` continues
+after failed model batches and returns a nonzero result at the end. Failed
+recheck batches do not change finding state or create successful-attempt rows;
+rerunning the command naturally selects them while skipping completed batches.
+
+Successful results are resumable by finding ID, target HEAD, reviewer backend,
+model, effort, and recheck prompt version. The same identity at the same HEAD is
+skipped on later runs; a changed HEAD or model/effort is eligible again.
+`--force` repeats otherwise identical successful checks. Recheck uses the same
+CLI/environment/database reviewer-setting precedence as `scan`, so a one-off
+stronger model needs no separate configuration record.
+
 ### Repository accounting
 
 ```bash
@@ -1040,15 +1146,17 @@ air stats [--model MODEL] [--since DATE]
 air cost [--model MODEL] [--since DATE]
 ```
 
-Accounting includes every retained review attempt because superseded rescans
-still consumed tokens. Totals include input, cached-input, cache-write, output,
-and reasoning-output tokens and are grouped by model and reasoning effort.
-Costs are summed as lower and upper bounds from the estimates stored on each
-attempt. Attempts with unknown prices and attempts whose backend omitted
-cache-write usage are counted explicitly. `--since` accepts either a UTC date
-or an RFC3339 timestamp; `--model` is an exact model identifier match. `stats`
-reports average scan time per commit across successful timed attempts selected
-by those filters and separately counts historical attempts without timing.
+Accounting includes every retained commit-review and HEAD-recheck attempt
+because superseded rescans and reconciliation calls still consumed tokens.
+Totals include input, cached-input, cache-write, output, and reasoning-output
+tokens and are grouped by model and reasoning effort. Costs are summed as lower
+and upper bounds from the estimates stored on each attempt. Attempts with
+unknown prices and attempts whose backend omitted cache-write usage are counted
+explicitly. `--since` accepts either a UTC date or an RFC3339 timestamp;
+`--model` is an exact model identifier match. Commit reviews and rechecks have
+separate attempt counts. `stats` reports average scan time per commit only from
+successful timed commit reviews selected by those filters; recheck batch
+durations do not affect scan-time estimates.
 
 `air stats` also reports current open, dismissed, and resolved finding counts
 and the number of skipped commits. These repository-state counts are not
@@ -1084,8 +1192,8 @@ existing authentication, configuration, repository instructions, and exec
 policy. AIR never reads or copies Codex credentials.
 
 Every reviewer setting has a database representation, an environment-variable
-override, and a scan flag override. Values are resolved with this fixed
-precedence:
+override, and a `scan`, `retry`, `rescan`, or `recheck` flag override. Values are
+resolved with this fixed precedence:
 
 ```text
 command-line flag > environment variable > database > built-in default
@@ -1114,7 +1222,7 @@ Codex reviews require explicit effective `model` and `effort` values so the exac
 review provenance is known rather than inferred from changing local Codex
 defaults. AIR passes them to Codex as `--model` and
 `model_reasoning_effort=<value>`. `codex-timeout` is a positive Go duration and
-bounds each commit review independently.
+bounds each commit review or recheck batch independently.
 
 The `http` reviewer remains as an explicit fallback. `api-key-env` may name a
 different key variable. Credential resolution is `--api-key`,
@@ -1124,9 +1232,10 @@ model and API key and uses an OpenAI-compatible `/chat/completions` endpoint
 with function tool calls.
 
 Both reviewers must report token usage. AIR records input, cached-input,
-cache-write, output, and reasoning-output counts for every reviewed commit.
-HTTP usage is summed across all tool-call and repair rounds for that commit. A
-Codex JSONL review uses the usage in its final `turn.completed` event.
+cache-write, output, and reasoning-output counts for every commit review and
+recheck batch. HTTP usage is summed across all tool-call and repair rounds for
+that attempt. A Codex JSONL attempt uses the usage in its final
+`turn.completed` event.
 
 Neither backend reports an authoritative monetary charge. In particular,
 Codex authenticated through a ChatGPT account consumes plan limits or credits,
@@ -1167,6 +1276,12 @@ mixed commits.
 Prompt version 4 retains that scope policy and defines the supplied open
 findings as the only permitted resolution candidates. Other open findings may
 exist but are explicitly out of scope for that review.
+
+HEAD rechecks have an independent prompt-version sequence because they do not
+review a commit diff or discover findings. Recheck prompt version 1 requires
+exactly one `resolved`, `still_present`, or `uncertain` result for every supplied
+finding, prohibits new findings, and treats recorded locations as context rather
+than an inspection boundary.
 
 This allows later analysis of behavior differences between review generations.
 
@@ -1274,7 +1389,8 @@ Important principles:
 
 - review only newly discovered commits;
 - do not re-review unchanged commits;
-- do not repeatedly ask whether every existing finding remains open;
+- do not repeatedly ask whether findings remain open during ordinary scans;
+- make explicit HEAD rechecks resumable by target and reviewer identity;
 - identify the exact target commit rather than packaging entire repositories;
 - let Codex fetch the diff and additional context only when required;
 - retain responses locally for debugging;
@@ -1284,12 +1400,12 @@ Concurrency is not required initially.
 
 Sequential processing is desirable because finding resolution depends on previous commits having already been processed.
 
-Because worktrees share one database, `air scan` should hold a repository-level
-exclusive lock for the duration of the scan. A concurrent scan should fail
-clearly rather than duplicate model requests or use inconsistent finding
-context. The model request should occur outside the per-commit SQLite
-transaction; the parsed result and all associated database changes are then
-written in one short transaction.
+Because worktrees share one database, `air scan` and `air recheck` should hold a
+repository-level exclusive lock for the duration of their operation. A
+concurrent writer should fail clearly rather than duplicate model requests or
+use inconsistent finding context. Model requests occur outside SQLite
+transactions; each parsed commit review or recheck batch and all associated
+database changes are written in one short transaction.
 
 ## 25. Expected Implementation Size
 
@@ -1358,10 +1474,12 @@ The implementation should preserve these rules:
 4. A finding remains open until explicitly resolved.
 5. A reviewed commit may resolve an open finding known when that commit is
    processed.
-6. Unchanged findings generate no ongoing database activity.
+6. Ordinary commit scans generate no ongoing database activity for unchanged
+   findings; explicit HEAD rechecks retain their assessment results.
 7. Historical transient problems remain queryable and contribute only aggregate counts to normal status output.
 8. Each reviewed or skipped commit is processed atomically.
 9. Review behavior is reproducible enough to identify the model and prompt version responsible.
 10. The tool should remain a semantic linter, not evolve unnecessarily into an issue tracker or code-review platform.
 11. Only the first-parent history of `refs/heads/master` is reviewed.
 12. Disjoint scans do not trigger automatic lifecycle reconciliation.
+13. HEAD rechecks never create findings or replace commit-review records.

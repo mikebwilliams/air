@@ -124,7 +124,7 @@ func (r *HTTPReviewer) Review(ctx context.Context, input ReviewInput) (ReviewRes
 	repairAttempted := false
 
 	for round := 0; round < maxRounds; round++ {
-		response, raw, err := r.complete(ctx, client, messages)
+		response, raw, err := r.complete(ctx, client, messages, reviewerTools())
 		if err != nil {
 			return ReviewResult{}, err
 		}
@@ -198,11 +198,12 @@ func (r *HTTPReviewer) complete(
 	ctx context.Context,
 	client *http.Client,
 	messages []chatMessage,
+	tools []chatTool,
 ) (chatResponse, []byte, error) {
 	requestBody := chatRequest{
 		Model:       r.Model,
 		Messages:    messages,
-		Tools:       reviewerTools(),
+		Tools:       tools,
 		ToolChoice:  "auto",
 		Temperature: 0,
 	}

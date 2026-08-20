@@ -212,6 +212,145 @@ func TestOpenStoreMigratesSchema4WithoutLosingReviewAttempts(t *testing.T) {
 	}
 }
 
+func TestOpenStoreMigratesSchema5ForRechecks(t *testing.T) {
+	ctx := context.Background()
+	databasePath := filepath.Join(t.TempDir(), "air.sqlite")
+	store, err := openStoreFile(ctx, databasePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.db.ExecContext(ctx, `
+		CREATE TABLE models(name TEXT PRIMARY KEY);
+		CREATE TABLE findings(id INTEGER PRIMARY KEY, title TEXT NOT NULL);
+		INSERT INTO findings(id, title) VALUES(7, 'preserved finding');
+		PRAGMA user_version = 5`); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	store, err = OpenStore(ctx, databasePath)
+	if err != nil {
+		t.Fatalf("OpenStore migration: %v", err)
+	}
+	defer store.Close()
+	var version int
+	if err := store.db.QueryRowContext(ctx, `PRAGMA user_version`).Scan(&version); err != nil || version != 6 {
+		t.Fatalf("schema version = %d, %v", version, err)
+	}
+	hasColumn, err := transactionlessTableHasColumn(ctx, store, "resolved_recheck_id")
+	if err != nil || !hasColumn {
+		t.Fatalf("resolved_recheck_id exists = %t, %v", hasColumn, err)
+	}
+	var title string
+	if err := store.db.QueryRowContext(ctx, `SELECT title FROM findings WHERE id = 7`).Scan(&title); err != nil || title != "preserved finding" {
+		t.Fatalf("migrated finding title = %q, %v", title, err)
+	}
+	for _, table := range []string{"recheck_attempts", "recheck_results"} {
+		var name string
+		if err := store.db.QueryRowContext(ctx,
+			`SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?`, table).Scan(&name); err != nil {
+			t.Fatalf("missing migrated table %s: %v", table, err)
+		}
+	}
+}
+
+func transactionlessTableHasColumn(ctx context.Context, store *Store, column string) (bool, error) {
+	rows, err := store.db.QueryContext(ctx, `PRAGMA table_info(findings)`)
+	if err != nil {
+		return false, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var cid, notNull, primaryKey int
+		var name, dataType string
+		var defaultValue any
+		if err := rows.Scan(&cid, &name, &dataType, &notNull, &defaultValue, &primaryKey); err != nil {
+			return false, err
+		}
+		if name == column {
+			return true, nil
+		}
+	}
+	return false, rows.Err()
+}
+
+func TestStoreAppliesAndAccountsForHEADRechecks(t *testing.T) {
+	ctx := context.Background()
+	store, err := CreateStore(ctx, filepath.Join(t.TempDir(), "air.sqlite"), strings.Repeat("0", 40))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	review := cleanReview("Found two issues.")
+	review.Output.NewFindings = []NewFinding{
+		{Severity: "warning", Title: "first", Description: "First failure.", File: stringPointer("app.go")},
+		{Severity: "error", Title: "second", Description: "Second failure.", File: stringPointer("other.go")},
+	}
+	introduced := testMetadata("a", "0")
+	checkedAt := time.Date(2026, 8, 20, 12, 0, 0, 0, time.UTC)
+	if _, err := store.ApplyReview(ctx, introduced,
+		ReviewIdentity{Model: modelByName("seed-model")}, review, checkedAt.Add(-time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	findings, err := store.OpenFindings(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	headSHA := strings.Repeat("b", 40)
+	cacheWrites := int64(5)
+	recheck := RecheckResult{
+		Output: RecheckOutput{Findings: []RecheckFindingResult{
+			{ID: findings[0].ID, Outcome: "resolved", Reason: "The failure path is gone at HEAD."},
+			{ID: findings[1].ID, Outcome: "still_present", Reason: "The invalid state remains reachable."},
+		}, Summary: "Reconciled both findings."},
+		RawResponse: "recheck transcript",
+		Usage: &TokenUsage{InputTokens: 100, CachedInputTokens: 40,
+			CacheWriteTokens: &cacheWrites, OutputTokens: 20, ReasoningOutputTokens: 5},
+		Duration: 3 * time.Second,
+	}
+	attemptID, err := store.ApplyRecheck(ctx, headSHA, "codex",
+		ReviewIdentity{Model: modelByName("gpt-5.6-luna"), ReasoningEffort: "xhigh"},
+		findings, recheck, checkedAt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if attemptID != 1 {
+		t.Fatalf("recheck attempt ID = %d, want 1", attemptID)
+	}
+	open, err := store.OpenFindings(ctx)
+	if err != nil || len(open) != 1 || open[0].ID != findings[1].ID {
+		t.Fatalf("open findings = %+v, %v", open, err)
+	}
+	resolved, err := store.Finding(ctx, findings[0].ID)
+	if err != nil || resolved.ResolvedSHA == nil || *resolved.ResolvedSHA != headSHA {
+		t.Fatalf("resolved finding = %+v, %v", resolved, err)
+	}
+	events, err := store.FindingEvents(ctx, findings[0].ID)
+	if err != nil || len(events) != 2 ||
+		!strings.Contains(events[1].Action, "recheck resolved (gpt-5.6-luna/xhigh)") ||
+		events[1].SHA == nil || *events[1].SHA != headSHA {
+		t.Fatalf("finding events = %+v, %v", events, err)
+	}
+	prior, err := store.PreviouslyRecheckedFindingIDs(ctx, headSHA, "codex",
+		"gpt-5.6-luna", "xhigh", recheckPromptVersion)
+	if err != nil || len(prior) != 2 {
+		t.Fatalf("prior rechecks = %v, %v", prior, err)
+	}
+	stats, err := store.ReviewStats(ctx, "", nil)
+	if err != nil || stats.Attempts != 1 || stats.RecheckAttempts != 1 ||
+		stats.InputTokens != 110 || stats.OutputTokens != 22 ||
+		stats.DurationMilliseconds != 0 || stats.TimedAttempts != 1 {
+		t.Fatalf("review stats with recheck = %+v, %v", stats, err)
+	}
+	if err := store.ReopenFinding(ctx, findings[0].ID, checkedAt.Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	if open, err := store.OpenFindings(ctx); err != nil || len(open) != 2 {
+		t.Fatalf("reopened recheck resolution = %+v, %v", open, err)
+	}
+}
+
 func TestApplyReviewRollsBackWholeCommit(t *testing.T) {
 	ctx := context.Background()
 	store, err := CreateStore(ctx, filepath.Join(t.TempDir(), "air.sqlite"), strings.Repeat("0", 40))

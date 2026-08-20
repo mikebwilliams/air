@@ -24,7 +24,7 @@ type codexTestInvocation struct {
 	Delay         string
 }
 
-func newCodexTestCommand(t *testing.T, result ReviewOutput, failureDetail string) (commandContextFunc, *codexTestInvocation) {
+func newCodexTestCommand(t *testing.T, result any, failureDetail string) (commandContextFunc, *codexTestInvocation) {
 	t.Helper()
 	captureDirectory := t.TempDir()
 	promptPath := filepath.Join(captureDirectory, "prompt.txt")

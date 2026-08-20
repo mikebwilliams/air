@@ -7,10 +7,13 @@ import (
 
 const (
 	promptVersion           = "4"
+	recheckPromptVersion    = "1"
 	masterRef               = "refs/heads/master"
 	maxDiffBytes            = 256 * 1024
 	maxToolBytes            = 64 * 1024
 	maxResolutionCandidates = 50
+	defaultRecheckBatchSize = 20
+	maxRecheckBatchSize     = 50
 )
 
 type CommitMetadata struct {
@@ -65,6 +68,7 @@ type ReviewAttempt struct {
 
 type ReviewStats struct {
 	Attempts              int
+	RecheckAttempts       int
 	Commits               int
 	InputTokens           int64
 	CachedInputTokens     int64
@@ -192,6 +196,29 @@ type ReviewResult struct {
 	Duration    time.Duration
 }
 
+type RecheckFindingResult struct {
+	ID      int64  `json:"id"`
+	Outcome string `json:"outcome"`
+	Reason  string `json:"reason"`
+}
+
+type RecheckOutput struct {
+	Findings []RecheckFindingResult `json:"findings"`
+	Summary  string                 `json:"summary"`
+}
+
+type RecheckInput struct {
+	HeadSHA  string
+	Findings []Finding
+}
+
+type RecheckResult struct {
+	Output      RecheckOutput
+	RawResponse string
+	Usage       *TokenUsage
+	Duration    time.Duration
+}
+
 type TokenUsage struct {
 	InputTokens           int64  `json:"input_tokens"`
 	CachedInputTokens     int64  `json:"cached_input_tokens"`
@@ -202,4 +229,13 @@ type TokenUsage struct {
 
 type Reviewer interface {
 	Review(ctx context.Context, input ReviewInput) (ReviewResult, error)
+}
+
+type RecheckReviewer interface {
+	Recheck(ctx context.Context, input RecheckInput) (RecheckResult, error)
+}
+
+type ReviewerBackend interface {
+	Reviewer
+	RecheckReviewer
 }

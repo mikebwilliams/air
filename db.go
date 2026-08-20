@@ -20,7 +20,7 @@ type Store struct {
 	db *sql.DB
 }
 
-const schemaVersion = 5
+const schemaVersion = 6
 
 const schemaSQL = `
 CREATE TABLE config (
@@ -150,11 +150,51 @@ CREATE TABLE review_attempts (
 	)
 );
 
+CREATE TABLE recheck_attempts (
+	id                          INTEGER PRIMARY KEY,
+	head_sha                    TEXT NOT NULL,
+	checked_at                  TEXT NOT NULL,
+	reviewer                    TEXT NOT NULL CHECK(reviewer IN ('codex', 'http')),
+	model                       TEXT NOT NULL,
+	reasoning_effort            TEXT,
+	prompt_version              TEXT NOT NULL,
+	summary                     TEXT NOT NULL,
+	raw_response                TEXT NOT NULL,
+	input_tokens                INTEGER NOT NULL CHECK(input_tokens >= 0),
+	cached_input_tokens         INTEGER NOT NULL CHECK(cached_input_tokens >= 0),
+	cache_write_tokens          INTEGER CHECK(cache_write_tokens IS NULL OR cache_write_tokens >= 0),
+	output_tokens               INTEGER NOT NULL CHECK(output_tokens >= 0),
+	reasoning_output_tokens     INTEGER NOT NULL CHECK(reasoning_output_tokens >= 0),
+	estimated_cost_microusd     INTEGER CHECK(estimated_cost_microusd IS NULL OR estimated_cost_microusd >= 0),
+	estimated_cost_max_microusd INTEGER CHECK(estimated_cost_max_microusd IS NULL OR estimated_cost_max_microusd >= 0),
+	cost_context                TEXT CHECK(cost_context IS NULL OR cost_context IN ('short', 'long')),
+	cost_complete               INTEGER CHECK(cost_complete IS NULL OR cost_complete IN (0, 1)),
+	duration_ms                 INTEGER NOT NULL CHECK(duration_ms >= 0),
+	finding_count               INTEGER NOT NULL CHECK(finding_count > 0),
+	resolved_count              INTEGER NOT NULL CHECK(resolved_count >= 0),
+	still_present_count         INTEGER NOT NULL CHECK(still_present_count >= 0),
+	uncertain_count             INTEGER NOT NULL CHECK(uncertain_count >= 0),
+
+	FOREIGN KEY(model) REFERENCES models(name),
+	CHECK(cached_input_tokens <= input_tokens),
+	CHECK(cache_write_tokens IS NULL OR cached_input_tokens + cache_write_tokens <= input_tokens),
+	CHECK(reasoning_output_tokens <= output_tokens),
+	CHECK(resolved_count + still_present_count + uncertain_count = finding_count),
+	CHECK(
+		(estimated_cost_microusd IS NULL AND estimated_cost_max_microusd IS NULL AND
+		 cost_context IS NULL AND cost_complete IS NULL) OR
+		(estimated_cost_microusd IS NOT NULL AND estimated_cost_max_microusd IS NOT NULL AND
+		 estimated_cost_microusd <= estimated_cost_max_microusd AND
+		 cost_context IS NOT NULL AND cost_complete IS NOT NULL)
+	)
+);
+
 CREATE TABLE findings (
     id              INTEGER PRIMARY KEY,
     introduced_sha  TEXT NOT NULL,
 	introduced_review_id INTEGER NOT NULL,
     resolved_sha    TEXT,
+	resolved_recheck_id INTEGER,
 	dismissed_at      TEXT,
 	dismiss_reason    TEXT,
     severity        TEXT NOT NULL CHECK(severity IN ('info', 'warning', 'error')),
@@ -167,8 +207,22 @@ CREATE TABLE findings (
     FOREIGN KEY(introduced_sha) REFERENCES commits(sha) ON DELETE CASCADE,
 	FOREIGN KEY(introduced_review_id) REFERENCES review_attempts(id) ON DELETE CASCADE,
 	FOREIGN KEY(resolved_sha) REFERENCES commits(sha) ON DELETE SET NULL,
+	FOREIGN KEY(resolved_recheck_id) REFERENCES recheck_attempts(id) ON DELETE SET NULL,
+	CHECK(resolved_sha IS NULL OR resolved_recheck_id IS NULL),
 	CHECK((dismissed_at IS NULL AND dismiss_reason IS NULL) OR
 	      (dismissed_at IS NOT NULL AND dismiss_reason IS NOT NULL))
+);
+
+CREATE TABLE recheck_results (
+	id          INTEGER PRIMARY KEY,
+	recheck_id  INTEGER NOT NULL,
+	finding_id  INTEGER NOT NULL,
+	outcome     TEXT NOT NULL CHECK(outcome IN ('resolved', 'still_present', 'uncertain')),
+	reason      TEXT NOT NULL,
+
+	FOREIGN KEY(recheck_id) REFERENCES recheck_attempts(id) ON DELETE CASCADE,
+	FOREIGN KEY(finding_id) REFERENCES findings(id) ON DELETE CASCADE,
+	UNIQUE(recheck_id, finding_id)
 );
 
 CREATE TABLE finding_events (
@@ -199,9 +253,11 @@ CREATE TABLE scan_failures (
 CREATE INDEX findings_open_idx ON findings(resolved_sha);
 CREATE INDEX finding_events_finding_idx ON finding_events(finding_id, id);
 CREATE INDEX review_attempts_commit_idx ON review_attempts(commit_sha, id);
+CREATE INDEX recheck_attempts_identity_idx ON recheck_attempts(head_sha, reviewer, model, reasoning_effort, prompt_version);
+CREATE INDEX recheck_results_finding_idx ON recheck_results(finding_id, recheck_id);
 CREATE INDEX finding_events_review_idx ON finding_events(review_id, id);
 CREATE INDEX scan_failures_failed_at_idx ON scan_failures(failed_at, sha);
-PRAGMA user_version = 5;
+PRAGMA user_version = 6;
 `
 
 func CreateStore(ctx context.Context, databasePath, startSHA string) (*Store, error) {
@@ -281,11 +337,122 @@ func OpenStore(ctx context.Context, databasePath string) (*Store, error) {
 		}
 		version = 5
 	}
+	if version == 5 {
+		if err := migrateSchema5To6(ctx, store); err != nil {
+			_ = store.Close()
+			return nil, err
+		}
+		version = 6
+	}
 	if version != schemaVersion {
 		_ = store.Close()
 		return nil, fmt.Errorf("unsupported AIR schema version %d", version)
 	}
 	return store, nil
+}
+
+func migrateSchema5To6(ctx context.Context, store *Store) error {
+	tx, err := store.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("upgrade AIR schema from 5 to 6: %w", err)
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, `
+		CREATE TABLE IF NOT EXISTS recheck_attempts (
+			id INTEGER PRIMARY KEY,
+			head_sha TEXT NOT NULL,
+			checked_at TEXT NOT NULL,
+			reviewer TEXT NOT NULL CHECK(reviewer IN ('codex', 'http')),
+			model TEXT NOT NULL,
+			reasoning_effort TEXT,
+			prompt_version TEXT NOT NULL,
+			summary TEXT NOT NULL,
+			raw_response TEXT NOT NULL,
+			input_tokens INTEGER NOT NULL CHECK(input_tokens >= 0),
+			cached_input_tokens INTEGER NOT NULL CHECK(cached_input_tokens >= 0),
+			cache_write_tokens INTEGER CHECK(cache_write_tokens IS NULL OR cache_write_tokens >= 0),
+			output_tokens INTEGER NOT NULL CHECK(output_tokens >= 0),
+			reasoning_output_tokens INTEGER NOT NULL CHECK(reasoning_output_tokens >= 0),
+			estimated_cost_microusd INTEGER CHECK(estimated_cost_microusd IS NULL OR estimated_cost_microusd >= 0),
+			estimated_cost_max_microusd INTEGER CHECK(estimated_cost_max_microusd IS NULL OR estimated_cost_max_microusd >= 0),
+			cost_context TEXT CHECK(cost_context IS NULL OR cost_context IN ('short', 'long')),
+			cost_complete INTEGER CHECK(cost_complete IS NULL OR cost_complete IN (0, 1)),
+			duration_ms INTEGER NOT NULL CHECK(duration_ms >= 0),
+			finding_count INTEGER NOT NULL CHECK(finding_count > 0),
+			resolved_count INTEGER NOT NULL CHECK(resolved_count >= 0),
+			still_present_count INTEGER NOT NULL CHECK(still_present_count >= 0),
+			uncertain_count INTEGER NOT NULL CHECK(uncertain_count >= 0),
+			FOREIGN KEY(model) REFERENCES models(name),
+			CHECK(cached_input_tokens <= input_tokens),
+			CHECK(cache_write_tokens IS NULL OR cached_input_tokens + cache_write_tokens <= input_tokens),
+			CHECK(reasoning_output_tokens <= output_tokens),
+			CHECK(resolved_count + still_present_count + uncertain_count = finding_count),
+			CHECK(
+				(estimated_cost_microusd IS NULL AND estimated_cost_max_microusd IS NULL AND
+				 cost_context IS NULL AND cost_complete IS NULL) OR
+				(estimated_cost_microusd IS NOT NULL AND estimated_cost_max_microusd IS NOT NULL AND
+				 estimated_cost_microusd <= estimated_cost_max_microusd AND
+				 cost_context IS NOT NULL AND cost_complete IS NOT NULL)
+			)
+		)`); err != nil {
+		return fmt.Errorf("upgrade AIR schema from 5 to 6: %w", err)
+	}
+	hasResolutionColumn, err := transactionTableHasColumn(ctx, tx, "findings", "resolved_recheck_id")
+	if err != nil {
+		return fmt.Errorf("upgrade AIR schema from 5 to 6: %w", err)
+	}
+	if !hasResolutionColumn {
+		if _, err := tx.ExecContext(ctx, `
+			ALTER TABLE findings ADD COLUMN resolved_recheck_id INTEGER
+			REFERENCES recheck_attempts(id) ON DELETE SET NULL`); err != nil {
+			return fmt.Errorf("upgrade AIR schema from 5 to 6: %w", err)
+		}
+	}
+	if _, err := tx.ExecContext(ctx, `
+		CREATE TABLE IF NOT EXISTS recheck_results (
+			id INTEGER PRIMARY KEY,
+			recheck_id INTEGER NOT NULL,
+			finding_id INTEGER NOT NULL,
+			outcome TEXT NOT NULL CHECK(outcome IN ('resolved', 'still_present', 'uncertain')),
+			reason TEXT NOT NULL,
+			FOREIGN KEY(recheck_id) REFERENCES recheck_attempts(id) ON DELETE CASCADE,
+			FOREIGN KEY(finding_id) REFERENCES findings(id) ON DELETE CASCADE,
+			UNIQUE(recheck_id, finding_id)
+		);
+		CREATE INDEX IF NOT EXISTS recheck_attempts_identity_idx
+			ON recheck_attempts(head_sha, reviewer, model, reasoning_effort, prompt_version);
+		CREATE INDEX IF NOT EXISTS recheck_results_finding_idx ON recheck_results(finding_id, recheck_id);
+		PRAGMA user_version = 6`); err != nil {
+		return fmt.Errorf("upgrade AIR schema from 5 to 6: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("upgrade AIR schema from 5 to 6: %w", err)
+	}
+	return nil
+}
+
+func transactionTableHasColumn(ctx context.Context, tx *sql.Tx, table, column string) (bool, error) {
+	if table != "findings" {
+		return false, fmt.Errorf("unsupported migration table %q", table)
+	}
+	rows, err := tx.QueryContext(ctx, `PRAGMA table_info(findings)`)
+	if err != nil {
+		return false, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var cid int
+		var name, dataType string
+		var notNull, primaryKey int
+		var defaultValue sql.NullString
+		if err := rows.Scan(&cid, &name, &dataType, &notNull, &defaultValue, &primaryKey); err != nil {
+			return false, err
+		}
+		if name == column {
+			return true, nil
+		}
+	}
+	return false, rows.Err()
 }
 
 func migrateSchema4To5(ctx context.Context, store *Store) error {
@@ -584,30 +751,41 @@ func (s *Store) DeleteCommits(ctx context.Context, shas []string) (int, error) {
 
 func (s *Store) OpenFindings(ctx context.Context) ([]Finding, error) {
 	return s.queryFindings(ctx, `
-		SELECT id, introduced_sha, resolved_sha, dismissed_at, dismiss_reason,
+		SELECT id, introduced_sha,
+		       COALESCE(resolved_sha, (SELECT head_sha FROM recheck_attempts WHERE id = findings.resolved_recheck_id)),
+		       dismissed_at, dismiss_reason,
 		       severity, title, description, file, line, symbol
-		FROM findings WHERE resolved_sha IS NULL AND dismissed_at IS NULL ORDER BY id`)
+		FROM findings
+		WHERE resolved_sha IS NULL AND resolved_recheck_id IS NULL AND dismissed_at IS NULL
+		ORDER BY id`)
 }
 
 func (s *Store) AllFindings(ctx context.Context) ([]Finding, error) {
 	return s.queryFindings(ctx, `
-		SELECT id, introduced_sha, resolved_sha, dismissed_at, dismiss_reason,
+		SELECT id, introduced_sha,
+		       COALESCE(resolved_sha, (SELECT head_sha FROM recheck_attempts WHERE id = findings.resolved_recheck_id)),
+		       dismissed_at, dismiss_reason,
 		       severity, title, description, file, line, symbol
 		FROM findings ORDER BY id DESC`)
 }
 
 func (s *Store) OpenFindingsExcludingCommit(ctx context.Context, sha string) ([]Finding, error) {
 	return s.queryFindings(ctx, `
-		SELECT id, introduced_sha, resolved_sha, dismissed_at, dismiss_reason,
+		SELECT id, introduced_sha,
+		       COALESCE(resolved_sha, (SELECT head_sha FROM recheck_attempts WHERE id = findings.resolved_recheck_id)),
+		       dismissed_at, dismiss_reason,
 		       severity, title, description, file, line, symbol
 		FROM findings
-		WHERE resolved_sha IS NULL AND dismissed_at IS NULL AND introduced_sha <> ?
+		WHERE resolved_sha IS NULL AND resolved_recheck_id IS NULL
+		  AND dismissed_at IS NULL AND introduced_sha <> ?
 		ORDER BY id`, sha)
 }
 
 func (s *Store) Finding(ctx context.Context, id int64) (Finding, error) {
 	rows, err := s.queryFindings(ctx, `
-		SELECT id, introduced_sha, resolved_sha, dismissed_at, dismiss_reason,
+		SELECT id, introduced_sha,
+		       COALESCE(resolved_sha, (SELECT head_sha FROM recheck_attempts WHERE id = findings.resolved_recheck_id)),
+		       dismissed_at, dismiss_reason,
 		       severity, title, description, file, line, symbol
         FROM findings WHERE id = ?`, id)
 	if err != nil {
@@ -621,7 +799,9 @@ func (s *Store) Finding(ctx context.Context, id int64) (Finding, error) {
 
 func (s *Store) FindingsIntroducedBy(ctx context.Context, sha string) ([]Finding, error) {
 	return s.queryFindings(ctx, `
-		SELECT id, introduced_sha, resolved_sha, dismissed_at, dismiss_reason,
+		SELECT id, introduced_sha,
+		       COALESCE(resolved_sha, (SELECT head_sha FROM recheck_attempts WHERE id = findings.resolved_recheck_id)),
+		       dismissed_at, dismiss_reason,
 		       severity, title, description, file, line, symbol
 		FROM findings
 		WHERE introduced_review_id = (
@@ -645,7 +825,9 @@ func (s *Store) FindingsResolvedBy(ctx context.Context, sha string) ([]Finding, 
 
 func (s *Store) FindingsIntroducedByReview(ctx context.Context, reviewID int64) ([]Finding, error) {
 	return s.queryFindings(ctx, `
-		SELECT id, introduced_sha, resolved_sha, dismissed_at, dismiss_reason,
+		SELECT id, introduced_sha,
+		       COALESCE(resolved_sha, (SELECT head_sha FROM recheck_attempts WHERE id = findings.resolved_recheck_id)),
+		       dismissed_at, dismiss_reason,
 		       severity, title, description, file, line, symbol
 		FROM findings WHERE introduced_review_id = ? ORDER BY id`, reviewID)
 }
@@ -727,14 +909,16 @@ func (s *Store) DismissFinding(ctx context.Context, id int64, reason string, now
 	}
 	defer tx.Rollback()
 	var resolved, dismissed sql.NullString
+	var resolvedRecheck sql.NullInt64
 	if err := tx.QueryRowContext(ctx, `
-		SELECT resolved_sha, dismissed_at FROM findings WHERE id = ?`, id).Scan(&resolved, &dismissed); err != nil {
+		SELECT resolved_sha, resolved_recheck_id, dismissed_at FROM findings WHERE id = ?`, id).
+		Scan(&resolved, &resolvedRecheck, &dismissed); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return fmt.Errorf("finding #%d does not exist", id)
 		}
 		return fmt.Errorf("dismiss finding #%d: %w", id, err)
 	}
-	if resolved.Valid {
+	if resolved.Valid || resolvedRecheck.Valid {
 		return fmt.Errorf("finding #%d is resolved; reopen it before dismissing it", id)
 	}
 	if dismissed.Valid {
@@ -763,24 +947,27 @@ func (s *Store) ReopenFinding(ctx context.Context, id int64, now time.Time) erro
 	}
 	defer tx.Rollback()
 	var resolved, dismissed sql.NullString
+	var resolvedRecheck sql.NullInt64
 	if err := tx.QueryRowContext(ctx, `
-		SELECT resolved_sha, dismissed_at FROM findings WHERE id = ?`, id).Scan(&resolved, &dismissed); err != nil {
+		SELECT resolved_sha, resolved_recheck_id, dismissed_at FROM findings WHERE id = ?`, id).
+		Scan(&resolved, &resolvedRecheck, &dismissed); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return fmt.Errorf("finding #%d does not exist", id)
 		}
 		return fmt.Errorf("reopen finding #%d: %w", id, err)
 	}
-	if !resolved.Valid && !dismissed.Valid {
+	if !resolved.Valid && !resolvedRecheck.Valid && !dismissed.Valid {
 		return fmt.Errorf("finding #%d is already open", id)
 	}
 	note := "reopened dismissed finding"
-	if resolved.Valid {
+	if resolved.Valid || resolvedRecheck.Valid {
 		note = "reopened resolved finding"
 	}
 	timestamp := formatTime(now)
 	if _, err := tx.ExecContext(ctx, `
 		UPDATE findings
-		SET resolved_sha = NULL, dismissed_at = NULL, dismiss_reason = NULL
+		SET resolved_sha = NULL, resolved_recheck_id = NULL,
+		    dismissed_at = NULL, dismiss_reason = NULL
 		WHERE id = ?`, id); err != nil {
 		return fmt.Errorf("reopen finding #%d: %w", id, err)
 	}
@@ -826,7 +1013,19 @@ func (s *Store) AddFindingNote(ctx context.Context, id int64, note string, now t
 func (s *Store) FindingEvents(ctx context.Context, id int64) ([]FindingEvent, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT id, finding_id, review_id, sha, action, note, created_at
-		FROM finding_events WHERE finding_id = ? ORDER BY id`, id)
+		FROM (
+			SELECT e.id, e.finding_id, e.review_id, e.sha, e.action, e.note, e.created_at
+			FROM finding_events e WHERE e.finding_id = ?
+			UNION ALL
+			SELECT -rr.id, rr.finding_id, NULL, a.head_sha,
+			       'recheck ' || REPLACE(rr.outcome, '_', ' ') || ' (' || a.model ||
+			       CASE WHEN a.reasoning_effort IS NULL THEN '' ELSE '/' || a.reasoning_effort END || ')',
+			       rr.reason, a.checked_at
+			FROM recheck_results rr
+			JOIN recheck_attempts a ON a.id = rr.recheck_id
+			WHERE rr.finding_id = ?
+		)
+		ORDER BY created_at, id`, id, id)
 	if err != nil {
 		return nil, fmt.Errorf("read history for finding #%d: %w", id, err)
 	}
@@ -1282,8 +1481,9 @@ func (s *Store) ApplyReview(
 		}
 		seenResolved[resolution.ID] = struct{}{}
 		row, err := tx.ExecContext(ctx, `
-            UPDATE findings SET resolved_sha = ?
-            WHERE id = ? AND resolved_sha IS NULL`, metadata.SHA, resolution.ID)
+			UPDATE findings SET resolved_sha = ?
+			WHERE id = ? AND resolved_sha IS NULL AND resolved_recheck_id IS NULL
+			  AND dismissed_at IS NULL`, metadata.SHA, resolution.ID)
 		if err != nil {
 			return nil, fmt.Errorf("resolve finding #%d: %w", resolution.ID, err)
 		}
@@ -1553,12 +1753,24 @@ func (s *Store) ReviewStats(ctx context.Context, modelFilter string, since *time
 		sinceValue = formatTime(*since)
 	}
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT commit_sha, model, reasoning_effort, input_tokens, cached_input_tokens,
+		SELECT kind, subject_sha, model, reasoning_effort, input_tokens, cached_input_tokens,
 		       cache_write_tokens, output_tokens, reasoning_output_tokens,
 		       estimated_cost_microusd, estimated_cost_max_microusd, duration_ms
-		FROM review_attempts
-		WHERE (? = '' OR model = ?) AND (? = '' OR reviewed_at >= ?)
-		ORDER BY id`, modelFilter, modelFilter, sinceValue, sinceValue)
+		FROM (
+			SELECT 'commit' AS kind, commit_sha AS subject_sha, model, reasoning_effort,
+			       input_tokens, cached_input_tokens, cache_write_tokens, output_tokens,
+			       reasoning_output_tokens, estimated_cost_microusd,
+			       estimated_cost_max_microusd, duration_ms, reviewed_at AS occurred_at, id
+			FROM review_attempts
+			UNION ALL
+			SELECT 'recheck', head_sha, model, reasoning_effort,
+			       input_tokens, cached_input_tokens, cache_write_tokens, output_tokens,
+			       reasoning_output_tokens, estimated_cost_microusd,
+			       estimated_cost_max_microusd, duration_ms, checked_at, id
+			FROM recheck_attempts
+		)
+		WHERE (? = '' OR model = ?) AND (? = '' OR occurred_at >= ?)
+		ORDER BY occurred_at, kind, id`, modelFilter, modelFilter, sinceValue, sinceValue)
 	if err != nil {
 		return ReviewStats{}, fmt.Errorf("read review statistics: %w", err)
 	}
@@ -1571,22 +1783,26 @@ func (s *Store) ReviewStats(ctx context.Context, modelFilter string, since *time
 	commits := make(map[string]struct{})
 	var stats ReviewStats
 	for rows.Next() {
-		var sha, model string
+		var kind, sha, model string
 		var effort sql.NullString
 		var input, cached, output, reasoning int64
 		var cacheWrite, minimumCost, maximumCost, durationMilliseconds sql.NullInt64
-		if err := rows.Scan(&sha, &model, &effort, &input, &cached, &cacheWrite,
+		if err := rows.Scan(&kind, &sha, &model, &effort, &input, &cached, &cacheWrite,
 			&output, &reasoning, &minimumCost, &maximumCost, &durationMilliseconds); err != nil {
 			return ReviewStats{}, fmt.Errorf("read review statistics: %w", err)
 		}
-		commits[sha] = struct{}{}
+		if kind == "commit" {
+			commits[sha] = struct{}{}
+			stats.Attempts++
+		} else {
+			stats.RecheckAttempts++
+		}
 		key := groupKey{model: model, effort: effort.String}
 		group := groups[key]
 		if group == nil {
 			group = &ReviewStatsGroup{Model: model, ReasoningEffort: effort.String}
 			groups[key] = group
 		}
-		stats.Attempts++
 		group.Attempts++
 		stats.InputTokens += input
 		group.InputTokens += input
@@ -1614,11 +1830,13 @@ func (s *Store) ReviewStats(ctx context.Context, modelFilter string, since *time
 			stats.UnknownCostAttempts++
 			group.UnknownCostAttempts++
 		}
-		if durationMilliseconds.Valid {
-			stats.DurationMilliseconds += durationMilliseconds.Int64
-			stats.TimedAttempts++
-		} else {
-			stats.UntimedAttempts++
+		if kind == "commit" {
+			if durationMilliseconds.Valid {
+				stats.DurationMilliseconds += durationMilliseconds.Int64
+				stats.TimedAttempts++
+			} else {
+				stats.UntimedAttempts++
+			}
 		}
 	}
 	if err := rows.Err(); err != nil {
@@ -1651,9 +1869,9 @@ func (s *Store) FindingStats(ctx context.Context) (FindingStats, error) {
 	var stats FindingStats
 	if err := s.db.QueryRowContext(ctx, `
 		SELECT
-			COALESCE(SUM(CASE WHEN resolved_sha IS NULL AND dismissed_at IS NULL THEN 1 ELSE 0 END), 0),
+			COALESCE(SUM(CASE WHEN resolved_sha IS NULL AND resolved_recheck_id IS NULL AND dismissed_at IS NULL THEN 1 ELSE 0 END), 0),
 			COALESCE(SUM(CASE WHEN dismissed_at IS NOT NULL THEN 1 ELSE 0 END), 0),
-			COALESCE(SUM(CASE WHEN resolved_sha IS NOT NULL THEN 1 ELSE 0 END), 0)
+			COALESCE(SUM(CASE WHEN resolved_sha IS NOT NULL OR resolved_recheck_id IS NOT NULL THEN 1 ELSE 0 END), 0)
 		FROM findings`).Scan(&stats.Open, &stats.Dismissed, &stats.Resolved); err != nil {
 		return FindingStats{}, fmt.Errorf("read finding statistics: %w", err)
 	}

@@ -30,3 +30,27 @@ func TestReviewerPromptsEnforceReviewScope(t *testing.T) {
 		t.Fatalf("prompt version = %q, want 4", promptVersion)
 	}
 }
+
+func TestRecheckPromptsRequireExactCompleteOutcomes(t *testing.T) {
+	for name, prompt := range map[string]string{
+		"http":  recheckSystemPrompt,
+		"codex": codexRecheckPrompt,
+	} {
+		t.Run(name, func(t *testing.T) {
+			for _, phrase := range []string{
+				"exact Git HEAD snapshot",
+				"still_present",
+				"uncertain",
+				"Do not search for or report new defects",
+				"every supplied finding",
+			} {
+				if !strings.Contains(prompt, phrase) {
+					t.Fatalf("recheck prompt does not contain %q:\n%s", phrase, prompt)
+				}
+			}
+		})
+	}
+	if recheckPromptVersion != "1" {
+		t.Fatalf("recheck prompt version = %q, want 1", recheckPromptVersion)
+	}
+}
