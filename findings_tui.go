@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -93,6 +94,18 @@ const (
 	findingsConfirmReopen
 )
 
+type findingSortMode string
+
+const (
+	findingsSortNewest findingSortMode = "newest"
+	findingsSortFile   findingSortMode = "file"
+)
+
+var findingSortModes = []findingSortMode{
+	findingsSortNewest,
+	findingsSortFile,
+}
+
 type findingsModel struct {
 	ctx             context.Context
 	external        findingExternalCommands
@@ -106,6 +119,7 @@ type findingsModel struct {
 	detailOffset    int
 	statusFilter    string
 	severityFilter  string
+	sortMode        findingSortMode
 	query           string
 	queryBeforeEdit string
 	mode            findingsInputMode
@@ -138,6 +152,7 @@ func newFindingsModel(
 		height:         30,
 		statusFilter:   status,
 		severityFilter: "all",
+		sortMode:       findingsSortNewest,
 	}
 	model.applyFilters(0)
 	model.loadDetail()
@@ -201,6 +216,10 @@ func (m findingsModel) handleKey(key string) (tea.Model, tea.Cmd) {
 		m.moveCursor(-1)
 	case "down", "j":
 		m.moveCursor(1)
+	case "left":
+		m.changeSort(-1)
+	case "right":
+		m.changeSort(1)
 	case "pgup":
 		m.moveCursor(-m.pageSize())
 	case "pgdown":
@@ -418,6 +437,9 @@ func (m *findingsModel) reload(preferredID int64) {
 }
 
 func (m *findingsModel) applyFilters(preferredID int64) {
+	if m.sortMode == "" {
+		m.sortMode = findingsSortNewest
+	}
 	query := strings.ToLower(strings.TrimSpace(m.query))
 	m.visible = m.visible[:0]
 	for _, finding := range m.all {
@@ -433,6 +455,7 @@ func (m *findingsModel) applyFilters(preferredID int64) {
 		}
 		m.visible = append(m.visible, finding)
 	}
+	sortFindings(m.visible, m.sortMode)
 	if len(m.visible) == 0 {
 		m.cursor = 0
 		m.events = nil
@@ -456,6 +479,58 @@ func (m *findingsModel) applyFilters(preferredID int64) {
 		m.cursor = 0
 	}
 	m.detailOffset = 0
+}
+
+func (m *findingsModel) changeSort(delta int) {
+	selectedID := m.selectedID()
+	current := 0
+	for index, mode := range findingSortModes {
+		if mode == m.sortMode {
+			current = index
+			break
+		}
+	}
+	current = (current + delta) % len(findingSortModes)
+	if current < 0 {
+		current += len(findingSortModes)
+	}
+	m.sortMode = findingSortModes[current]
+	m.applyFilters(selectedID)
+	m.loadDetail()
+}
+
+func sortFindings(findings []Finding, mode findingSortMode) {
+	sort.SliceStable(findings, func(leftIndex, rightIndex int) bool {
+		left := findings[leftIndex]
+		right := findings[rightIndex]
+		if mode != findingsSortFile {
+			return left.ID > right.ID
+		}
+		if left.File == nil || right.File == nil {
+			if left.File == nil && right.File == nil {
+				return left.ID > right.ID
+			}
+			return left.File != nil
+		}
+		leftFolded := strings.ToLower(*left.File)
+		rightFolded := strings.ToLower(*right.File)
+		if leftFolded != rightFolded {
+			return leftFolded < rightFolded
+		}
+		if *left.File != *right.File {
+			return *left.File < *right.File
+		}
+		if left.Line == nil || right.Line == nil {
+			if left.Line == nil && right.Line == nil {
+				return left.ID > right.ID
+			}
+			return left.Line != nil
+		}
+		if *left.Line != *right.Line {
+			return *left.Line < *right.Line
+		}
+		return left.ID > right.ID
+	})
 }
 
 func (m *findingsModel) loadDetail() {
@@ -535,8 +610,8 @@ func (m findingsModel) render() string {
 	if height < 10 {
 		height = 10
 	}
-	header := fmt.Sprintf("AIR findings  %d/%d  status:%s  severity:%s",
-		m.position(), len(m.visible), m.statusFilter, m.severityFilter)
+	header := fmt.Sprintf("AIR findings  %d/%d  status:%s  severity:%s  sort:%s",
+		m.position(), len(m.visible), m.statusFilter, m.severityFilter, m.sortMode)
 	if m.query != "" {
 		header += "  search:" + strconv.Quote(m.query)
 	}
@@ -678,7 +753,7 @@ func (m findingsModel) footer() string {
 	case findingsConfirmReopen:
 		return fmt.Sprintf("Reopen #%d?  y yes, n no", m.selectedID())
 	default:
-		return "↑/↓ j/k move  / search  D diff  o open  d dismiss  r reopen  n note  ? help  q quit"
+		return "↑/↓ j/k move  ←/→ sort  / search  D diff  o open  d dismiss  r reopen  n note  ? help  q quit"
 	}
 }
 
@@ -686,6 +761,7 @@ func (m findingsModel) helpLines(width int) []string {
 	return wrapText(`Keyboard
 
 ↑/↓ or j/k    select finding
+←/→           change sort: newest, file
 PgUp/PgDn     move one page
 g/G           first/last finding
 Ctrl+U/Ctrl+D scroll detail

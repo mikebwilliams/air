@@ -1062,8 +1062,10 @@ air findings [--all]
 
 `air findings` is a full-screen terminal browser that initially contains open
 findings only. `--all` initially includes open, dismissed, and resolved
-findings. The list shows ID, severity, disposition, location, and title; the
-detail view shows the description, commit references, introducing review's
+findings. The list shows ID, severity, disposition, location, and title. Left
+and right cycle through an ordered set of sort modes, initially newest-first and
+file/line order; the selected finding remains selected when the order changes.
+The detail view shows the description, commit references, introducing review's
 model and reasoning effort, and event history. The browser supports keyboard
 navigation, text search, status and severity filters, and independent detail
 scrolling. It can launch the introducing commit through `git difftool`, open a

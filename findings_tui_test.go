@@ -7,6 +7,7 @@ import (
 	"io"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -103,6 +104,62 @@ func TestFindingsModelFiltersAndRenders(t *testing.T) {
 	if rendered = model.render(); !strings.Contains(rendered, "Open parser corruption") {
 		t.Fatalf("narrow render lost selected finding:\n%s", rendered)
 	}
+}
+
+func TestFindingsModelChangesSortWithLeftAndRight(t *testing.T) {
+	fileA := "pkg/alpha.go"
+	fileB := "pkg/beta.go"
+	line10 := 10
+	line20 := 20
+	model := findingsModel{
+		all: []Finding{
+			{ID: 5, Severity: "warning", Title: "no location"},
+			{ID: 4, Severity: "warning", Title: "beta", File: &fileB, Line: &line10},
+			{ID: 3, Severity: "warning", Title: "alpha later", File: &fileA, Line: &line20},
+			{ID: 2, Severity: "warning", Title: "alpha earlier", File: &fileA, Line: &line10},
+			{ID: 1, Severity: "warning", Title: "alpha unknown line", File: &fileA},
+		},
+		statusFilter:   "open",
+		severityFilter: "all",
+		sortMode:       findingsSortNewest,
+	}
+	model.applyFilters(0)
+	if got := findingIDs(model.visible); got != "5,4,3,2,1" {
+		t.Fatalf("newest order = %s", got)
+	}
+
+	model.cursor = 2
+	updatedValue, _ := model.handleKey("right")
+	model = updatedValue.(findingsModel)
+	if model.sortMode != findingsSortFile {
+		t.Fatalf("right sort mode = %q", model.sortMode)
+	}
+	if got := findingIDs(model.visible); got != "2,3,1,4,5" {
+		t.Fatalf("file order = %s", got)
+	}
+	if model.selectedID() != 3 {
+		t.Fatalf("selected finding after sort = %d", model.selectedID())
+	}
+
+	updatedValue, _ = model.handleKey("right")
+	model = updatedValue.(findingsModel)
+	if model.sortMode != findingsSortNewest || findingIDs(model.visible) != "5,4,3,2,1" {
+		t.Fatalf("wrapped right sort: mode=%q order=%s", model.sortMode, findingIDs(model.visible))
+	}
+
+	updatedValue, _ = model.handleKey("left")
+	model = updatedValue.(findingsModel)
+	if model.sortMode != findingsSortFile || findingIDs(model.visible) != "2,3,1,4,5" {
+		t.Fatalf("wrapped left sort: mode=%q order=%s", model.sortMode, findingIDs(model.visible))
+	}
+}
+
+func findingIDs(findings []Finding) string {
+	ids := make([]string, 0, len(findings))
+	for _, finding := range findings {
+		ids = append(ids, strconv.FormatInt(finding.ID, 10))
+	}
+	return strings.Join(ids, ",")
 }
 
 func TestFindingsModelActionsAreAudited(t *testing.T) {

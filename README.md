@@ -388,7 +388,8 @@ Dismissed and resolved findings are excluded from both exports.
 
 `air findings` opens a full-screen terminal browser. It starts with open
 findings; `--all` starts with every disposition. Use the arrow keys or `j`/`k`
-to move, `/` to search, `s` and `v` to cycle status and severity filters, and
+to move, left/right to change the sort between newest-first and file/line order,
+`/` to search, `s` and `v` to cycle status and severity filters, and
 `Ctrl+U`/`Ctrl+D` to scroll long details. The detail pane includes the finding's
 description, location, introducing review and model/effort, and complete event
 history. Press `D` to open the introducing commit in the user's configured
