@@ -935,12 +935,13 @@ air scan <from>..<to>
 
 The range endpoints must both be on the first-parent history of `master`.
 
-By default, AIR records and stops at the first reviewer, response-validation,
-or Git-inspection failure. `air scan --continue-on-error` records each failure,
-continues through the selected batch, then returns a nonzero result summarizing
-the number of failed commits. Subsequent ordinary scans defer recorded failures
-and report their count; only `air retry` attempts them again. Database failures
-and invalid global reviewer configuration always stop immediately.
+AIR records reviewer, response-validation, and per-commit Git-inspection
+failures, continues through the selected batch, then returns a nonzero result
+summarizing the number of failed commits. `air scan --stop-on-error` records the
+first such failure and stops immediately. Subsequent ordinary scans defer
+recorded failures and report their count; only `air retry` attempts them again.
+Database failures and invalid global reviewer configuration always stop
+immediately.
 
 ### Failed commits
 

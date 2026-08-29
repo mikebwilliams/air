@@ -669,7 +669,13 @@ func runScanCommand(ctx context.Context, args []string, environment cliEnvironme
 	reviewerFlag := flags.String("reviewer", "", "review backend: codex or http")
 	limit := flags.Int("limit", 0, "maximum commits to process; zero means unlimited")
 	dryRun := flags.Bool("dry-run", false, "show pending work without reviewing or writing")
-	continueOnError := flags.Bool("continue-on-error", false, "record a failed commit and continue the batch")
+	continueOnError := false
+	stopOnError := false
+	if retry {
+		flags.BoolVar(&continueOnError, "continue-on-error", false, "record a failed commit and continue the batch")
+	} else if !rescan {
+		flags.BoolVar(&stopOnError, "stop-on-error", false, "stop after recording the first failed commit")
+	}
 	modelFlag := flags.String("model", "", "model identifier")
 	effortFlag := flags.String("effort", "", "Codex reasoning effort")
 	codexBinaryFlag := flags.String("codex-bin", "", "Codex CLI executable")
@@ -691,9 +697,6 @@ func runScanCommand(ctx context.Context, args []string, environment cliEnvironme
 		if *dryRun {
 			return errors.New("--dry-run is not valid with air rescan")
 		}
-		if *continueOnError {
-			return errors.New("--continue-on-error is not valid with air rescan")
-		}
 	} else if retry {
 		if flags.NArg() != 0 {
 			return errors.New("usage: air retry [flags]")
@@ -704,8 +707,8 @@ func runScanCommand(ctx context.Context, args []string, environment cliEnvironme
 	} else if flags.NArg() > 1 {
 		return errors.New("usage: air scan [flags] [<from>..<to>]")
 	}
-	if *dryRun && *continueOnError {
-		return errors.New("--continue-on-error is not valid with --dry-run")
+	if *dryRun && stopOnError {
+		return errors.New("--stop-on-error is not valid with --dry-run")
 	}
 	if *limit < 0 {
 		return errors.New("--limit must not be negative")
@@ -834,7 +837,7 @@ func runScanCommand(ctx context.Context, args []string, environment cliEnvironme
 		ForceCommits:    forceCommits,
 		IncludeFailures: retry,
 		DryRun:          *dryRun,
-		ContinueOnError: *continueOnError,
+		ContinueOnError: continueOnError || (mode == scanCommand && !stopOnError),
 		Limit:           *limit,
 		Output:          environment.Stdout,
 		Now:             environment.Now,

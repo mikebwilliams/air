@@ -301,6 +301,88 @@ func TestCLIScanDefaultsToCodex(t *testing.T) {
 	}
 }
 
+func TestCLIScanFailureBehavior(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		args      []string
+		wantCalls int
+	}{
+		{name: "continues by default", wantCalls: 2},
+		{name: "stops when requested", args: []string{"--stop-on-error"}, wantCalls: 1},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			ctx := context.Background()
+			repository, directory := newTestGitRepository(t)
+			base := testCommitFile(t, directory, "app.txt", []byte("base\n"), "base")
+			first := testCommitFile(t, directory, "app.txt", []byte("first\n"), "first")
+			second := testCommitFile(t, directory, "app.txt", []byte("second\n"), "second")
+			calls := 0
+			client := &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+				calls++
+				if calls == 1 {
+					return nil, errors.New("temporary reviewer outage")
+				}
+				output, _ := json.Marshal(ReviewOutput{
+					NewFindings:      []NewFinding{},
+					ResolvedFindings: []ResolvedFinding{},
+					Summary:          "Reviewed the later commit.",
+				})
+				return JSONResponse(t, map[string]any{
+					"usage": chatUsage(10, 0, 0, 2, 0),
+					"choices": []any{map[string]any{
+						"message":       map[string]any{"role": "assistant", "content": string(output)},
+						"finish_reason": "stop",
+					}},
+				}), nil
+			})}
+			var stdout bytes.Buffer
+			environment := cliEnvironment{
+				Cwd:        directory,
+				Stdout:     &stdout,
+				Stderr:     &bytes.Buffer{},
+				Getenv:     func(string) string { return "" },
+				HTTPClient: client,
+				Now:        func() time.Time { return time.Date(2026, 8, 20, 12, 0, 0, 0, time.UTC) },
+			}
+			if err := runCLI(ctx, []string{"init", base}, environment); err != nil {
+				t.Fatalf("init: %v", err)
+			}
+			stdout.Reset()
+			args := []string{"scan", "--reviewer", "http", "--model", "test-model", "--api-key", "secret"}
+			args = append(args, test.args...)
+			err := runCLI(ctx, args, environment)
+			if err == nil {
+				t.Fatal("scan succeeded despite a failed review")
+			}
+			if calls != test.wantCalls {
+				t.Fatalf("review calls = %d, want %d; error=%v\n%s", calls, test.wantCalls, err, stdout.String())
+			}
+			if !strings.Contains(stdout.String(), shortSHA(first)+"  failed:") {
+				t.Fatalf("scan did not report failed commit:\n%s", stdout.String())
+			}
+			store, openErr := OpenStore(ctx, repository.DatabasePath())
+			if openErr != nil {
+				t.Fatal(openErr)
+			}
+			defer store.Close()
+			if _, commitErr := store.Commit(ctx, first); commitErr == nil {
+				t.Fatal("failed commit was recorded as processed")
+			}
+			if test.wantCalls == 2 {
+				if !strings.Contains(err.Error(), "1 commits failed") ||
+					!strings.Contains(stdout.String(), shortSHA(second)+"  0 new, 0 resolved") {
+					t.Fatalf("default scan did not finish the batch: %v\n%s", err, stdout.String())
+				}
+				if _, commitErr := store.Commit(ctx, second); commitErr != nil {
+					t.Fatalf("later commit was not processed: %v", commitErr)
+				}
+			} else if _, commitErr := store.Commit(ctx, second); commitErr == nil {
+				t.Fatal("--stop-on-error processed a later commit")
+			}
+		})
+	}
+}
+
 func TestCLIStoredConfigurationDrivesScanAndRedactsSecrets(t *testing.T) {
 	ctx := context.Background()
 	repository, directory := newTestGitRepository(t)

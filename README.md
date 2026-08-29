@@ -213,13 +213,13 @@ air scan
 ```
 
 Reviewer and validation failures are retained without marking the commit as
-processed. By default the current scan stops at the first failure. Later scans
-defer recorded failures and continue with new commits; `air retry` is the
-explicit way to try them again. To finish the rest of the current batch while
-still returning a nonzero result at the end:
+processed. The current scan continues with later commits and returns a nonzero
+result at the end if any failed. Later scans defer recorded failures; `air
+retry` is the explicit way to try them again. To stop the current scan as soon
+as it records a failure:
 
 ```bash
-air scan --continue-on-error
+air scan --stop-on-error
 air failures
 air retry --continue-on-error
 ```
@@ -436,8 +436,9 @@ check and a nonzero exit.
   and over-limit findings are deferred without changing their state. Each scan
   result reports supplied and deferred candidate counts.
 - A failed model call or invalid response is retained in `air failures` without
-  marking the commit processed. It stops the scan unless `--continue-on-error`
-  is set. Later ordinary scans defer it; `air retry` tries it again explicitly.
+  marking the commit processed. The scan continues by default and returns a
+  nonzero result after the batch; `--stop-on-error` stops immediately. Later
+  ordinary scans defer it; `air retry` tries it again explicitly.
 - A database transaction failure always stops the scan.
 - Disjoint scans do not trigger historical lifecycle reconciliation. Scan
   chronologically when accurate finding resolution matters.
