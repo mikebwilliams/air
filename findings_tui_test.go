@@ -154,6 +154,23 @@ func TestFindingsModelChangesSortWithLeftAndRight(t *testing.T) {
 	}
 }
 
+func TestFindingsModelAlignsFindingIDs(t *testing.T) {
+	model := findingsModel{
+		all: []Finding{
+			{ID: 123, Severity: "warning", Title: "wide ID"},
+			{ID: 7, Severity: "warning", Title: "narrow ID"},
+		},
+		statusFilter:   "open",
+		severityFilter: "all",
+	}
+	model.applyFilters(0)
+	lines := model.listLines(2, 120)
+	if len(lines) != 2 || !strings.Contains(lines[0], "#123 WARN") ||
+		!strings.Contains(lines[1], "#  7 WARN") {
+		t.Fatalf("finding ID columns are not aligned: %q", lines)
+	}
+}
+
 func findingIDs(findings []Finding) string {
 	ids := make([]string, 0, len(findings))
 	for _, finding := range findings {

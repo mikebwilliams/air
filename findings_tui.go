@@ -663,6 +663,7 @@ func (m findingsModel) listLines(height, width int) []string {
 	if end > len(m.visible) {
 		end = len(m.visible)
 	}
+	idWidth := m.findingIDWidth()
 	lines := make([]string, 0, end-start)
 	for index := start; index < end; index++ {
 		finding := m.visible[index]
@@ -677,12 +678,22 @@ func (m findingsModel) listLines(height, width int) []string {
 				location += ":" + strconv.Itoa(*finding.Line)
 			}
 		}
-		line := fmt.Sprintf("%s #%d %-4s %-9s%s  %s", marker, finding.ID,
+		line := fmt.Sprintf("%s #%*d %-4s %-9s%s  %s", marker, idWidth, finding.ID,
 			severityLabel(finding.Severity), findingDisposition(finding), location,
 			singleLine(finding.Title))
 		lines = append(lines, truncateTerminalText(line, width))
 	}
 	return lines
+}
+
+func (m findingsModel) findingIDWidth() int {
+	width := 1
+	for _, finding := range m.all {
+		if candidate := len(strconv.FormatInt(finding.ID, 10)); candidate > width {
+			width = candidate
+		}
+	}
+	return width
 }
 
 func (m findingsModel) detailLines(width int) []string {
