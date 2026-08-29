@@ -253,7 +253,7 @@ func (m findingsModel) handleKey(key string) (tea.Model, tea.Cmd) {
 		m.severityFilter = "all"
 		m.applyFilters(m.selectedID())
 		m.loadDetail()
-	case "d":
+	case "D":
 		if finding, ok := m.selectedFinding(); ok {
 			if findingDisposition(finding) != "open" {
 				m.message = "Only an open finding can be dismissed."
@@ -262,7 +262,7 @@ func (m findingsModel) handleKey(key string) (tea.Model, tea.Cmd) {
 				m.input = ""
 			}
 		}
-	case "D":
+	case "d":
 		return m, m.launchExternal("Diff", m.external.diff)
 	case "o":
 		return m, m.launchExternal("Editor", m.external.open)
@@ -764,7 +764,7 @@ func (m findingsModel) footer() string {
 	case findingsConfirmReopen:
 		return fmt.Sprintf("Reopen #%d?  y yes, n no", m.selectedID())
 	default:
-		return "↑/↓ j/k move  ←/→ sort  / search  D diff  o open  d dismiss  r reopen  n note  ? help  q quit"
+		return "↑/↓ j/k move  ←/→ sort  / search  d diff  o open  D dismiss  r reopen  n note  ? help  q quit"
 	}
 }
 
@@ -780,9 +780,9 @@ Ctrl+U/Ctrl+D scroll detail
 s             cycle status: open, all, dismissed, resolved
 v             cycle severity: all, error, warning, info
 c             clear search and restore default filters
-D             open the introducing commit in git difftool
+d             open the introducing commit in git difftool
 o             open the finding's file and line in the configured Git editor
-d             dismiss the selected open finding (reason required)
+D             dismiss the selected open finding (reason required)
 r             reopen a dismissed or resolved finding (confirmation required)
 n             append an audited note
 ?             close this help

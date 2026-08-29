@@ -242,7 +242,7 @@ func TestFindingsModelLaunchesExternalActions(t *testing.T) {
 	}
 	model.applyFilters(0)
 
-	updatedValue, command := model.handleKey("D")
+	updatedValue, command := model.handleKey("d")
 	updated := updatedValue.(findingsModel)
 	if command == nil || diffID != 9 || !strings.Contains(updated.message, "Opening diff") {
 		t.Fatalf("diff launch: command=%v, id=%d, message=%q", command, diffID, updated.message)
@@ -251,6 +251,11 @@ func TestFindingsModelLaunchesExternalActions(t *testing.T) {
 	finished := finishedValue.(findingsModel)
 	if finished.message != "Diff closed for finding #9." {
 		t.Fatalf("completion message = %q", finished.message)
+	}
+	dismissValue, command := model.handleKey("D")
+	dismiss := dismissValue.(findingsModel)
+	if command != nil || dismiss.mode != findingsDismiss {
+		t.Fatalf("dismiss key: command=%v, mode=%v", command, dismiss.mode)
 	}
 
 	updatedValue, command = model.handleKey("o")
