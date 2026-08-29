@@ -11,6 +11,10 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	tea "charm.land/bubbletea/v2"
+	"github.com/charmbracelet/colorprofile"
+	"github.com/charmbracelet/x/ansi"
 )
 
 func TestAllFindingsAndReviewAttribution(t *testing.T) {
@@ -168,6 +172,36 @@ func TestFindingsModelAlignsFindingIDs(t *testing.T) {
 	if len(lines) != 2 || !strings.Contains(lines[0], "#123 WARN") ||
 		!strings.Contains(lines[1], "#  7 WARN") {
 		t.Fatalf("finding ID columns are not aligned: %q", lines)
+	}
+}
+
+func TestFindingsModelUsesTerminalAwareColor(t *testing.T) {
+	model := findingsModel{
+		all:            []Finding{{ID: 1, Severity: "error", Title: "colored finding"}},
+		statusFilter:   "open",
+		severityFilter: "all",
+		width:          100,
+		height:         20,
+	}
+	model.applyFilters(0)
+	plain := model.render()
+	if strings.Contains(plain, "\x1b[") {
+		t.Fatalf("plain render contains ANSI styling: %q", plain)
+	}
+
+	updatedValue, _ := model.Update(tea.ColorProfileMsg{Profile: colorprofile.ANSI})
+	coloredModel := updatedValue.(findingsModel)
+	colored := coloredModel.render()
+	if !strings.Contains(colored, "\x1b[") || ansi.Strip(colored) != plain {
+		t.Fatalf("colored render did not preserve plain content:\nplain=%q\ncolored=%q", plain, colored)
+	}
+	if severity := coloredModel.styleSeverity("ERR ", "error"); severity != "\x1b[1;31mERR \x1b[0m" {
+		t.Fatalf("error severity style = %q", severity)
+	}
+	styled := "\x1b[31mabcdef\x1b[0m"
+	truncated := truncateTerminalText(styled, 4)
+	if ansi.StringWidth(truncated) != 4 || ansi.Strip(truncated) != "abc…" {
+		t.Fatalf("ANSI-aware truncation = %q", truncated)
 	}
 }
 

@@ -404,14 +404,19 @@ to move, left/right to change the sort between newest-first and file/line order,
 `/` to search, `s` and `v` to cycle status and severity filters, and
 `Ctrl+U`/`Ctrl+D` to scroll long details. The detail pane includes the finding's
 description, location, introducing review and model/effort, and complete event
-history. Press `d` to open the introducing commit in the user's configured
+history. On sufficiently wide and tall terminals, its lower section loads the
+relevant hunk from the finding's introducing commit and marks the recorded
+new-file line; missing locations and unavailable textual hunks are reported in
+place. Press `d` to open the introducing commit in the user's configured
 `git difftool`, or `o` to open the recorded file and line using Git's configured
 editor. Press `D` to dismiss with a required reason, `r` to reopen after
 confirmation, or `n` to add a note. Lifecycle actions use the same audit trail
 as `air finding`; `?` shows the complete key reference. The command requires an
 interactive terminal, while `air status --json` remains the non-interactive
 summary interface and `air export --format json` provides detailed open
-findings.
+findings. On color-capable terminals, the browser highlights severity,
+disposition, selection, headings, and messages; plain terminals retain the same
+labels and selection marker.
 
 Triage findings without losing their audit history:
 

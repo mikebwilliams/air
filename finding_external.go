@@ -13,10 +13,12 @@ import (
 )
 
 type findingCommandBuilder func(context.Context, Finding) (*exec.Cmd, error)
+type findingPreviewLoader func(context.Context, Finding) (findingDiffPreview, error)
 
 type findingExternalCommands struct {
-	diff findingCommandBuilder
-	open findingCommandBuilder
+	diff    findingCommandBuilder
+	open    findingCommandBuilder
+	preview findingPreviewLoader
 }
 
 func newFindingExternalCommands(repository *GitRepository, commandContext commandContextFunc) findingExternalCommands {
@@ -29,6 +31,9 @@ func newFindingExternalCommands(repository *GitRepository, commandContext comman
 		},
 		open: func(ctx context.Context, finding Finding) (*exec.Cmd, error) {
 			return buildFindingOpenCommand(ctx, repository, finding, commandContext)
+		},
+		preview: func(ctx context.Context, finding Finding) (findingDiffPreview, error) {
+			return loadFindingDiffPreview(ctx, repository, finding)
 		},
 	}
 }

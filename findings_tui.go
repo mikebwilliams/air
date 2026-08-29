@@ -13,6 +13,8 @@ import (
 	"unicode/utf8"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/charmbracelet/colorprofile"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/charmbracelet/x/term"
 )
 
@@ -106,6 +108,17 @@ var findingSortModes = []findingSortMode{
 	findingsSortFile,
 }
 
+type findingPreviewLoadedMsg struct {
+	findingID int64
+	preview   findingDiffPreview
+	err       error
+}
+
+type findingPreviewCacheEntry struct {
+	preview findingDiffPreview
+	err     string
+}
+
 type findingsModel struct {
 	ctx             context.Context
 	external        findingExternalCommands
@@ -128,6 +141,12 @@ type findingsModel struct {
 	help            bool
 	events          []FindingEvent
 	review          FindingReview
+	colorProfile    colorprofile.Profile
+	preview         findingDiffPreview
+	previewError    string
+	previewFinding  int64
+	previewLoading  bool
+	previewCache    map[int64]findingPreviewCacheEntry
 }
 
 func newFindingsModel(
@@ -153,18 +172,40 @@ func newFindingsModel(
 		statusFilter:   status,
 		severityFilter: "all",
 		sortMode:       findingsSortNewest,
+		previewCache:   make(map[int64]findingPreviewCacheEntry),
 	}
 	model.applyFilters(0)
 	model.loadDetail()
+	model.prepareInitialPreview()
 	return model
 }
 
 func (m findingsModel) Init() tea.Cmd {
-	return nil
+	if !m.previewLoading {
+		return nil
+	}
+	finding, ok := m.selectedFinding()
+	if !ok {
+		return nil
+	}
+	return m.previewCommand(finding)
 }
 
 func (m findingsModel) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 	switch message := message.(type) {
+	case findingPreviewLoadedMsg:
+		if m.previewCache == nil {
+			m.previewCache = make(map[int64]findingPreviewCacheEntry)
+		}
+		entry := findingPreviewCacheEntry{preview: message.preview}
+		if message.err != nil {
+			entry.err = message.err.Error()
+		}
+		m.previewCache[message.findingID] = entry
+		if m.selectedID() == message.findingID {
+			m.applyPreviewEntry(message.findingID, entry)
+		}
+		return m, nil
 	case findingExternalFinishedMsg:
 		if message.err != nil {
 			m.message = fmt.Sprintf("%s failed for finding #%d: %v", message.action, message.findingID, message.err)
@@ -176,13 +217,16 @@ func (m findingsModel) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		m.width = message.Width
 		m.height = message.Height
 		return m, nil
+	case tea.ColorProfileMsg:
+		m.colorProfile = message.Profile
+		return m, nil
 	case tea.PasteMsg:
 		if m.mode == findingsSearch || m.mode == findingsDismiss || m.mode == findingsNote {
 			m.input += message.Content
 			if m.mode == findingsSearch {
 				m.query = m.input
 				m.applyFilters(0)
-				m.loadDetail()
+				return m, m.refreshSelection()
 			}
 		}
 		return m, nil
@@ -213,21 +257,21 @@ func (m findingsModel) handleKey(key string) (tea.Model, tea.Cmd) {
 	case "?":
 		m.help = true
 	case "up", "k":
-		m.moveCursor(-1)
+		return m, m.moveCursor(-1)
 	case "down", "j":
-		m.moveCursor(1)
+		return m, m.moveCursor(1)
 	case "left":
-		m.changeSort(-1)
+		return m, m.changeSort(-1)
 	case "right":
-		m.changeSort(1)
+		return m, m.changeSort(1)
 	case "pgup":
-		m.moveCursor(-m.pageSize())
+		return m, m.moveCursor(-m.pageSize())
 	case "pgdown":
-		m.moveCursor(m.pageSize())
+		return m, m.moveCursor(m.pageSize())
 	case "home", "g":
-		m.moveCursor(-len(m.visible))
+		return m, m.moveCursor(-len(m.visible))
 	case "end", "G":
-		m.moveCursor(len(m.visible))
+		return m, m.moveCursor(len(m.visible))
 	case "ctrl+u":
 		m.detailOffset -= 5
 		if m.detailOffset < 0 {
@@ -242,17 +286,17 @@ func (m findingsModel) handleKey(key string) (tea.Model, tea.Cmd) {
 	case "s":
 		m.statusFilter = nextValue(m.statusFilter, []string{"open", "all", "dismissed", "resolved"})
 		m.applyFilters(m.selectedID())
-		m.loadDetail()
+		return m, m.refreshSelection()
 	case "v":
 		m.severityFilter = nextValue(m.severityFilter, []string{"all", "error", "warning", "info"})
 		m.applyFilters(m.selectedID())
-		m.loadDetail()
+		return m, m.refreshSelection()
 	case "c":
 		m.query = ""
 		m.statusFilter = "open"
 		m.severityFilter = "all"
 		m.applyFilters(m.selectedID())
-		m.loadDetail()
+		return m, m.refreshSelection()
 	case "D":
 		if finding, ok := m.selectedFinding(); ok {
 			if findingDisposition(finding) != "open" {
@@ -315,7 +359,10 @@ func (m findingsModel) handleInputKey(key string) (tea.Model, tea.Cmd) {
 		if m.mode == findingsSearch {
 			m.query = m.queryBeforeEdit
 			m.applyFilters(0)
-			m.loadDetail()
+			command := m.refreshSelection()
+			m.mode = findingsBrowse
+			m.input = ""
+			return m, command
 		}
 		m.mode = findingsBrowse
 		m.input = ""
@@ -327,11 +374,11 @@ func (m findingsModel) handleInputKey(key string) (tea.Model, tea.Cmd) {
 			m.mode = findingsBrowse
 			m.input = ""
 			m.applyFilters(0)
-			m.loadDetail()
+			return m, m.refreshSelection()
 		case findingsDismiss:
-			m.dismissSelected()
+			return m, m.dismissSelected()
 		case findingsNote:
-			m.noteSelected()
+			return m, m.noteSelected()
 		case findingsConfirmReopen:
 			m.message = "Press y to reopen or n to cancel."
 		}
@@ -341,14 +388,14 @@ func (m findingsModel) handleInputKey(key string) (tea.Model, tea.Cmd) {
 		if m.mode == findingsSearch {
 			m.query = m.input
 			m.applyFilters(0)
-			m.loadDetail()
+			return m, m.refreshSelection()
 		}
 		return m, nil
 	}
 	if m.mode == findingsConfirmReopen {
 		switch key {
 		case "y", "Y":
-			m.reopenSelected()
+			return m, m.reopenSelected()
 		case "n", "N", "q":
 			m.mode = findingsBrowse
 			m.message = "Reopen cancelled."
@@ -363,77 +410,77 @@ func (m findingsModel) handleInputKey(key string) (tea.Model, tea.Cmd) {
 	if m.mode == findingsSearch {
 		m.query = m.input
 		m.applyFilters(0)
-		m.loadDetail()
+		return m, m.refreshSelection()
 	}
 	return m, nil
 }
 
-func (m *findingsModel) dismissSelected() {
+func (m *findingsModel) dismissSelected() tea.Cmd {
 	finding, ok := m.selectedFinding()
 	if !ok {
 		m.mode = findingsBrowse
-		return
+		return nil
 	}
 	reason := strings.TrimSpace(m.input)
 	if reason == "" {
 		m.message = "A dismissal reason is required."
-		return
+		return nil
 	}
 	if err := m.store.DismissFinding(m.ctx, finding.ID, reason, m.now()); err != nil {
 		m.message = "Dismiss failed: " + err.Error()
-		return
+		return nil
 	}
 	m.mode = findingsBrowse
 	m.input = ""
 	m.message = fmt.Sprintf("Dismissed finding #%d.", finding.ID)
-	m.reload(finding.ID)
+	return m.reload(finding.ID)
 }
 
-func (m *findingsModel) noteSelected() {
+func (m *findingsModel) noteSelected() tea.Cmd {
 	finding, ok := m.selectedFinding()
 	if !ok {
 		m.mode = findingsBrowse
-		return
+		return nil
 	}
 	note := strings.TrimSpace(m.input)
 	if note == "" {
 		m.message = "A note is required."
-		return
+		return nil
 	}
 	if err := m.store.AddFindingNote(m.ctx, finding.ID, note, m.now()); err != nil {
 		m.message = "Adding note failed: " + err.Error()
-		return
+		return nil
 	}
 	m.mode = findingsBrowse
 	m.input = ""
 	m.message = fmt.Sprintf("Added note to finding #%d.", finding.ID)
-	m.reload(finding.ID)
+	return m.reload(finding.ID)
 }
 
-func (m *findingsModel) reopenSelected() {
+func (m *findingsModel) reopenSelected() tea.Cmd {
 	finding, ok := m.selectedFinding()
 	if !ok {
 		m.mode = findingsBrowse
-		return
+		return nil
 	}
 	if err := m.store.ReopenFinding(m.ctx, finding.ID, m.now()); err != nil {
 		m.message = "Reopen failed: " + err.Error()
-		return
+		return nil
 	}
 	m.mode = findingsBrowse
 	m.message = fmt.Sprintf("Reopened finding #%d.", finding.ID)
-	m.reload(finding.ID)
+	return m.reload(finding.ID)
 }
 
-func (m *findingsModel) reload(preferredID int64) {
+func (m *findingsModel) reload(preferredID int64) tea.Cmd {
 	findings, err := m.store.AllFindings(m.ctx)
 	if err != nil {
 		m.message = "Reload failed: " + err.Error()
-		return
+		return nil
 	}
 	m.all = findings
 	m.applyFilters(preferredID)
-	m.loadDetail()
+	return m.refreshSelection()
 }
 
 func (m *findingsModel) applyFilters(preferredID int64) {
@@ -481,7 +528,7 @@ func (m *findingsModel) applyFilters(preferredID int64) {
 	m.detailOffset = 0
 }
 
-func (m *findingsModel) changeSort(delta int) {
+func (m *findingsModel) changeSort(delta int) tea.Cmd {
 	selectedID := m.selectedID()
 	current := 0
 	for index, mode := range findingSortModes {
@@ -496,7 +543,7 @@ func (m *findingsModel) changeSort(delta int) {
 	}
 	m.sortMode = findingSortModes[current]
 	m.applyFilters(selectedID)
-	m.loadDetail()
+	return m.refreshSelection()
 }
 
 func sortFindings(findings []Finding, mode findingSortMode) {
@@ -554,9 +601,74 @@ func (m *findingsModel) loadDetail() {
 	m.review = review
 }
 
-func (m *findingsModel) moveCursor(delta int) {
+func (m *findingsModel) refreshSelection() tea.Cmd {
+	m.loadDetail()
+	return m.preparePreview()
+}
+
+func (m *findingsModel) prepareInitialPreview() {
+	_, _ = m.setPreviewState()
+}
+
+func (m *findingsModel) preparePreview() tea.Cmd {
+	finding, load := m.setPreviewState()
+	if !load {
+		return nil
+	}
+	return m.previewCommand(finding)
+}
+
+func (m *findingsModel) setPreviewState() (Finding, bool) {
+	finding, ok := m.selectedFinding()
+	if !ok {
+		m.preview = findingDiffPreview{}
+		m.previewError = ""
+		m.previewFinding = 0
+		m.previewLoading = false
+		return Finding{}, false
+	}
+	if m.previewFinding == finding.ID && m.previewLoading {
+		return finding, false
+	}
+	m.preview = findingDiffPreview{}
+	m.previewError = ""
+	m.previewFinding = finding.ID
+	m.previewLoading = false
+	if entry, exists := m.previewCache[finding.ID]; exists {
+		m.applyPreviewEntry(finding.ID, entry)
+		return finding, false
+	}
+	if finding.File == nil {
+		m.preview.Message = "No file location was recorded for this finding."
+		return finding, false
+	}
+	if m.external.preview == nil {
+		m.preview.Message = "Diff preview is unavailable."
+		return finding, false
+	}
+	m.previewLoading = true
+	return finding, true
+}
+
+func (m findingsModel) previewCommand(finding Finding) tea.Cmd {
+	loader := m.external.preview
+	ctx := m.ctx
+	return func() tea.Msg {
+		preview, err := loader(ctx, finding)
+		return findingPreviewLoadedMsg{findingID: finding.ID, preview: preview, err: err}
+	}
+}
+
+func (m *findingsModel) applyPreviewEntry(findingID int64, entry findingPreviewCacheEntry) {
+	m.previewFinding = findingID
+	m.preview = entry.preview
+	m.previewError = entry.err
+	m.previewLoading = false
+}
+
+func (m *findingsModel) moveCursor(delta int) tea.Cmd {
 	if len(m.visible) == 0 {
-		return
+		return nil
 	}
 	m.cursor += delta
 	if m.cursor < 0 {
@@ -566,7 +678,7 @@ func (m *findingsModel) moveCursor(delta int) {
 		m.cursor = len(m.visible) - 1
 	}
 	m.detailOffset = 0
-	m.loadDetail()
+	return m.refreshSelection()
 }
 
 func (m findingsModel) selectedFinding() (Finding, bool) {
@@ -615,7 +727,10 @@ func (m findingsModel) render() string {
 	if m.query != "" {
 		header += "  search:" + strconv.Quote(m.query)
 	}
-	lines := []string{truncateTerminalText(header, width), strings.Repeat("─", width)}
+	lines := []string{
+		truncateTerminalText(m.style(header, "1", "36"), width),
+		m.style(strings.Repeat("─", width), "2"),
+	}
 	bodyHeight := height - 5
 	if m.help {
 		lines = append(lines, fitLines(m.helpLines(width), bodyHeight, width)...)
@@ -623,7 +738,7 @@ func (m findingsModel) render() string {
 		leftWidth := width * 42 / 100
 		rightWidth := width - leftWidth - 3
 		left := fitLines(m.listLines(bodyHeight, leftWidth), bodyHeight, leftWidth)
-		right := fitLines(m.detailLines(rightWidth), bodyHeight, rightWidth)
+		right := fitLines(m.rightPaneLines(bodyHeight, rightWidth), bodyHeight, rightWidth)
 		for index := 0; index < bodyHeight; index++ {
 			lines = append(lines, padRight(left[index], leftWidth)+" │ "+right[index])
 		}
@@ -634,11 +749,100 @@ func (m findingsModel) render() string {
 		}
 		detailHeight := bodyHeight - listHeight - 1
 		lines = append(lines, fitLines(m.listLines(listHeight, width), listHeight, width)...)
-		lines = append(lines, strings.Repeat("─", width))
+		lines = append(lines, m.style(strings.Repeat("─", width), "2"))
 		lines = append(lines, fitLines(m.detailLines(width), detailHeight, width)...)
 	}
-	lines = append(lines, truncateTerminalText(m.footer(), width), truncateTerminalText(m.message, width))
+	lines = append(lines,
+		truncateTerminalText(m.style(m.footer(), "2"), width),
+		truncateTerminalText(m.style(m.message, "1", "33"), width),
+	)
 	return strings.Join(lines, "\n")
+}
+
+func (m findingsModel) rightPaneLines(height, width int) []string {
+	if height < 18 || width < 40 {
+		return fitLines(m.detailLines(width), height, width)
+	}
+	previewHeight := height * 2 / 5
+	if previewHeight < 7 {
+		previewHeight = 7
+	}
+	detailHeight := height - previewHeight - 1
+	lines := fitLines(m.detailLines(width), detailHeight, width)
+	lines = append(lines, m.style(strings.Repeat("─", width), "2"))
+	lines = append(lines, fitLines(m.previewLines(previewHeight, width), previewHeight, width)...)
+	return lines
+}
+
+func (m findingsModel) previewLines(height, width int) []string {
+	if height <= 0 {
+		return nil
+	}
+	finding, ok := m.selectedFinding()
+	if !ok {
+		return []string{m.style("Introducing diff", "1", "36"), "No finding is selected."}
+	}
+	heading := "Introducing diff"
+	if finding.File != nil {
+		heading += " — " + *finding.File
+	}
+	lines := []string{m.style(heading, "1", "36")}
+	if finding.File == nil {
+		return append(lines, "No file location was recorded for this finding.")
+	}
+	if m.previewFinding != finding.ID || m.previewLoading {
+		return append(lines, m.style("Loading relevant hunk…", "2"))
+	}
+	if m.previewError != "" {
+		return append(lines, wrapText("Diff unavailable: "+m.previewError, width)...)
+	}
+	if m.preview.Message != "" {
+		return append(lines, wrapText(m.preview.Message, width)...)
+	}
+	if m.preview.HunkHeader != "" && len(lines) < height {
+		lines = append(lines, m.style("  "+m.preview.HunkHeader, "36"))
+	}
+	available := height - len(lines)
+	if available <= 0 || len(m.preview.Lines) == 0 {
+		return lines
+	}
+	start := m.preview.Target - available/2
+	if start < 0 {
+		start = 0
+	}
+	if maximum := len(m.preview.Lines) - available; start > maximum && maximum >= 0 {
+		start = maximum
+	}
+	end := start + available
+	if end > len(m.preview.Lines) {
+		end = len(m.preview.Lines)
+	}
+	for index := start; index < end; index++ {
+		line := "  " + m.preview.Lines[index]
+		target := index == m.preview.Target
+		if target {
+			line = "> " + m.preview.Lines[index]
+		}
+		lines = append(lines, m.styleDiffLine(line, target))
+	}
+	return lines
+}
+
+func (m findingsModel) styleDiffLine(line string, target bool) string {
+	if target {
+		return m.style(line, "1", "7")
+	}
+	trimmed := strings.TrimLeft(line, " >")
+	switch {
+	case strings.HasPrefix(trimmed, "+"):
+		return m.style(line, "32")
+	case strings.HasPrefix(trimmed, "-"):
+		return m.style(line, "31")
+	case strings.HasPrefix(trimmed, "@@"):
+		return m.style(line, "36")
+	default:
+		return m.style(line, "2")
+	}
 }
 
 func (m findingsModel) position() int {
@@ -667,10 +871,6 @@ func (m findingsModel) listLines(height, width int) []string {
 	lines := make([]string, 0, end-start)
 	for index := start; index < end; index++ {
 		finding := m.visible[index]
-		marker := " "
-		if index == m.cursor {
-			marker = ">"
-		}
 		location := ""
 		if finding.File != nil {
 			location = " " + *finding.File
@@ -678,12 +878,31 @@ func (m findingsModel) listLines(height, width int) []string {
 				location += ":" + strconv.Itoa(*finding.Line)
 			}
 		}
-		line := fmt.Sprintf("%s #%*d %-4s %-9s%s  %s", marker, idWidth, finding.ID,
-			severityLabel(finding.Severity), findingDisposition(finding), location,
-			singleLine(finding.Title))
+		line := m.findingListLine(finding, idWidth, location, index == m.cursor)
 		lines = append(lines, truncateTerminalText(line, width))
 	}
 	return lines
+}
+
+func (m findingsModel) findingListLine(finding Finding, idWidth int, location string, selected bool) string {
+	id := fmt.Sprintf("%*d", idWidth, finding.ID)
+	severity := fmt.Sprintf("%-4s", severityLabel(finding.Severity))
+	dispositionName := findingDisposition(finding)
+	disposition := fmt.Sprintf("%-9s", dispositionName)
+	title := singleLine(finding.Title)
+	if selected {
+		return m.style(fmt.Sprintf("> #%s %s %s%s  %s", id, severity, disposition, location, title), "1", "7")
+	}
+	if dispositionName != "open" {
+		title = m.style(title, "2")
+	}
+	return fmt.Sprintf("  #%s %s %s%s  %s",
+		m.style(id, "2"),
+		m.styleSeverity(severity, finding.Severity),
+		m.styleDisposition(disposition, dispositionName),
+		m.style(location, "2"),
+		title,
+	)
 }
 
 func (m findingsModel) findingIDWidth() int {
@@ -701,9 +920,11 @@ func (m findingsModel) detailLines(width int) []string {
 	if !ok {
 		return []string{"Select a broader filter to browse findings."}
 	}
-	lines := []string{
-		fmt.Sprintf("#%d  %s  %s", finding.ID, strings.ToUpper(finding.Severity), findingDisposition(finding)),
-	}
+	lines := []string{fmt.Sprintf("%s  %s  %s",
+		m.style(fmt.Sprintf("#%d", finding.ID), "1"),
+		m.styleSeverity(strings.ToUpper(finding.Severity), finding.Severity),
+		m.styleDisposition(findingDisposition(finding), findingDisposition(finding)),
+	)}
 	lines = append(lines, wrapText(finding.Title, width)...)
 	lines = append(lines, "")
 	if finding.File != nil {
@@ -734,9 +955,9 @@ func (m findingsModel) detailLines(width int) []string {
 	case "resolved":
 		lines = append(lines, "Resolved: "+shortSHA(*finding.ResolvedSHA))
 	}
-	lines = append(lines, "", "Description:")
+	lines = append(lines, "", m.style("Description:", "1", "36"))
 	lines = append(lines, wrapText(finding.Description, width)...)
-	lines = append(lines, "", "History:")
+	lines = append(lines, "", m.style("History:", "1", "36"))
 	if len(m.events) == 0 {
 		lines = append(lines, "  none")
 	}
@@ -769,7 +990,7 @@ func (m findingsModel) footer() string {
 }
 
 func (m findingsModel) helpLines(width int) []string {
-	return wrapText(`Keyboard
+	lines := wrapText(`Keyboard
 
 ↑/↓ or j/k    select finding
 ←/→           change sort: newest, file
@@ -789,6 +1010,39 @@ n             append an audited note
 q             quit
 
 All changes use the same audited finding lifecycle as the singular finding command.`, width)
+	if len(lines) != 0 {
+		lines[0] = m.style(lines[0], "1", "36")
+	}
+	return lines
+}
+
+func (m findingsModel) styleSeverity(value, severity string) string {
+	switch severity {
+	case "error":
+		return m.style(value, "1", "31")
+	case "warning":
+		return m.style(value, "33")
+	default:
+		return m.style(value, "36")
+	}
+}
+
+func (m findingsModel) styleDisposition(value, disposition string) string {
+	switch disposition {
+	case "open":
+		return m.style(value, "32")
+	case "dismissed":
+		return m.style(value, "35")
+	default:
+		return m.style(value, "36")
+	}
+}
+
+func (m findingsModel) style(value string, codes ...string) string {
+	if value == "" || m.colorProfile <= colorprofile.ASCII {
+		return value
+	}
+	return "\x1b[" + strings.Join(codes, ";") + "m" + value + "\x1b[0m"
 }
 
 func findingDisposition(finding Finding) string {
@@ -854,19 +1108,15 @@ func truncateTerminalText(value string, width int) string {
 	if width <= 0 {
 		return ""
 	}
-	runes := []rune(value)
-	if len(runes) <= width {
+	if ansi.StringWidth(value) <= width {
 		return value
 	}
-	if width == 1 {
-		return "…"
-	}
-	return string(runes[:width-1]) + "…"
+	return ansi.Truncate(value, width, "…")
 }
 
 func padRight(value string, width int) string {
 	value = truncateTerminalText(value, width)
-	padding := width - utf8.RuneCountInString(value)
+	padding := width - ansi.StringWidth(value)
 	if padding <= 0 {
 		return value
 	}

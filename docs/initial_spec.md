@@ -1083,12 +1083,20 @@ file/line order; the selected finding remains selected when the order changes.
 The detail view shows the description, commit references, introducing review's
 model and reasoning effort, and event history. The browser supports keyboard
 navigation, text search, status and severity filters, and independent detail
-scrolling. It can launch the introducing commit through `git difftool`, open a
+scrolling. On sufficiently wide and tall terminals, the right pane is split
+with a bounded introducing-diff preview below the details. AIR asynchronously
+loads and caches the selected file's relevant unified-diff hunk, choosing the
+hunk nearest the recorded new-file line and marking that line. It reports
+missing locations, unavailable commits, and non-textual diffs in place; narrow
+or short terminals retain the details-only layout. It can launch the
+introducing commit through `git difftool`, open a
 located finding in the editor reported by `git var GIT_EDITOR`, dismiss a
 finding with a required reason, reopen a dismissed or resolved finding after
 confirmation, and append a note. Lifecycle changes call the same audited
 operations as `air finding dismiss`, `reopen`, and `note`. It makes no reviewer
-or network calls.
+or network calls. When the terminal reports color support, semantic colors
+highlight severity, disposition, selection, headings, and messages. Text labels
+and the selection marker remain sufficient when color is unavailable.
 
 The browser requires both input and output to be interactive terminals. Scripts
 should use `air status --json` for aggregate counts or `air export` for detailed
