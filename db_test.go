@@ -421,6 +421,26 @@ func TestSkippedCommitIsProcessed(t *testing.T) {
 	}
 }
 
+func TestInsertSkippedBatchIsAtomic(t *testing.T) {
+	ctx := context.Background()
+	store, err := CreateStore(ctx, filepath.Join(t.TempDir(), "air.sqlite"), strings.Repeat("0", 40))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	processed := testMetadata("e", "0")
+	if err := store.InsertSkipped(ctx, processed, "already skipped", time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	newCommit := testMetadata("f", "e")
+	if err := store.InsertSkippedBatch(ctx, []CommitMetadata{newCommit, processed}, "bulk skip", time.Now()); err == nil {
+		t.Fatal("conflicting skipped batch unexpectedly succeeded")
+	}
+	if _, err := store.Commit(ctx, newCommit.SHA); err == nil {
+		t.Fatal("partial skipped batch was committed")
+	}
+}
+
 func TestUnknownModelPersistsUnknownPricingAndCost(t *testing.T) {
 	ctx := context.Background()
 	store, err := CreateStore(ctx, filepath.Join(t.TempDir(), "air.sqlite"), strings.Repeat("0", 40))

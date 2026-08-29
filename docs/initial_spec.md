@@ -544,6 +544,25 @@ oldest first. Current reviewer configuration and command-line overrides are
 used for the retry; the failed attempt's model and effort remain diagnostic
 metadata.
 
+### 7.1 Manual skip selection
+
+```bash
+air skip <commit-ish> [--dry-run] [--reason TEXT]
+air skip --filter <message-substring> [--dry-run] [--reason TEXT]
+```
+
+The direct form resolves one commit and requires it to be after the configured
+baseline on the first-parent history of `master`. The filter form performs a
+case-insensitive literal substring match against the full commit message over
+that same history range. Only unprocessed matches are selected; reviewed and
+already-skipped matches are reported but never overwritten. The default reason
+is `manual skip`.
+
+AIR reads all selected metadata before writing, then records the entire batch
+in one transaction. Any failure rolls back the batch. Recording the skip also
+removes a matching `scan_failures` row atomically. `--dry-run` lists the exact
+selection without acquiring the scan lock or changing commit/review state.
+
 ## 8. Commit Review
 
 For each commit, use its first parent and obtain at minimum:
@@ -1401,12 +1420,13 @@ Concurrency is not required initially.
 
 Sequential processing is desirable because finding resolution depends on previous commits having already been processed.
 
-Because worktrees share one database, `air scan` and `air recheck` should hold a
-repository-level exclusive lock for the duration of their operation. A
-concurrent writer should fail clearly rather than duplicate model requests or
-use inconsistent finding context. Model requests occur outside SQLite
-transactions; each parsed commit review or recheck batch and all associated
-database changes are written in one short transaction.
+Because worktrees share one database, `air scan`, `air recheck`, and mutating
+maintenance commands such as `air skip` should hold a repository-level
+exclusive lock for the duration of their operation. A concurrent writer should
+fail clearly rather than duplicate model requests or use inconsistent finding
+context. Model requests occur outside SQLite transactions; each parsed commit
+review or recheck batch and all associated database changes are written in one
+short transaction.
 
 ## 25. Expected Implementation Size
 

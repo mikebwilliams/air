@@ -51,6 +51,8 @@ func runCLI(ctx context.Context, args []string, environment cliEnvironment) erro
 		return runFailures(ctx, args[1:], environment)
 	case "pending":
 		return runPending(ctx, args[1:], environment)
+	case "skip":
+		return runSkip(ctx, args[1:], environment)
 	case "clean":
 		return runClean(ctx, args[1:], environment)
 	case "reset":
@@ -1085,6 +1087,135 @@ func runPending(ctx context.Context, args []string, environment cliEnvironment) 
 	})
 }
 
+func runSkip(ctx context.Context, args []string, environment cliEnvironment) error {
+	if len(args) > 1 && !strings.HasPrefix(args[0], "-") {
+		args = append(append([]string(nil), args[1:]...), args[0])
+	}
+	flags := newFlagSet("skip", environment.Stderr)
+	filter := flags.String("filter", "", "case-insensitive literal substring of the commit message")
+	reason := flags.String("reason", "manual skip", "reason stored with each skipped commit")
+	dryRun := flags.Bool("dry-run", false, "show matching commits without changing the database")
+	if err := flags.Parse(args); err != nil {
+		return err
+	}
+	hasFilter := strings.TrimSpace(*filter) != ""
+	if (flags.NArg() == 1) == hasFilter {
+		return errors.New("usage: air skip [--dry-run] [--reason TEXT] <commit-ish> | air skip --filter TEXT [--dry-run] [--reason TEXT]")
+	}
+	*reason = strings.TrimSpace(*reason)
+	if *reason == "" {
+		return errors.New("--reason must not be empty")
+	}
+
+	repository, store, closeStore, err := openRepositoryStore(ctx, environment.Cwd)
+	if err != nil {
+		return err
+	}
+	defer closeStore()
+	if !*dryRun {
+		lock, err := acquireScanLock(repository.LockPath())
+		if err != nil {
+			return err
+		}
+		defer lock.Close()
+	}
+	startSHA, err := store.Config(ctx, "start_sha")
+	if err != nil {
+		return err
+	}
+	processed, err := store.ProcessedSHAs(ctx)
+	if err != nil {
+		return err
+	}
+
+	var candidateSHAs []string
+	processedMatches := 0
+	if hasFilter {
+		candidateSHAs, err = repository.EnumerateMessageMatches(ctx, startSHA, *filter)
+		if err != nil {
+			return err
+		}
+	} else {
+		sha, err := repository.ResolveCommit(ctx, flags.Arg(0))
+		if err != nil {
+			return err
+		}
+		eligible, err := repository.EnumerateDefault(ctx, startSHA)
+		if err != nil {
+			return err
+		}
+		inRange := false
+		for _, candidate := range eligible {
+			if candidate == sha {
+				inRange = true
+				break
+			}
+		}
+		if !inRange {
+			return fmt.Errorf("commit %s is not after the AIR baseline on master's first-parent history", shortSHA(sha))
+		}
+		if _, exists := processed[sha]; exists {
+			return fmt.Errorf("commit %s has already been processed", shortSHA(sha))
+		}
+		candidateSHAs = []string{sha}
+	}
+
+	commits := make([]CommitMetadata, 0, len(candidateSHAs))
+	for _, sha := range candidateSHAs {
+		if _, exists := processed[sha]; exists {
+			processedMatches++
+			continue
+		}
+		metadata, err := repository.CommitMetadata(ctx, sha)
+		if err != nil {
+			return err
+		}
+		commits = append(commits, metadata)
+	}
+	if len(commits) == 0 {
+		if len(candidateSHAs) == 0 {
+			fmt.Fprintln(environment.Stdout, "No commits matched the filter.")
+		} else {
+			fmt.Fprintf(environment.Stdout, "No unprocessed commits matched; %d matches were already processed.\n", processedMatches)
+		}
+		return nil
+	}
+
+	if !*dryRun {
+		if err := store.InsertSkippedBatch(ctx, commits, *reason, environmentNow(environment)); err != nil {
+			return err
+		}
+	}
+	verb := "skipped"
+	if *dryRun {
+		verb = "would skip"
+	}
+	for _, metadata := range commits {
+		subject := firstLine(metadata.Message)
+		if subject == "" {
+			subject = "(no subject)"
+		}
+		fmt.Fprintf(environment.Stdout, "%s  %s  %s\n", shortSHA(metadata.SHA), verb, subject)
+	}
+	commitLabel := "commits"
+	if len(commits) == 1 {
+		commitLabel = "commit"
+	}
+	if *dryRun {
+		fmt.Fprintf(environment.Stdout, "Would skip %d %s.\n", len(commits), commitLabel)
+	} else {
+		fmt.Fprintf(environment.Stdout, "Skipped %d %s.\n", len(commits), commitLabel)
+	}
+	if processedMatches != 0 {
+		matchLabel := "matches"
+		if processedMatches == 1 {
+			matchLabel = "match"
+		}
+		fmt.Fprintf(environment.Stdout, "Ignored %d already processed %s.\n", processedMatches, matchLabel)
+	}
+	return nil
+}
+
 func runClean(ctx context.Context, args []string, environment cliEnvironment) error {
 	flags := newFlagSet("clean", environment.Stderr)
 	dryRun := flags.Bool("dry-run", false, "show stale commits without deleting them")
@@ -1919,6 +2050,8 @@ Usage:
   air retry [flags]
   air failures [--json]
   air pending [--limit N] [<from>..<to>]
+  air skip <commit-ish> [--dry-run] [--reason TEXT]
+  air skip --filter TEXT [--dry-run] [--reason TEXT]
   air rescan <commit-ish> [flags]
   air recheck [flags] [<finding-id> ...]
   air clean [--dry-run]

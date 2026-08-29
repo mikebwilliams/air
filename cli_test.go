@@ -905,6 +905,92 @@ func TestCLIPendingAndScanDryRun(t *testing.T) {
 	}
 }
 
+func TestCLISkipCommitAndMessageFilter(t *testing.T) {
+	ctx := context.Background()
+	repository, directory := newTestGitRepository(t)
+	base := testCommitFile(t, directory, "app.txt", []byte("base\n"), "base")
+	first := testCommitFile(t, directory, "app.txt", []byte("first\n"), "Update translations for French")
+	second := testCommitFile(t, directory, "app.txt", []byte("second\n"), "Fix parser")
+	third := testCommitFile(t, directory, "app.txt", []byte("third\n"), "Refresh TRANSLATIONS catalog")
+	var stdout bytes.Buffer
+	environment := cliEnvironment{
+		Cwd: directory, Stdout: &stdout, Stderr: &bytes.Buffer{},
+		Getenv: func(string) string { return "" },
+		Now:    func() time.Time { return time.Date(2026, 8, 23, 12, 0, 0, 0, time.UTC) },
+	}
+	if err := runCLI(ctx, []string{"init", base}, environment); err != nil {
+		t.Fatal(err)
+	}
+
+	stdout.Reset()
+	if err := runCLI(ctx, []string{"skip", shortSHA(first), "--reason", "not executable"}, environment); err != nil {
+		t.Fatalf("skip commit: %v", err)
+	}
+	if !strings.Contains(stdout.String(), shortSHA(first)+"  skipped  Update translations for French") ||
+		!strings.Contains(stdout.String(), "Skipped 1 commit.") {
+		t.Fatalf("skip output:\n%s", stdout.String())
+	}
+	store, err := OpenStore(ctx, repository.DatabasePath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	record, err := store.Commit(ctx, first)
+	if err != nil || record.Status != "skipped" || record.SkipReason != "not executable" {
+		t.Fatalf("directly skipped record = %+v, %v", record, err)
+	}
+	identity := ReviewIdentity{Model: modelByName("failed-model"), ReasoningEffort: "low"}
+	if err := store.RecordScanFailure(ctx, third, second, identity, false,
+		errors.New("temporary failure"), environmentNow(environment)); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	stdout.Reset()
+	if err := runCLI(ctx, []string{"skip", "--filter", "translations", "--dry-run"}, environment); err != nil {
+		t.Fatalf("dry-run filter: %v", err)
+	}
+	if !strings.Contains(stdout.String(), shortSHA(third)+"  would skip  Refresh TRANSLATIONS catalog") ||
+		!strings.Contains(stdout.String(), "Would skip 1 commit.") ||
+		!strings.Contains(stdout.String(), "Ignored 1 already processed match.") {
+		t.Fatalf("dry-run filter output:\n%s", stdout.String())
+	}
+	store, err = OpenStore(ctx, repository.DatabasePath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Commit(ctx, third); err == nil {
+		t.Fatal("dry-run recorded the filtered commit")
+	}
+	if failures, err := store.ScanFailures(ctx); err != nil || len(failures) != 1 {
+		t.Fatalf("dry-run changed failures = %+v, %v", failures, err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	stdout.Reset()
+	if err := runCLI(ctx, []string{"skip", "--filter", "translations"}, environment); err != nil {
+		t.Fatalf("skip filter: %v", err)
+	}
+	store, err = OpenStore(ctx, repository.DatabasePath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	record, err = store.Commit(ctx, third)
+	if err != nil || record.Status != "skipped" || record.SkipReason != "manual skip" {
+		t.Fatalf("filtered skipped record = %+v, %v", record, err)
+	}
+	if failures, err := store.ScanFailures(ctx); err != nil || len(failures) != 0 {
+		t.Fatalf("skip did not clear failure = %+v, %v", failures, err)
+	}
+	if _, err := store.Commit(ctx, second); err == nil {
+		t.Fatal("unmatched commit was processed")
+	}
+}
+
 func TestCLICleanPrunesCommitsOutsideMaster(t *testing.T) {
 	ctx := context.Background()
 	repository, directory := newTestGitRepository(t)

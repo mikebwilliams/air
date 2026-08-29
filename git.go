@@ -126,6 +126,23 @@ func (r *GitRepository) EnumerateDefault(ctx context.Context, startSHA string) (
 	return parseObjectIDs(out)
 }
 
+func (r *GitRepository) EnumerateMessageMatches(ctx context.Context, startSHA, filter string) ([]string, error) {
+	filter = strings.TrimSpace(filter)
+	if filter == "" || strings.ContainsRune(filter, '\x00') {
+		return nil, errors.New("commit message filter must not be empty or contain NUL")
+	}
+	if err := r.validateHistoryEndpoints(ctx, startSHA, ""); err != nil {
+		return nil, err
+	}
+	out, err := r.run(ctx,
+		"rev-list", "--reverse", "--first-parent", "--fixed-strings", "--regexp-ignore-case",
+		"--grep="+filter, startSHA+".."+masterRef)
+	if err != nil {
+		return nil, fmt.Errorf("filter commits: %w", err)
+	}
+	return parseObjectIDs(out)
+}
+
 func (r *GitRepository) EnumerateRange(ctx context.Context, revisionRange string) ([]string, error) {
 	fromRevision, toRevision, err := splitTwoDotRange(revisionRange)
 	if err != nil {

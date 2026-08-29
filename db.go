@@ -1093,26 +1093,36 @@ func (s *Store) FindingReview(ctx context.Context, id int64) (FindingReview, err
 }
 
 func (s *Store) InsertSkipped(ctx context.Context, metadata CommitMetadata, reason string, now time.Time) error {
+	return s.InsertSkippedBatch(ctx, []CommitMetadata{metadata}, reason, now)
+}
+
+func (s *Store) InsertSkippedBatch(ctx context.Context, commits []CommitMetadata, reason string, now time.Time) error {
 	if strings.TrimSpace(reason) == "" {
 		return errors.New("skip reason must not be empty")
 	}
+	if len(commits) == 0 {
+		return nil
+	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
-		return fmt.Errorf("record skipped commit: %w", err)
+		return fmt.Errorf("record skipped commits: %w", err)
 	}
 	defer tx.Rollback()
-	_, err = tx.ExecContext(ctx, `
-        INSERT INTO commits(sha, parent_sha, processed_at, status, skip_reason)
-        VALUES(?, ?, ?, 'skipped', ?)`,
-		metadata.SHA, metadata.ParentSHA, formatTime(now), reason)
-	if err != nil {
-		return fmt.Errorf("record skipped commit %s: %w", shortSHA(metadata.SHA), err)
-	}
-	if _, err := tx.ExecContext(ctx, `DELETE FROM scan_failures WHERE sha = ?`, metadata.SHA); err != nil {
-		return fmt.Errorf("clear scan failure for %s: %w", shortSHA(metadata.SHA), err)
+	processedAt := formatTime(now)
+	for _, metadata := range commits {
+		_, err = tx.ExecContext(ctx, `
+			INSERT INTO commits(sha, parent_sha, processed_at, status, skip_reason)
+			VALUES(?, ?, ?, 'skipped', ?)`,
+			metadata.SHA, metadata.ParentSHA, processedAt, reason)
+		if err != nil {
+			return fmt.Errorf("record skipped commit %s: %w", shortSHA(metadata.SHA), err)
+		}
+		if _, err := tx.ExecContext(ctx, `DELETE FROM scan_failures WHERE sha = ?`, metadata.SHA); err != nil {
+			return fmt.Errorf("clear scan failure for %s: %w", shortSHA(metadata.SHA), err)
+		}
 	}
 	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("record skipped commit %s: %w", shortSHA(metadata.SHA), err)
+		return fmt.Errorf("record skipped commits: %w", err)
 	}
 	return nil
 }

@@ -73,6 +73,23 @@ func TestEnumerateDefaultAndExplicitRange(t *testing.T) {
 	}
 }
 
+func TestEnumerateMessageMatchesUsesLiteralCaseInsensitiveFilter(t *testing.T) {
+	repository, directory := newTestGitRepository(t)
+	base := testCommitFile(t, directory, "app.txt", []byte("base\n"), "base")
+	first := testCommitFile(t, directory, "app.txt", []byte("first\n"), "Refresh [L10N] strings")
+	testCommitFile(t, directory, "app.txt", []byte("second\n"), "Fix parser")
+	third := testCommitFile(t, directory, "app.txt", []byte("third\n"), "Update [l10n] catalog")
+
+	commits, err := repository.EnumerateMessageMatches(context.Background(), base, "[l10n]")
+	if err != nil {
+		t.Fatalf("EnumerateMessageMatches: %v", err)
+	}
+	assertStrings(t, commits, []string{first, third})
+	if _, err := repository.EnumerateMessageMatches(context.Background(), base, "  "); err == nil {
+		t.Fatal("empty message filter unexpectedly succeeded")
+	}
+}
+
 func TestFirstParentEnumerationExcludesMergedBranchCommits(t *testing.T) {
 	repository, directory := newTestGitRepository(t)
 	base := testCommitFile(t, directory, "base.txt", []byte("base\n"), "base")

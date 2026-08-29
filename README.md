@@ -242,6 +242,26 @@ air scan --dry-run
 Both commands list commits in processing order as `review` or `skip` and print
 a summary. `air pending` also accepts `--limit` and an explicit range.
 
+Manually mark one unprocessed commit as skipped:
+
+```bash
+air skip a1b2c3d --reason "localization-only change"
+```
+
+Or skip every unprocessed commit whose full commit message contains a literal
+substring, matched case-insensitively:
+
+```bash
+air skip --filter "translations" --dry-run
+air skip --filter "translations" --reason "localization-only changes"
+```
+
+Skip selection is limited to commits after AIR's baseline on the first-parent
+history of `master`. Already processed filter matches are reported and left
+unchanged. A bulk skip is atomic, and skipping a failed commit removes it from
+the retry queue in the same transaction. `--dry-run` does not change
+commit/review state.
+
 After master history is rewritten, preview and remove stored commits that no
 longer occur on its first-parent history:
 
