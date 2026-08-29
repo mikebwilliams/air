@@ -17,6 +17,18 @@ Print the resolved path for the current repository, even before initialization:
 air db path
 ```
 
+Create a consistent, private backup in the current directory:
+
+```bash
+air backup
+air backup /path/to/project-air.sqlite
+```
+
+With no path, AIR uses a timestamped `air-backup-YYYYMMDD-HHMMSS.sqlite`
+filename and adds a numeric suffix if necessary. The command uses SQLite's
+online-backup mechanism, includes committed WAL state, verifies the completed
+copy, sets mode `0600`, and never overwrites an existing destination.
+
 AIR's scan lock is stored beside it as `<git-common-dir>/air/scan.lock`. The
 state directory is private to the user, shared by worktrees, and does not
 modify tracked files.

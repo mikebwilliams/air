@@ -937,6 +937,21 @@ failed check. Any failed check produces a nonzero exit after all safe applicable
 checks have been reported. `--json` emits the same named checks and aggregate
 pass/warning/failure counts.
 
+### Backup
+
+```bash
+air backup [PATH]
+```
+
+AIR creates a consistent SQLite backup containing all committed database and
+WAL state. If `PATH` is omitted, it writes
+`air-backup-YYYYMMDD-HHMMSS.sqlite` in the current directory, adding a numeric
+suffix when that filename already exists. A relative explicit path is resolved
+against the current directory. AIR refuses to overwrite any explicit
+destination, creates the backup with mode `0600`, runs SQLite `quick_check` on
+the completed snapshot, and removes an incomplete destination after any error.
+The online backup does not require excluding concurrent readers or writers.
+
 ### Scan new commits
 
 ```bash
