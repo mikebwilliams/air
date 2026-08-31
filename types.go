@@ -128,6 +128,7 @@ type ScanFailure struct {
 type ReviewIdentity struct {
 	Model           Model
 	ReasoningEffort string
+	PromptVersion   string
 }
 
 type Finding struct {

@@ -18,6 +18,7 @@ type HTTPReviewer struct {
 	Model      string
 	BaseURL    string
 	APIKey     string
+	Prompt     string
 	Client     *http.Client
 	MaxRounds  int
 }
@@ -102,8 +103,12 @@ func (r *HTTPReviewer) Review(ctx context.Context, input ReviewInput) (ReviewRes
 	if err != nil {
 		return ReviewResult{}, err
 	}
+	systemPrompt := r.Prompt
+	if systemPrompt == "" {
+		systemPrompt = reviewerSystemPrompt
+	}
 	messages := []chatMessage{
-		{Role: "system", Content: reviewerSystemPrompt},
+		{Role: "system", Content: systemPrompt},
 		{Role: "user", Content: prompt},
 	}
 	allowedResolutions := make(map[int64]struct{}, len(input.OpenFindings))

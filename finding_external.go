@@ -146,10 +146,14 @@ func runFindingOpen(ctx context.Context, args []string, environment cliEnvironme
 }
 
 func runFindingExternal(ctx context.Context, action string, args []string, environment cliEnvironment) error {
-	if len(args) != 1 {
+	positionals, err := parsePositionals("finding "+action, args, environment.Stderr)
+	if err != nil {
+		return err
+	}
+	if len(positionals) != 1 {
 		return fmt.Errorf("usage: air finding %s <id>", action)
 	}
-	id, err := parseFindingID(args[0])
+	id, err := parseFindingID(positionals[0])
 	if err != nil {
 		return err
 	}

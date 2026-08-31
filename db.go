@@ -1362,6 +1362,7 @@ func (s *Store) ApplyReview(
 	if err := validateReviewOutput(result.Output, nil); err != nil {
 		return nil, err
 	}
+	reviewPromptVersion := promptVersionOrDefault(identity.PromptVersion, promptVersion)
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, fmt.Errorf("record review: %w", err)
@@ -1404,7 +1405,7 @@ func (s *Store) ApplyReview(
 		processedAt,
 		identity.Model.Name,
 		identity.ReasoningEffort,
-		promptVersion,
+		reviewPromptVersion,
 		result.Output.Summary,
 		result.RawResponse,
 		result.Usage.InputTokens,
@@ -1432,7 +1433,7 @@ func (s *Store) ApplyReview(
 		processedAt,
 		identity.Model.Name,
 		identity.ReasoningEffort,
-		promptVersion,
+		reviewPromptVersion,
 		result.Output.Summary,
 		result.RawResponse,
 		result.Usage.InputTokens,

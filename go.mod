@@ -8,6 +8,7 @@ require (
 	github.com/charmbracelet/x/ansi v0.11.7
 	github.com/charmbracelet/x/term v0.2.2
 	github.com/mattn/go-sqlite3 v1.14.32
+	github.com/spf13/pflag v1.0.10
 )
 
 require (

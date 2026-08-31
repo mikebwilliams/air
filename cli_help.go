@@ -101,7 +101,7 @@ var cliCommands = []cliCommandSpec{
 		Name: "rescan", Category: commandCategoryCommitReview,
 		Summary:     "Review an already reviewed commit again.",
 		Description: "Review one processed commit again and make the new attempt current while retaining earlier review attempts.",
-		Usage:       []string{"air rescan COMMIT [OPTIONS]"},
+		Usage:       []string{"air rescan [OPTIONS] COMMIT"},
 		Options:     reviewerHelpOptions("per-commit"), Run: runRescan,
 	},
 	{
@@ -109,8 +109,8 @@ var cliCommands = []cliCommandSpec{
 		Summary:     "Mark matching unprocessed commits as skipped.",
 		Description: "Skip one commit, or every unprocessed commit whose message contains a case-insensitive literal substring.",
 		Usage: []string{
-			"air skip COMMIT [OPTIONS]",
-			"air skip --filter TEXT [OPTIONS]",
+			"air skip [OPTIONS] COMMIT",
+			"air skip [OPTIONS] --filter TEXT",
 		},
 		Options: []cliHelpOption{
 			{"--filter TEXT", "Match a literal substring in full commit messages."},
@@ -156,7 +156,7 @@ var cliCommands = []cliCommandSpec{
 		Children: []cliCommandSpec{
 			{
 				Name: "dismiss", Summary: "Dismiss an open finding with a recorded reason.",
-				Usage:   []string{"air finding dismiss FINDING_ID --reason TEXT"},
+				Usage:   []string{"air finding dismiss --reason TEXT FINDING_ID"},
 				Options: []cliHelpOption{{"--reason TEXT", "Required reason stored in the finding history."}},
 			},
 			{Name: "reopen", Summary: "Return a dismissed or resolved finding to open.", Usage: []string{"air finding reopen FINDING_ID"}},
@@ -175,7 +175,7 @@ var cliCommands = []cliCommandSpec{
 		Name: "show", Category: commandCategoryReports,
 		Summary:     "Show a commit review and retained attempts.",
 		Description: "Show one processed commit's current review, accounting, findings, or a selected retained review attempt.",
-		Usage:       []string{"air show COMMIT [OPTIONS]"},
+		Usage:       []string{"air show [OPTIONS] COMMIT"},
 		Options: []cliHelpOption{
 			{"--reviews", "List all retained review attempts."},
 			{"--review N", "Show retained review attempt N."},
@@ -200,6 +200,40 @@ var cliCommands = []cliCommandSpec{
 		Description: "Write findings to standard output in the selected format. JSON and SARIF contain open findings; HTML is a static viewer containing every disposition.",
 		Usage:       []string{"air export --format FORMAT"},
 		Options:     []cliHelpOption{{"--format FORMAT", "Required output format: json, sarif, or html."}}, Run: runExport,
+	},
+	{
+		Name: "prompt", Category: commandCategoryMaintenance,
+		Summary:     "Inspect and customize reviewer prompts.",
+		Description: "List repository prompt identities, inspect editable reviewer instructions or the full static prompt, and store or reset repository-specific overrides. AIR keeps its protocol and response contract fixed.",
+		Usage:       []string{"air prompt COMMAND [ARGUMENTS]"},
+		Children: []cliCommandSpec{
+			{Name: "list", Summary: "List prompt sources and identities.", Usage: []string{"air prompt list"}},
+			{
+				Name: "show", Summary: "Show editable or full effective prompt text.",
+				Usage: []string{"air prompt show --reviewer BACKEND [--full] KIND"},
+				Options: []cliHelpOption{
+					{"--reviewer BACKEND", "Required review backend: codex or http."},
+					{"--full", "Include AIR's fixed protocol and response contract."},
+				},
+			},
+			{
+				Name: "set", Summary: "Store repository-specific reviewer instructions.",
+				Usage: []string{
+					"air prompt set --reviewer BACKEND --file PATH KIND",
+					"air prompt set --reviewer BACKEND --stdin KIND",
+				},
+				Options: []cliHelpOption{
+					{"--reviewer BACKEND", "Required review backend: codex or http."},
+					{"--file PATH", "Read editable instructions from a UTF-8 text file."},
+					{"--stdin", "Read editable instructions from standard input."},
+				},
+			},
+			{
+				Name: "reset", Summary: "Remove an override and restore built-in instructions.",
+				Usage:   []string{"air prompt reset --reviewer BACKEND KIND"},
+				Options: []cliHelpOption{{"--reviewer BACKEND", "Required review backend: codex or http."}},
+			},
+		}, Run: runPrompt,
 	},
 	{
 		Name: "config", Category: commandCategoryMaintenance,
@@ -231,7 +265,7 @@ var cliCommands = []cliCommandSpec{
 			{Name: "list", Summary: "List known models and pricing status.", Usage: []string{"air model list"}},
 			{Name: "show", Summary: "Show one model's pricing details.", Usage: []string{"air model show NAME"}},
 			{
-				Name: "set-pricing", Summary: "Store short- and long-context token prices.", Usage: []string{"air model set-pricing NAME [OPTIONS]"},
+				Name: "set-pricing", Summary: "Store short- and long-context token prices.", Usage: []string{"air model set-pricing [OPTIONS] NAME"},
 				Options: modelPricingHelpOptions(),
 			},
 			{Name: "mark-pricing-unknown", Summary: "Record that a model's pricing is unknown.", Usage: []string{"air model mark-pricing-unknown NAME"}},

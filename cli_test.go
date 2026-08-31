@@ -449,7 +449,7 @@ func TestCLIStoredConfigurationDrivesScanAndRedactsSecrets(t *testing.T) {
 	values["AIR_MODEL"] = "environment-model"
 	values["AIR_REASONING_EFFORT"] = "medium"
 	stdout.Reset()
-	if err := runCLI(ctx, []string{"config", "get", "--effective", "model"}, environment); err != nil {
+	if err := runCLI(ctx, []string{"config", "get", "model", "--effective"}, environment); err != nil {
 		t.Fatalf("get effective model: %v", err)
 	}
 	if !strings.Contains(stdout.String(), "environment-model\tAIR_MODEL") {
@@ -562,6 +562,16 @@ func TestCLIConfigGetUnsetAndValidation(t *testing.T) {
 	if err := runCLI(ctx, []string{"config", "set", "model", "test-model"}, environment); err != nil {
 		t.Fatalf("set model: %v", err)
 	}
+	if err := runCLI(ctx, []string{"config", "set", "codex-profile", "--", "--help"}, environment); err != nil {
+		t.Fatalf("set option-like value after --: %v", err)
+	}
+	stdout.Reset()
+	if err := runCLI(ctx, []string{"config", "get", "codex-profile"}, environment); err != nil {
+		t.Fatalf("get option-like value: %v", err)
+	}
+	if strings.TrimSpace(stdout.String()) != "--help" {
+		t.Fatalf("option-like configuration value = %q", stdout.String())
+	}
 	stdout.Reset()
 	if err := runCLI(ctx, []string{"config", "get", "model"}, environment); err != nil {
 		t.Fatalf("get model: %v", err)
@@ -611,12 +621,12 @@ func TestCLIRescanAndReviewAttemptDisplay(t *testing.T) {
 	if err := runCLI(ctx, []string{"scan", "--model", "first-model", "--effort", "low"}, environment); err != nil {
 		t.Fatalf("scan: %v", err)
 	}
-	if err := runCLI(ctx, []string{"rescan", head, "--model", "second-model", "--effort", "xhigh"}, environment); err != nil {
+	if err := runCLI(ctx, []string{"rescan", "--model", "second-model", head, "--effort", "xhigh"}, environment); err != nil {
 		t.Fatalf("rescan: %v", err)
 	}
 
 	stdout.Reset()
-	if err := runCLI(ctx, []string{"show", head, "--reviews"}, environment); err != nil {
+	if err := runCLI(ctx, []string{"show", "--reviews", head}, environment); err != nil {
 		t.Fatalf("show reviews: %v", err)
 	}
 	if !strings.Contains(stdout.String(), "Review attempts:") ||
@@ -626,7 +636,7 @@ func TestCLIRescanAndReviewAttemptDisplay(t *testing.T) {
 		t.Fatalf("review list output:\n%s", stdout.String())
 	}
 	stdout.Reset()
-	if err := runCLI(ctx, []string{"show", head, "--review", "1"}, environment); err != nil {
+	if err := runCLI(ctx, []string{"show", "--review", "1", head}, environment); err != nil {
 		t.Fatalf("show first review: %v", err)
 	}
 	if !strings.Contains(stdout.String(), "Review attempt #1") ||
@@ -777,10 +787,10 @@ func TestCLIFindingTriageCommands(t *testing.T) {
 		t.Fatal(err)
 	}
 	id := strconv.FormatInt(ids[0], 10)
-	if err := runCLI(ctx, []string{"finding", "dismiss", id, "--reason", "accepted risk"}, environment); err != nil {
+	if err := runCLI(ctx, []string{"finding", "dismiss", "--reason", "accepted risk", id}, environment); err != nil {
 		t.Fatalf("dismiss: %v", err)
 	}
-	if err := runCLI(ctx, []string{"finding", "note", id, "check next release"}, environment); err != nil {
+	if err := runCLI(ctx, []string{"finding", "note", id, "--", "--help"}, environment); err != nil {
 		t.Fatalf("note: %v", err)
 	}
 	stdout.Reset()
@@ -788,7 +798,7 @@ func TestCLIFindingTriageCommands(t *testing.T) {
 		t.Fatalf("show finding: %v", err)
 	}
 	if !strings.Contains(stdout.String(), "dismissed") || !strings.Contains(stdout.String(), "accepted risk") ||
-		!strings.Contains(stdout.String(), "check next release") {
+		!strings.Contains(stdout.String(), "--help") {
 		t.Fatalf("dismissed finding output:\n%s", stdout.String())
 	}
 	stdout.Reset()
@@ -881,7 +891,7 @@ func TestCLIPendingAndScanDryRun(t *testing.T) {
 		t.Fatalf("status before timing data:\n%s", stdout.String())
 	}
 	stdout.Reset()
-	if err := runCLI(ctx, []string{"pending"}, environment); err != nil {
+	if err := runCLI(ctx, []string{"pending", base + ".." + head, "--limit", "1"}, environment); err != nil {
 		t.Fatalf("pending: %v", err)
 	}
 	if !strings.Contains(stdout.String(), shortSHA(head)+"  review") ||
@@ -889,7 +899,7 @@ func TestCLIPendingAndScanDryRun(t *testing.T) {
 		t.Fatalf("pending output:\n%s", stdout.String())
 	}
 	stdout.Reset()
-	if err := runCLI(ctx, []string{"scan", "--dry-run"}, environment); err != nil {
+	if err := runCLI(ctx, []string{"scan", base + ".." + head, "--dry-run"}, environment); err != nil {
 		t.Fatalf("scan --dry-run: %v", err)
 	}
 	if !strings.Contains(stdout.String(), shortSHA(head)+"  review") {

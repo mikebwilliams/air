@@ -33,8 +33,12 @@ func (r *HTTPReviewer) Recheck(ctx context.Context, input RecheckInput) (Recheck
 	if err != nil {
 		return RecheckResult{}, err
 	}
+	systemPrompt := r.Prompt
+	if systemPrompt == "" {
+		systemPrompt = recheckSystemPrompt
+	}
 	messages := []chatMessage{
-		{Role: "system", Content: recheckSystemPrompt},
+		{Role: "system", Content: systemPrompt},
 		{Role: "user", Content: prompt},
 	}
 	allowed := recheckFindingIDs(input.Findings)
@@ -140,7 +144,7 @@ func (r *CodexReviewer) Recheck(ctx context.Context, input RecheckInput) (Rechec
 	}
 	recheckContext, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	prompt, err := buildRecheckPrompt(input, true)
+	prompt, err := buildRecheckPromptWithStatic(input, true, r.Prompt)
 	if err != nil {
 		return RecheckResult{}, err
 	}

@@ -85,6 +85,34 @@ func TestRecheckContinuesAndResumesSuccessfulBatches(t *testing.T) {
 	if len(second.calls) != 1 || !strings.Contains(output.String(), "2 already checked") {
 		t.Fatalf("resume calls=%d output=%s", len(second.calls), output.String())
 	}
+
+	const customPromptIdentity = "custom:sha256:test-recheck-prompt"
+	third := &fakeRecheckReviewer{check: func(input RecheckInput) (RecheckResult, error) {
+		if len(input.Findings) != 3 {
+			t.Fatalf("custom-prompt batch = %+v", input.Findings)
+		}
+		return recheckStillPresent(input.Findings), nil
+	}}
+	output.Reset()
+	if err := recheckRepository(ctx, repository, store, recheckOptions{
+		Reviewer: "codex", Model: "check-model", ReasoningEffort: "high",
+		PromptVersion: customPromptIdentity, BatchSize: 3, Output: &output,
+		NewReviewer: func() (RecheckReviewer, ReviewIdentity, error) {
+			return third, ReviewIdentity{
+				Model: modelByName("check-model"), ReasoningEffort: "high",
+				PromptVersion: customPromptIdentity,
+			}, nil
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if len(third.calls) != 1 || strings.Contains(output.String(), "already checked") {
+		t.Fatalf("custom prompt calls=%d output=%s", len(third.calls), output.String())
+	}
+	prior, err = store.PreviouslyRecheckedFindingIDs(ctx, head, "codex", "check-model", "high", customPromptIdentity)
+	if err != nil || len(prior) != 3 {
+		t.Fatalf("custom-prompt results = %v, %v", prior, err)
+	}
 }
 
 func recheckStillPresent(findings []Finding) RecheckResult {

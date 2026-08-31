@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"flag"
 	"fmt"
 	"io"
 	"math"
@@ -16,6 +15,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	flag "github.com/spf13/pflag"
 )
 
 type cliEnvironment struct {
@@ -318,12 +319,16 @@ func runConfig(ctx context.Context, args []string, environment cliEnvironment) e
 		return nil
 
 	case "unset":
-		if len(args) != 2 {
+		positionals, err := parsePositionals("config unset", args[1:], environment.Stderr)
+		if err != nil {
+			return err
+		}
+		if len(positionals) != 1 {
 			return errors.New("usage: air config unset <name>")
 		}
-		setting, ok := settingByKey(args[1])
+		setting, ok := settingByKey(positionals[0])
 		if !ok {
-			return unknownSettingError(args[1])
+			return unknownSettingError(positionals[0])
 		}
 		removed, err := store.UnsetConfig(ctx, setting.Key)
 		if err != nil {
@@ -412,7 +417,11 @@ func runModel(ctx context.Context, args []string, environment cliEnvironment) er
 
 	switch args[0] {
 	case "list":
-		if len(args) != 1 {
+		positionals, err := parsePositionals("model list", args[1:], environment.Stderr)
+		if err != nil {
+			return err
+		}
+		if len(positionals) != 0 {
 			return errors.New("usage: air model list")
 		}
 		models, err := availableModels(ctx, store)
@@ -430,24 +439,32 @@ func runModel(ctx context.Context, args []string, environment cliEnvironment) er
 		return nil
 
 	case "show":
-		if len(args) != 2 {
+		positionals, err := parsePositionals("model show", args[1:], environment.Stderr)
+		if err != nil {
+			return err
+		}
+		if len(positionals) != 1 {
 			return errors.New("usage: air model show <name>")
 		}
-		model, found, err := modelForDisplay(ctx, store, args[1])
+		model, found, err := modelForDisplay(ctx, store, positionals[0])
 		if err != nil {
 			return err
 		}
 		if !found {
-			return fmt.Errorf("model %q is not configured", args[1])
+			return fmt.Errorf("model %q is not configured", positionals[0])
 		}
 		printModel(environment.Stdout, model)
 		return nil
 
 	case "mark-pricing-unknown":
-		if len(args) != 2 {
+		positionals, err := parsePositionals("model mark-pricing-unknown", args[1:], environment.Stderr)
+		if err != nil {
+			return err
+		}
+		if len(positionals) != 1 {
 			return errors.New("usage: air model mark-pricing-unknown <name>")
 		}
-		name := strings.TrimSpace(args[1])
+		name := strings.TrimSpace(positionals[0])
 		if name == "" {
 			return errors.New("model name must not be empty")
 		}
@@ -466,9 +483,6 @@ func runModel(ctx context.Context, args []string, environment cliEnvironment) er
 }
 
 func runModelSetPricing(ctx context.Context, store *Store, args []string, environment cliEnvironment) error {
-	if len(args) > 1 && !strings.HasPrefix(args[0], "-") {
-		args = append(append([]string(nil), args[1:]...), args[0])
-	}
 	flags := newFlagSet("model set-pricing", environment.Stderr)
 	serviceTier := flags.String("service-tier", standardServiceTier, "service tier")
 	source := flags.String("source", "manual", "pricing source")
@@ -486,7 +500,7 @@ func runModelSetPricing(ctx context.Context, store *Store, args []string, enviro
 		return err
 	}
 	if flags.NArg() != 1 {
-		return errors.New("usage: air model set-pricing <name> [pricing flags]")
+		return errors.New("usage: air model set-pricing [OPTIONS] NAME")
 	}
 	if strings.TrimSpace(*serviceTier) == "" || strings.TrimSpace(*source) == "" || strings.TrimSpace(*asOf) == "" {
 		return errors.New("service tier, source, and pricing date must not be empty")
@@ -604,9 +618,6 @@ func runScan(ctx context.Context, args []string, environment cliEnvironment) err
 }
 
 func runRescan(ctx context.Context, args []string, environment cliEnvironment) error {
-	if len(args) > 1 && !strings.HasPrefix(args[0], "-") {
-		args = append(append([]string(nil), args[1:]...), args[0])
-	}
 	return runScanCommand(ctx, args, environment, rescanCommand)
 }
 
@@ -785,12 +796,17 @@ func runScanCommand(ctx context.Context, args []string, environment cliEnvironme
 	if err != nil {
 		return err
 	}
+	reviewPrompt, err := resolveReviewerPrompt(ctx, store, "review", reviewerName.Value)
+	if err != nil {
+		return err
+	}
 
 	factory := func() (Reviewer, ReviewIdentity, error) {
 		backend, identity, err := newReviewerBackend(
 			ctx, repository, store, environment,
 			reviewerName.Value, model.Value, effort.Value,
 			codexBinary.Value, codexProfile.Value, codexTimeout, baseURL.Value,
+			reviewPrompt,
 			*apiKeyFlag, setFlags["api-key"], *apiKeyEnvFlag, setFlags["api-key-env"],
 		)
 		return backend, identity, err
@@ -819,7 +835,9 @@ func newReviewerBackend(
 	environment cliEnvironment,
 	reviewerName, model, effort, codexBinary, codexProfile string,
 	codexTimeout time.Duration,
-	baseURL, apiKeyFlag string,
+	baseURL string,
+	prompt reviewerPrompt,
+	apiKeyFlag string,
 	apiKeySet bool,
 	apiKeyEnvFlag string,
 	apiKeyEnvSet bool,
@@ -839,10 +857,12 @@ func newReviewerBackend(
 			return nil, ReviewIdentity{}, err
 		}
 		return &CodexReviewer{
-			Repository: repository, Binary: codexBinary, Model: configuredModel,
-			Effort: configuredEffort, Profile: codexProfile, Timeout: codexTimeout,
-			CommandContext: environment.CodexCommand,
-		}, ReviewIdentity{Model: reviewModel, ReasoningEffort: configuredEffort}, nil
+				Repository: repository, Binary: codexBinary, Model: configuredModel,
+				Effort: configuredEffort, Profile: codexProfile, Prompt: prompt.Static, Timeout: codexTimeout,
+				CommandContext: environment.CodexCommand,
+			}, ReviewIdentity{
+				Model: reviewModel, ReasoningEffort: configuredEffort, PromptVersion: prompt.PromptVersion,
+			}, nil
 	case "http":
 		if configuredModel == "" {
 			return nil, ReviewIdentity{}, errors.New("model is required for the HTTP reviewer; configure it, set AIR_MODEL, or pass --model")
@@ -861,8 +881,8 @@ func newReviewerBackend(
 		}
 		return &HTTPReviewer{
 			Repository: repository, Model: configuredModel, BaseURL: baseURL,
-			APIKey: apiKey, Client: environment.HTTPClient,
-		}, ReviewIdentity{Model: reviewModel}, nil
+			APIKey: apiKey, Prompt: prompt.Static, Client: environment.HTTPClient,
+		}, ReviewIdentity{Model: reviewModel, PromptVersion: prompt.PromptVersion}, nil
 	default:
 		return nil, ReviewIdentity{}, fmt.Errorf("unknown reviewer %q; expected codex or http", reviewerName)
 	}
@@ -950,6 +970,10 @@ func runRecheck(ctx context.Context, args []string, environment cliEnvironment) 
 	if err != nil {
 		return err
 	}
+	recheckPrompt, err := resolveReviewerPrompt(ctx, store, "recheck", reviewerName.Value)
+	if err != nil {
+		return err
+	}
 	configuredModel := strings.TrimSpace(model.Value)
 	if configuredModel == "" {
 		return fmt.Errorf("model is required for the %s reviewer; configure it, set AIR_MODEL, or pass --model", reviewerName.Value)
@@ -966,13 +990,15 @@ func runRecheck(ctx context.Context, args []string, environment cliEnvironment) 
 			ctx, repository, store, environment,
 			reviewerName.Value, configuredModel, configuredEffort,
 			codexBinary.Value, codexProfile.Value, codexTimeout, baseURL.Value,
+			recheckPrompt,
 			*apiKeyFlag, setFlags["api-key"], *apiKeyEnvFlag, setFlags["api-key-env"],
 		)
 		return backend, identity, err
 	}
 	return recheckRepository(ctx, repository, store, recheckOptions{
 		FindingIDs: ids, Reviewer: reviewerName.Value, Model: configuredModel,
-		ReasoningEffort: configuredEffort, Limit: *limit, BatchSize: *batchSize,
+		ReasoningEffort: configuredEffort, PromptVersion: recheckPrompt.PromptVersion,
+		Limit: *limit, BatchSize: *batchSize,
 		Force: *force, DryRun: *dryRun, ContinueOnError: *continueOnError,
 		Output: environment.Stdout, Now: environment.Now, ElapsedNow: environment.ElapsedNow,
 		NewReviewer: factory,
@@ -1052,9 +1078,6 @@ func runPending(ctx context.Context, args []string, environment cliEnvironment) 
 }
 
 func runSkip(ctx context.Context, args []string, environment cliEnvironment) error {
-	if len(args) > 1 && !strings.HasPrefix(args[0], "-") {
-		args = append(append([]string(nil), args[1:]...), args[0])
-	}
 	flags := newFlagSet("skip", environment.Stderr)
 	filter := flags.String("filter", "", "case-insensitive literal substring of the commit message")
 	reason := flags.String("reason", "manual skip", "reason stored with each skipped commit")
@@ -1438,7 +1461,11 @@ func repositoryStatus(ctx context.Context, repository *GitRepository, store *Sto
 }
 
 func runLog(ctx context.Context, args []string, environment cliEnvironment) error {
-	if len(args) != 0 {
+	positionals, err := parsePositionals("log", args, environment.Stderr)
+	if err != nil {
+		return err
+	}
+	if len(positionals) != 0 {
 		return errors.New("usage: air log")
 	}
 	_, store, closeStore, err := openRepositoryStore(ctx, environment.Cwd)
@@ -1465,20 +1492,17 @@ func runLog(ctx context.Context, args []string, environment cliEnvironment) erro
 }
 
 func runShow(ctx context.Context, args []string, environment cliEnvironment) error {
-	if len(args) == 0 {
-		return errors.New("usage: air show <commit-ish> [--reviews | --review N] [--json]")
-	}
-	revision := args[0]
 	flags := newFlagSet("show", environment.Stderr)
 	listReviews := flags.Bool("reviews", false, "list all retained review attempts")
 	reviewNumber := flags.Int("review", 0, "show one retained review attempt")
 	jsonOutput := flags.Bool("json", false, "write machine-readable JSON")
-	if err := flags.Parse(args[1:]); err != nil {
+	if err := flags.Parse(args); err != nil {
 		return err
 	}
-	if flags.NArg() != 0 || (*listReviews && *reviewNumber != 0) || *reviewNumber < 0 {
-		return errors.New("usage: air show <commit-ish> [--reviews | --review N] [--json]")
+	if flags.NArg() != 1 || (*listReviews && *reviewNumber != 0) || *reviewNumber < 0 {
+		return errors.New("usage: air show [--reviews | --review N] [--json] COMMIT")
 	}
+	revision := flags.Arg(0)
 	repository, store, closeStore, err := openRepositoryStore(ctx, environment.Cwd)
 	if err != nil {
 		return err
@@ -1835,10 +1859,14 @@ func runFinding(ctx context.Context, args []string, environment cliEnvironment) 
 			return runFindingOpen(ctx, args[1:], environment)
 		}
 	}
-	if len(args) != 1 {
+	positionals, err := parsePositionals("finding", args, environment.Stderr)
+	if err != nil {
+		return err
+	}
+	if len(positionals) != 1 {
 		return errors.New("usage: air finding <id> | air finding <dismiss|reopen|note|diff|open> ...")
 	}
-	id, err := parseFindingID(args[0])
+	id, err := parseFindingID(positionals[0])
 	if err != nil {
 		return err
 	}
@@ -1883,27 +1911,24 @@ func runFinding(ctx context.Context, args []string, environment cliEnvironment) 
 }
 
 func runFindingDismiss(ctx context.Context, args []string, environment cliEnvironment) error {
-	if len(args) < 2 || len(args) > 3 {
-		return errors.New("usage: air finding dismiss <id> --reason <text>")
-	}
-	id, err := parseFindingID(args[0])
-	if err != nil {
+	flags := newFlagSet("finding dismiss", environment.Stderr)
+	reason := flags.String("reason", "", "reason stored in the finding history")
+	if err := flags.Parse(args); err != nil {
 		return err
 	}
-	reason := ""
-	if len(args) == 3 && args[1] == "--reason" {
-		reason = args[2]
-	} else if len(args) == 2 && strings.HasPrefix(args[1], "--reason=") {
-		reason = strings.TrimPrefix(args[1], "--reason=")
-	} else {
-		return errors.New("usage: air finding dismiss <id> --reason <text>")
+	if flags.NArg() != 1 || !visitedFlagNames(flags)["reason"] {
+		return errors.New("usage: air finding dismiss --reason TEXT FINDING_ID")
+	}
+	id, err := parseFindingID(flags.Arg(0))
+	if err != nil {
+		return err
 	}
 	_, store, closeStore, err := openRepositoryStore(ctx, environment.Cwd)
 	if err != nil {
 		return err
 	}
 	defer closeStore()
-	if err := store.DismissFinding(ctx, id, reason, environmentNow(environment)); err != nil {
+	if err := store.DismissFinding(ctx, id, *reason, environmentNow(environment)); err != nil {
 		return err
 	}
 	fmt.Fprintf(environment.Stdout, "Dismissed finding #%d\n", id)
@@ -1911,10 +1936,14 @@ func runFindingDismiss(ctx context.Context, args []string, environment cliEnviro
 }
 
 func runFindingReopen(ctx context.Context, args []string, environment cliEnvironment) error {
-	if len(args) != 1 {
+	positionals, err := parsePositionals("finding reopen", args, environment.Stderr)
+	if err != nil {
+		return err
+	}
+	if len(positionals) != 1 {
 		return errors.New("usage: air finding reopen <id>")
 	}
-	id, err := parseFindingID(args[0])
+	id, err := parseFindingID(positionals[0])
 	if err != nil {
 		return err
 	}
@@ -1931,10 +1960,14 @@ func runFindingReopen(ctx context.Context, args []string, environment cliEnviron
 }
 
 func runFindingNote(ctx context.Context, args []string, environment cliEnvironment) error {
-	if len(args) != 2 {
+	positionals, err := parsePositionals("finding note", args, environment.Stderr)
+	if err != nil {
+		return err
+	}
+	if len(positionals) != 2 {
 		return errors.New("usage: air finding note <id> <text>")
 	}
-	id, err := parseFindingID(args[0])
+	id, err := parseFindingID(positionals[0])
 	if err != nil {
 		return err
 	}
@@ -1943,7 +1976,7 @@ func runFindingNote(ctx context.Context, args []string, environment cliEnvironme
 		return err
 	}
 	defer closeStore()
-	if err := store.AddFindingNote(ctx, id, args[1], environmentNow(environment)); err != nil {
+	if err := store.AddFindingNote(ctx, id, positionals[1], environmentNow(environment)); err != nil {
 		return err
 	}
 	fmt.Fprintf(environment.Stdout, "Added note to finding #%d\n", id)
@@ -1997,7 +2030,16 @@ func firstLine(value string) string {
 func newFlagSet(name string, output io.Writer) *flag.FlagSet {
 	flags := flag.NewFlagSet(name, flag.ContinueOnError)
 	flags.SetOutput(output)
+	flags.SetInterspersed(true)
 	return flags
+}
+
+func parsePositionals(name string, args []string, output io.Writer) ([]string, error) {
+	flags := newFlagSet(name, output)
+	if err := flags.Parse(args); err != nil {
+		return nil, err
+	}
+	return flags.Args(), nil
 }
 
 func visitedFlagNames(flags *flag.FlagSet) map[string]bool {

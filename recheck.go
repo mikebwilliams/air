@@ -16,6 +16,7 @@ type recheckOptions struct {
 	Reviewer        string
 	Model           string
 	ReasoningEffort string
+	PromptVersion   string
 	Limit           int
 	BatchSize       int
 	Force           bool
@@ -73,9 +74,10 @@ func recheckRepository(
 		return nil
 	}
 	previous := map[int64]struct{}{}
+	promptIdentity := promptVersionOrDefault(options.PromptVersion, recheckPromptVersion)
 	if !options.Force {
 		previous, err = store.PreviouslyRecheckedFindingIDs(ctx, headSHA, options.Reviewer,
-			options.Model, options.ReasoningEffort, recheckPromptVersion)
+			options.Model, options.ReasoningEffort, promptIdentity)
 		if err != nil {
 			return err
 		}
@@ -119,6 +121,11 @@ func recheckRepository(
 	reviewer, identity, err := options.NewReviewer()
 	if err != nil {
 		return err
+	}
+	identity.PromptVersion = promptVersionOrDefault(identity.PromptVersion, promptIdentity)
+	if identity.PromptVersion != promptIdentity {
+		return fmt.Errorf("reviewer prompt identity %q does not match recheck identity %q",
+			identity.PromptVersion, promptIdentity)
 	}
 	now := options.Now
 	if now == nil {

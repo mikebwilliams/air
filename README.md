@@ -122,6 +122,32 @@ always redacted in `config get` and `config list` output.
 | `api-key-env` | `--api-key-env` | `AIR_API_KEY_ENV` | none |
 | `api-key` | `--api-key` | `AIR_API_KEY`, then `OPENAI_API_KEY` | none |
 
+Reviewer instructions can also be customized per repository. AIR has separate
+instructions for commit review and HEAD recheck, and for the Codex and HTTP
+backends:
+
+```bash
+air prompt list
+air prompt show review --reviewer codex
+air prompt show review --reviewer codex --full
+air prompt set review --reviewer codex --file review-prompt.txt
+printf '%s\n' 'Focus on transaction and lifetime safety.' | \
+  air prompt set review --reviewer codex --stdin
+air prompt reset review --reviewer codex
+```
+
+`show` prints the editable instructions. `show --full` also includes AIR's
+fixed protocol, safety constraints, and response contract. `set` replaces only
+the editable instructions; AIR continues to append the fixed portion so output
+remains parseable and repository inspection remains read-only. The override is
+stored in the repository database and is included by `air backup`.
+
+Each custom prompt receives a stable `custom:sha256:...` identity derived from
+its complete static prompt, kind, backend, and built-in protocol version. AIR
+records that identity on every commit-review or recheck attempt. Resetting an
+override restores the numeric built-in version. Changing a recheck prompt makes
+findings eligible for recheck again because it is a distinct review identity.
+
 Each commit gets an independent ephemeral `codex exec` session. AIR supplies
 the exact commit and first-parent identities, bounded resolution candidates,
 and a JSON output schema. Codex discovers the diff and related repository
@@ -208,6 +234,16 @@ final environment fallback. The corresponding database settings are `base-url`,
 SQLite database, so an environment variable is preferable on shared machines.
 
 ## Usage
+
+Long options use two hyphens and may appear before or after positional
+arguments. Use `--` to stop option parsing when a positional value begins with
+a hyphen:
+
+```bash
+air show --json HEAD
+air show HEAD --json
+air config set codex-profile -- --literal-profile-name
+```
 
 Initialize AIR with a baseline commit on the first-parent history of
 `refs/heads/master`:

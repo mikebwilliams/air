@@ -42,7 +42,11 @@ func (report *doctorReport) add(name, status, detail string) {
 }
 
 func runDB(ctx context.Context, args []string, environment cliEnvironment) error {
-	if len(args) != 1 || args[0] != "path" {
+	positionals, err := parsePositionals("db", args, environment.Stderr)
+	if err != nil {
+		return err
+	}
+	if len(positionals) != 1 || positionals[0] != "path" {
 		return errors.New("usage: air db path")
 	}
 	repository, err := DiscoverGitRepository(ctx, environment.Cwd)

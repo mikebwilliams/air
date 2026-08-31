@@ -30,6 +30,7 @@ type CodexReviewer struct {
 	Model          string
 	Effort         string
 	Profile        string
+	Prompt         string
 	TempDir        string
 	Timeout        time.Duration
 	CommandContext commandContextFunc
@@ -57,7 +58,7 @@ func (r *CodexReviewer) Review(ctx context.Context, input ReviewInput) (ReviewRe
 	}
 	reviewContext, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	prompt, err := buildCodexReviewPrompt(input)
+	prompt, err := buildCodexReviewPromptWithStatic(input, r.Prompt)
 	if err != nil {
 		return ReviewResult{}, err
 	}

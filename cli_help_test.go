@@ -49,15 +49,19 @@ func TestCLIHelpWorksWithoutRepositoryState(t *testing.T) {
 		},
 		{
 			name: "nested topic", args: []string{"help", "finding", "dismiss"},
-			contains: []string{"air finding dismiss FINDING_ID --reason TEXT", "Dismiss an open finding", "--reason TEXT"},
+			contains: []string{"air finding dismiss --reason TEXT FINDING_ID", "Dismiss an open finding", "--reason TEXT"},
 		},
 		{
 			name: "nested flag", args: []string{"finding", "dismiss", "--help"},
-			contains: []string{"air finding dismiss FINDING_ID --reason TEXT", "Dismiss an open finding"},
+			contains: []string{"air finding dismiss --reason TEXT FINDING_ID", "Dismiss an open finding"},
 		},
 		{
 			name: "database nested flag", args: []string{"model", "set-pricing", "--help"},
-			contains: []string{"air model set-pricing NAME [OPTIONS]", "--short-cached-input PRICE", "--long-output PRICE"},
+			contains: []string{"air model set-pricing [OPTIONS] NAME", "--short-cached-input PRICE", "--long-output PRICE"},
+		},
+		{
+			name: "prompt nested flag", args: []string{"prompt", "show", "--help"},
+			contains: []string{"air prompt show --reviewer BACKEND [--full] KIND", "--reviewer BACKEND", "--full"},
 		},
 	}
 
@@ -126,7 +130,7 @@ func TestCLICommandRegistryIsComplete(t *testing.T) {
 	}
 	expected := []string{
 		"init", "doctor", "status", "pending", "scan", "retry", "failures", "rescan", "skip", "clean",
-		"recheck", "findings", "finding", "log", "show", "stats", "cost", "export", "config", "model", "db", "backup", "reset",
+		"recheck", "findings", "finding", "log", "show", "stats", "cost", "export", "prompt", "config", "model", "db", "backup", "reset",
 	}
 	for _, name := range expected {
 		if !seen[name] {

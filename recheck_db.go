@@ -84,6 +84,7 @@ func (s *Store) ApplyRecheck(
 	if err != nil {
 		return 0, fmt.Errorf("estimate recheck cost: %w", err)
 	}
+	attemptPromptVersion := promptVersionOrDefault(identity.PromptVersion, recheckPromptVersion)
 
 	resolved, stillPresent, uncertain := countRecheckOutcomes(result.Output)
 	tx, err := s.db.BeginTx(ctx, nil)
@@ -122,7 +123,7 @@ func (s *Store) ApplyRecheck(
 			resolved_count, still_present_count, uncertain_count
 		) VALUES(?, ?, ?, ?, NULLIF(?, ''), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		headSHA, timestamp, reviewer, identity.Model.Name, identity.ReasoningEffort,
-		recheckPromptVersion, result.Output.Summary, result.RawResponse,
+		attemptPromptVersion, result.Output.Summary, result.RawResponse,
 		result.Usage.InputTokens, result.Usage.CachedInputTokens,
 		nullableInt64(result.Usage.CacheWriteTokens), result.Usage.OutputTokens,
 		result.Usage.ReasoningOutputTokens, costMinimum(estimate), costMaximum(estimate),

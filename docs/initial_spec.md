@@ -168,6 +168,18 @@ api-key
 The CLI owns validation for these values and does not expose the internal
 `start_sha` or `prompt_version` keys through `air config`.
 
+Optional multiline prompt overrides use these internal keys:
+
+```text
+prompt.review.codex
+prompt.review.http
+prompt.recheck.codex
+prompt.recheck.http
+```
+
+They are managed by `air prompt`, not exposed as ordinary scalar values through
+`air config`, and require no additional tables or schema migration.
+
 ### 5.2 `models`
 
 Every model used for a review has one configuration record. Known models store
@@ -925,6 +937,11 @@ output, and succeeds. An unknown help topic is an error. Global help groups
 commands by workflow and directs the user to command-specific details rather
 than presenting every option at once.
 
+Long options use the `--name` form. Options may occur before, between, or after
+positional arguments, and `--` ends option parsing so a later positional value
+may begin with a hyphen. Help displays options before positional arguments as
+the canonical usage form even though both orders are accepted.
+
 ### Initialize
 
 ```bash
@@ -1201,6 +1218,31 @@ skipped on later runs; a changed HEAD or model/effort is eligible again.
 CLI/environment/database reviewer-setting precedence as `scan`, so a one-off
 stronger model needs no separate configuration record.
 
+### Reviewer prompts
+
+```bash
+air prompt list
+air prompt show --reviewer <codex|http> [--full] <review|recheck>
+air prompt set --reviewer <codex|http> --file <path> <review|recheck>
+air prompt set --reviewer <codex|http> --stdin <review|recheck>
+air prompt reset --reviewer <codex|http> <review|recheck>
+```
+
+There are four independently configurable instruction sets: commit review and
+HEAD recheck for each reviewer backend. `list` reports whether each uses the
+built-in or database source and prints its prompt identity. `show` prints the
+editable instruction portion; `--full` appends AIR's effective fixed protocol
+and response contract. A relative `--file` path is resolved against the current
+directory. File and standard-input content must be nonempty UTF-8 and no larger
+than 256 KiB.
+
+`set` stores repository-specific instructions in the existing `config` table.
+It replaces the editable instructions but cannot replace AIR's fixed
+repository-data trust boundary, read-only inspection constraints, resolution
+candidate restrictions, or structured response contract. `reset` deletes the
+override and restores the compiled instructions. Backups naturally include the
+overrides.
+
 ### Repository accounting
 
 ```bash
@@ -1337,7 +1379,8 @@ Example:
 prompt_version = 4
 ```
 
-Changing reviewer instructions should increment this value.
+Changing compiled reviewer instructions or their fixed protocol should increment
+the corresponding numeric value.
 
 Prompt version 3 excludes comments, string-content changes, translations,
 localization resources, and documentation as a model review policy. AIR does
@@ -1356,9 +1399,24 @@ exactly one `resolved`, `still_present`, or `uncertain` result for every supplie
 finding, prohibits new findings, and treats recorded locations as context rather
 than an inspection boundary.
 
-This allows later analysis of behavior differences between review generations.
+Compiled prompts retain these numeric identities. A database override instead
+uses this form:
 
-The exact prompt text may optionally also be stored in metadata.
+```text
+custom:sha256:<64 lowercase hexadecimal digits>
+```
+
+The digest covers the prompt kind, reviewer backend, compiled protocol version,
+and complete effective static prompt. It therefore changes when the stored
+instructions change, when a different backend is selected, or when AIR changes
+the fixed protocol. The custom identity is stored in the existing
+`prompt_version` columns on commit-review and recheck attempts. No schema
+migration is required. Recheck resumability includes this identity, so changing
+recheck instructions makes otherwise identical findings eligible again.
+
+This allows later analysis of behavior differences between review generations.
+The database stores custom instruction text in `config`; built-in text remains
+available from the installed binary through `air prompt show`.
 
 ## 21. Failure Handling
 
