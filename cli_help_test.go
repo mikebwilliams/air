@@ -16,7 +16,7 @@ func TestCLIHelpWorksWithoutRepositoryState(t *testing.T) {
 	}{
 		{
 			name: "global", args: []string{"help"},
-			contains: []string{"Usage:\n  air COMMAND [OPTIONS]", "Getting started:", "Commit review:", "scan       Review unprocessed commits on master."},
+			contains: []string{"Usage:\n  air COMMAND [OPTIONS]", "air --version", "Getting started:", "Commit review:", "scan       Review unprocessed commits on master.", "version    Print the AIR version."},
 		},
 		{
 			name: "global flag", args: []string{"--help"},
@@ -67,6 +67,10 @@ func TestCLIHelpWorksWithoutRepositoryState(t *testing.T) {
 			name: "prompt nested flag", args: []string{"prompt", "show", "--help"},
 			contains: []string{"air prompt show [--full] KIND", "--full"},
 			excludes: []string{"--reviewer"},
+		},
+		{
+			name: "version command", args: []string{"version", "--help"},
+			contains: []string{"Usage:\n  air version", "Print AIR's release version and exit."},
 		},
 	}
 
@@ -152,7 +156,7 @@ func TestCLICommandRegistryIsComplete(t *testing.T) {
 		validateCLIHelpChildren(t, command.Name, command.Children)
 	}
 	expected := []string{
-		"init", "doctor", "status", "pending", "scan", "retry", "failures", "rescan", "skip", "clean",
+		"init", "doctor", "status", "version", "pending", "scan", "retry", "failures", "rescan", "skip", "clean",
 		"recheck", "findings", "finding", "log", "show", "stats", "cost", "export", "prompt", "config", "model", "db", "backup", "reset",
 	}
 	for _, name := range expected {

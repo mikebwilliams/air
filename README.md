@@ -63,6 +63,13 @@ open the complete command reference with:
 man air
 ```
 
+Confirm the installed release without requiring a repository:
+
+```bash
+air version
+# air 0.1
+```
+
 The first AIR command after this upgrade automatically advances older supported
 databases through schema v8. The additive migrations preserve reviews and
 findings while adding harness provenance, harness-reported cost, and explicit

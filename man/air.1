@@ -1,4 +1,4 @@
-.TH AIR 1 "August 2026" "AIR" "User Commands"
+.TH AIR 1 "August 2026" "AIR 0.1" "User Commands"
 .SH NAME
 air \- review commits with a local AI coding harness
 .SH SYNOPSIS
@@ -12,6 +12,9 @@ air \- review commits with a local AI coding harness
 .br
 .B air
 .RB [ \-h | \-\-help ]
+.br
+.B air
+.B \-\-version
 .SH DESCRIPTION
 .B AIR
 is a local semantic reviewer for commits on the first-parent history of
@@ -39,6 +42,12 @@ Show global, command, or subcommand help. Long options may appear before or
 after positional arguments. Use
 .B \-\-
 to stop option parsing when a positional value starts with a hyphen.
+.TP
+.B \-\-version
+Print
+.B air 0.1
+and exit. This is equivalent to
+.BR "air version" .
 .SH COMMANDS
 .SS Getting started
 .TP
@@ -61,6 +70,12 @@ Summarize total, open, dismissed, and resolved findings, as well as unscanned,
 failed, and deferred commits. Estimate the remaining ordinary scan time from
 successful timed commit reviews. Deferred failures are excluded from the
 estimate.
+.TP
+.B air version
+Print
+.B air 0.1
+and exit. This command does not require a Git repository or initialized AIR
+state.
 .SS Commit review
 .TP
 .BR "air pending" " [\-\-limit " N "] [" FROM .. TO "]"

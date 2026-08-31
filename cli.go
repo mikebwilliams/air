@@ -42,6 +42,9 @@ func runCLI(ctx context.Context, args []string, environment cliEnvironment) erro
 		printUsage(environment.Stdout)
 		return nil
 	}
+	if args[0] == "--version" {
+		return runVersion(ctx, args[1:], environment)
+	}
 	if args[0] == "help" {
 		return runHelpCommand(ctx, args[1:], environment)
 	}

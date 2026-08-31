@@ -63,6 +63,12 @@ var cliCommands = []cliCommandSpec{
 		Options:     []cliHelpOption{{"--json", "Write the status as JSON."}}, Run: runStatus,
 	},
 	{
+		Name: "version", Category: commandCategoryGettingStarted,
+		Summary:     "Print the AIR version.",
+		Description: "Print AIR's release version and exit.",
+		Usage:       []string{"air version"}, Run: runVersion,
+	},
+	{
 		Name: "pending", Category: commandCategoryCommitReview,
 		Summary:     "Preview commits that a scan would process.",
 		Description: "List pending commits in processing order without constructing a reviewer or changing AIR state.",
@@ -417,7 +423,7 @@ func runHelpCommand(_ context.Context, args []string, environment cliEnvironment
 
 func printUsage(output io.Writer) {
 	fmt.Fprintln(output, "AIR reviews commits and rechecks findings on master.")
-	fmt.Fprintln(output, "\nUsage:\n  air COMMAND [OPTIONS]\n  air help [COMMAND [SUBCOMMAND]]\n  air --help")
+	fmt.Fprintln(output, "\nUsage:\n  air COMMAND [OPTIONS]\n  air help [COMMAND [SUBCOMMAND]]\n  air --help\n  air --version")
 	for _, category := range commandCategoryOrder {
 		fmt.Fprintf(output, "\n%s:\n", category)
 		for _, command := range cliCommands {
