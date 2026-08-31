@@ -294,9 +294,15 @@ var cliCommands = []cliCommandSpec{
 	},
 	{
 		Name: "backup", Category: commandCategoryMaintenance,
-		Summary:     "Create a consistent SQLite database backup.",
-		Description: "Back up the current repository's AIR database to a new file. With no path, choose a timestamped filename in the current directory.",
-		Usage:       []string{"air backup [PATH]"}, Run: runBackup,
+		Summary:     "Create or import a consistent database backup.",
+		Description: "Back up the current repository's AIR database to a new file, or import a verified backup into the current repository.",
+		Usage:       []string{"air backup [PATH]", "air backup import [OPTIONS] PATH"},
+		Children: []cliCommandSpec{{
+			Name: "import", Summary: "Replace repository state with a verified backup.",
+			Description: "Validate and import an AIR backup. Replacing an existing database requires confirmation and is blocked while a scan is running.",
+			Usage:       []string{"air backup import [OPTIONS] PATH"},
+			Options:     []cliHelpOption{{"--force", "Replace an existing AIR database without prompting."}},
+		}}, Run: runBackup,
 	},
 	{
 		Name: "reset", Category: commandCategoryMaintenance,

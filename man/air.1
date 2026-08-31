@@ -392,6 +392,16 @@ in the current directory and adds a numeric suffix if necessary. The online
 backup includes committed WAL state, is integrity-checked, uses mode 0600, and
 never overwrites an existing file.
 .TP
+.BI "air backup import [\-\-force] " PATH
+Validate and import an AIR backup into the current repository. The backup must
+use the current AIR schema, pass SQLite integrity and foreign-key checks, and
+name a baseline on the first-parent history of local master. AIR leaves the
+source file unchanged, verifies a temporary copy, and replaces the repository
+database while holding the scan lock. Replacing an existing database requires
+confirmation unless
+.B \-\-force
+is supplied. Importing into an uninitialized repository does not prompt.
+.TP
 .BR "air reset" " [\-\-force]"
 Delete all AIR state for the repository, including reviews and configuration.
 AIR displays the exact state directory and asks for confirmation unless
@@ -627,6 +637,7 @@ Export a shareable report and back up the database:
 .EX
 air export --format html > air-findings.html
 air backup
+air backup import air-backup-20260831-120000.sqlite
 .EE
 .SH SEE ALSO
 .BR git (1),

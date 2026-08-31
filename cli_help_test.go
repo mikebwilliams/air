@@ -68,6 +68,10 @@ func TestCLIHelpWorksWithoutRepositoryState(t *testing.T) {
 			contains: []string{"air prompt show [--full] KIND", "--full"},
 		},
 		{
+			name: "backup import flag", args: []string{"backup", "import", "--help"},
+			contains: []string{"air backup import [OPTIONS] PATH", "Validate and import", "--force"},
+		},
+		{
 			name: "version command", args: []string{"version", "--help"},
 			contains: []string{"Usage:\n  air version", "Print AIR's release version and exit."},
 		},

@@ -989,6 +989,7 @@ emits the same named checks and aggregate pass/warning/failure counts.
 
 ```bash
 air backup [PATH]
+air backup import [--force] PATH
 ```
 
 AIR creates a consistent SQLite backup containing all committed database and
@@ -999,6 +1000,25 @@ against the current directory. AIR refuses to overwrite any explicit
 destination, creates the backup with mode `0600`, runs SQLite `quick_check` on
 the completed snapshot, and removes an incomplete destination after any error.
 The online backup does not require excluding concurrent readers or writers.
+
+`air backup import` restores a backup into the current repository, including
+one that is not currently initialized. AIR opens the source read-only and
+requires the current schema version, a successful SQLite `quick_check`, valid
+foreign keys, and a configured baseline on the first-parent history of local
+`master`. The source file remains unchanged. AIR acquires the scan lock, copies
+the source through SQLite's online-backup API into a private temporary file in
+the repository state directory, verifies that copy, and replaces the current
+database with rollback-safe filesystem renames. Stale SQLite journal, shared
+memory, and WAL files from the replaced database cannot be applied to the
+imported database.
+
+When a database already exists, import displays the source and destination and
+requires confirmation; `--force` is the noninteractive override. Importing
+into an uninitialized repository does not prompt. A failed validation, active
+scan, cancelled confirmation, or copy error leaves the current database
+unchanged. If installation of the verified copy fails after replacement has
+started, AIR restores the original database and its SQLite sidecars before
+returning the error.
 
 ### Scan new commits
 
