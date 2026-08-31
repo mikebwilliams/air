@@ -28,7 +28,7 @@ func TestCLIHelpWorksWithoutRepositoryState(t *testing.T) {
 		},
 		{
 			name: "command topic", args: []string{"help", "scan"},
-			contains: []string{"air scan [OPTIONS] [FROM..TO]", "--stop-on-error", "--harness HARNESS", "--codex-timeout DURATION", "--claude-timeout DURATION"},
+			contains: []string{"air scan [OPTIONS] [FROM..TO]", "--stop-on-error", "--harness HARNESS", "--codex-timeout DURATION", "--claude-timeout DURATION", "--gemini-timeout DURATION"},
 			excludes: []string{"Getting started:", "flag: help requested", "--reviewer", "--base-url", "--api-key"},
 		},
 		{

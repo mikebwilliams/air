@@ -129,7 +129,8 @@ The database must not modify or require files in the tracked working tree.
 
 The schema should remain intentionally small. Schema version 5 adds successful
 review timing, and version 6 adds separate HEAD-recheck attempts and results.
-Version 7 records the local harness (`codex` or `claude`) on reviews, failures,
+Version 7 records the local harness (such as `codex`, `claude`, or `gemini`) on
+reviews, failures,
 rechecks, and finding attribution. Version 8 adds optional harness-reported
 cost and an explicit flag for unreported reasoning-token detail. Supported
 older databases upgrade transactionally without deleting reviews or findings.
@@ -161,6 +162,8 @@ codex-profile
 codex-timeout
 claude-bin
 claude-timeout
+gemini-bin
+gemini-timeout
 ```
 
 The CLI owns validation for these values and does not expose the internal
@@ -276,7 +279,8 @@ Fields:
 - `status`: either `reviewed` or `skipped`.
 - `skip_reason`: reason a skipped commit was not sent to the model; null for a
   reviewed commit.
-- `reviewer`: local harness identifier used for a review (`codex` or `claude`);
+- `reviewer`: local harness identifier used for a review (`codex`, `claude`, or
+  `gemini`);
   null for a skipped commit.
 - `model`: model identifier used for a review; null for a skipped commit.
 - `reasoning_effort`: harness effort used for a review; null for a
@@ -675,8 +679,8 @@ False negatives are preferable to large quantities of speculative warnings.
 ## 10. Repository Inspection
 
 The model should be allowed to inspect repository contents when necessary. AIR
-delegates inspection to a fresh local Codex or Claude Code CLI session for each
-commit.
+delegates inspection to a fresh local Codex, Claude Code, or Gemini CLI session
+for each commit.
 
 At minimum, the reviewer may need equivalent access to:
 
@@ -696,7 +700,10 @@ Codex's normal repository context, `AGENTS.md` instructions, local
 configuration, and exec-policy rules remain available. Claude's normal local
 context, including `CLAUDE.md`, remains available while AIR disables hooks,
 external MCP servers, slash commands, subagents, network access, and writes.
-AIR does not reproduce either harness's context gathering.
+Gemini's normal repository context, including `GEMINI.md`, remains available
+while AIR disables extensions, MCP servers, hooks, skills, network access, and
+plan model routing, ignores repository `.env` files, and applies a read-only
+tool policy. AIR does not reproduce the harnesses' context gathering.
 
 Repository inspection must be read-only.
 
@@ -980,8 +987,10 @@ repository discovery, `refs/heads/master`, state-directory and database
 permissions, supported schema version, SQLite `quick_check`, effective harness
 settings, selected model and pricing, and harness prerequisites. It locates the
 effective executable and runs `codex login status` or `claude auth status` with
-a bounded timeout. Unknown pricing is a warning; missing configuration or
-harness authentication, master, or a usable database is a failed check. Any failed check produces a
+a bounded timeout. For Gemini it runs `gemini --version` and emits a warning
+that the CLI exposes no non-interactive authentication-status check, so the
+first model call verifies access. Unknown pricing is a warning; missing
+configuration or checkable harness authentication, master, or a usable database is a failed check. Any failed check produces a
 nonzero exit after all safe applicable checks have been reported. `--json`
 emits the same named checks and aggregate pass/warning/failure counts.
 
@@ -1338,10 +1347,10 @@ configuration, API keys, raw model responses, or external assets.
 
 ## 19. Review Harness Configuration
 
-AIR supports the locally installed Codex and Claude Code CLIs. It reuses the
-selected harness's existing authentication, configuration, and repository
-instructions and never reads or copies credentials. Codex remains the default.
-There is no remote HTTP review backend.
+AIR supports the locally installed Codex, Claude Code, and Gemini CLIs. It
+reuses the selected harness's existing authentication, configuration, and
+repository instructions and never reads or copies credentials. Codex remains
+the default. There is no remote HTTP review backend.
 
 Every review setting has a database representation, an environment-variable
 override, and, where applicable, a `scan`, `retry`, `rescan`, or `recheck` flag
@@ -1361,15 +1370,24 @@ command-line flag > environment variable > database > built-in default
 | `codex-timeout` | `--codex-timeout` | `AIR_CODEX_TIMEOUT` | `20m` |
 | `claude-bin` | `--claude-bin` | `AIR_CLAUDE_BIN` | `claude` |
 | `claude-timeout` | `--claude-timeout` | `AIR_CLAUDE_TIMEOUT` | `20m` |
+| `gemini-bin` | `--gemini-bin` | `AIR_GEMINI_BIN` | `gemini` |
+| `gemini-timeout` | `--gemini-timeout` | `AIR_GEMINI_TIMEOUT` | `20m` |
 
 `air config set`, `get`, `unset`, and `list` manage only these public review
 settings in the existing `config` table. `air config list --effective` includes
 all settings, their resolved values, and their winning sources.
 
 Reviews require explicit effective `model` and `effort` values so provenance is
-known rather than inferred from changing harness defaults. AIR passes both
-values explicitly. The selected harness timeout is a positive Go duration and
-bounds each commit review or recheck batch independently.
+known rather than inferred from changing harness defaults. AIR passes the model
+and any supported effort control explicitly. The selected harness timeout is a
+positive Go duration and bounds each commit review or recheck batch
+independently.
+
+Gemini CLI does not expose per-invocation reasoning effort. The Gemini harness
+therefore accepts only the explicit sentinel `default`; other values fail
+before a model call rather than recording provenance AIR could not enforce.
+AIR passes the model explicitly and disables Plan Mode model routing. A result
+must contain token statistics for exactly that requested model.
 
 The harness must report token usage. AIR records input, cached-input,
 cache-write, output, and reasoning-output counts for every commit review and
@@ -1379,6 +1397,11 @@ ordinary input, cache creation, and cache reads sum to AIR total input; cache
 creation maps to cache writes and cache reads map to cached input. Claude does
 not expose the reasoning subset of output, so AIR records that category as
 unreported rather than as a measured zero.
+
+For Gemini, AIR maps prompt plus tool-use prompt tokens to total input, cached
+tokens to cached input, candidates plus thoughts to total output, and thoughts
+to reasoning output. Gemini does not report cache writes, so AIR retains that
+category as unreported.
 
 AIR's model registry produces an API-equivalent estimate from stored pricing.
 If a harness also reports an invocation cost (Claude's `total_cost_usd`), AIR
@@ -1540,8 +1563,16 @@ file reading/search plus an allowlist of read-only Git commands. Sessions are
 not persisted, and the fallback model is pinned to the requested model so
 stored provenance remains exact.
 
-Both harnesses receive the same fixed read-only inspection policy and strict
-JSON response schema. AIR retains the raw harness response. A nonzero harness
+The local Gemini reviewer uses noninteractive Plan Mode plus a higher-priority,
+deny-by-default policy. AIR merges stricter controls into a temporary copy of
+system settings, disables extensions, MCP, hooks, skills, network, interactive
+shells, write todos, model routing, and repository `.env` loading, and allows
+only file reading/search and specific read-only Git command prefixes. The
+temporary settings and policy are removed after the invocation.
+
+All harnesses receive the same fixed read-only inspection contract and JSON
+response contract; AIR strictly validates every result even when a CLI has no
+schema flag. AIR retains the raw harness response. A nonzero harness
 exit, absent output or usage, invalid output, or attempted resolution of an
 unknown finding fails the commit without recording it as reviewed.
 
@@ -1582,7 +1613,7 @@ Suggested implementation:
 Go
 SQLite via database/sql and a SQLite driver
 Git via os/exec
-Codex or Claude Code CLI via os/exec
+Codex, Claude Code, or Gemini CLI via os/exec
 JSON via encoding/json
 flag-based CLI
 ```
@@ -1598,6 +1629,7 @@ git.go
 reviewer.go
 codex_reviewer.go
 claude_reviewer.go
+gemini_reviewer.go
 prompt.go
 ```
 

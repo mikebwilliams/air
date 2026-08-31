@@ -303,7 +303,7 @@ var cliCommands = []cliCommandSpec{
 
 func reviewerHelpOptions(timeoutScope string) []cliHelpOption {
 	return []cliHelpOption{
-		{"--harness HARNESS", "Override the review harness: codex or claude."},
+		{"--harness HARNESS", "Override the review harness: codex, claude, or gemini."},
 		{"--model MODEL", "Override the configured model identifier."},
 		{"--effort EFFORT", "Override the reviewer effort."},
 		{"--codex-bin PATH", "Override the Codex CLI executable."},
@@ -311,6 +311,8 @@ func reviewerHelpOptions(timeoutScope string) []cliHelpOption {
 		{"--codex-timeout DURATION", "Override the " + timeoutScope + " Codex timeout."},
 		{"--claude-bin PATH", "Override the Claude Code CLI executable."},
 		{"--claude-timeout DURATION", "Override the " + timeoutScope + " Claude timeout."},
+		{"--gemini-bin PATH", "Override the Gemini CLI executable."},
+		{"--gemini-timeout DURATION", "Override the " + timeoutScope + " Gemini timeout."},
 	}
 }
 

@@ -51,12 +51,22 @@ func TestSettingPrecedence(t *testing.T) {
 	}
 	resolved, err = resolveSettingValue(ctx, store, func(name string) string {
 		if name == "AIR_HARNESS" {
-			return claudeReviewerName
+			return geminiReviewerName
 		}
 		return ""
 	}, harness, "", false)
-	if err != nil || resolved.Value != claudeReviewerName || resolved.Source != "AIR_HARNESS" {
+	if err != nil || resolved.Value != geminiReviewerName || resolved.Source != "AIR_HARNESS" {
 		t.Fatalf("environment harness = %+v, %v", resolved, err)
+	}
+	geminiTimeout, _ := settingByKey("gemini-timeout")
+	resolved, err = resolveSettingValue(ctx, store, func(name string) string {
+		if name == "AIR_GEMINI_TIMEOUT" {
+			return "7m"
+		}
+		return ""
+	}, geminiTimeout, "", false)
+	if err != nil || resolved.Value != "7m" || resolved.Source != "AIR_GEMINI_TIMEOUT" {
+		t.Fatalf("environment Gemini timeout = %+v, %v", resolved, err)
 	}
 }
 
@@ -81,12 +91,16 @@ func TestSettingValidationIdentifiesSource(t *testing.T) {
 
 func TestHarnessSettingRejectsUnknownValue(t *testing.T) {
 	harness, _ := settingByKey("harness")
-	if _, err := validateSettingValue(harness, "http"); err == nil || !strings.Contains(err.Error(), "codex or claude") {
+	if _, err := validateSettingValue(harness, "http"); err == nil || !strings.Contains(err.Error(), "codex, claude, or gemini") {
 		t.Fatalf("invalid harness error = %v", err)
 	}
 	claudeTimeout, _ := settingByKey("claude-timeout")
 	if _, err := validateSettingValue(claudeTimeout, "later"); err == nil || !strings.Contains(err.Error(), "positive duration") {
 		t.Fatalf("invalid Claude timeout error = %v", err)
+	}
+	geminiTimeout, _ := settingByKey("gemini-timeout")
+	if _, err := validateSettingValue(geminiTimeout, "later"); err == nil || !strings.Contains(err.Error(), "positive duration") {
+		t.Fatalf("invalid Gemini timeout error = %v", err)
 	}
 }
 

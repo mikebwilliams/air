@@ -26,6 +26,7 @@ type cliEnvironment struct {
 	Getenv          func(string) string
 	CodexCommand    commandContextFunc
 	ClaudeCommand   commandContextFunc
+	GeminiCommand   commandContextFunc
 	Now             func() time.Time
 	FindingsUI      findingsUIRunner
 	ExternalCommand commandContextFunc
@@ -644,6 +645,8 @@ type reviewerFlagValues struct {
 	codexTimeout  *string
 	claudeBinary  *string
 	claudeTimeout *string
+	geminiBinary  *string
+	geminiTimeout *string
 }
 
 type reviewerConfiguration struct {
@@ -655,6 +658,8 @@ type reviewerConfiguration struct {
 	CodexTimeout  time.Duration
 	ClaudeBinary  string
 	ClaudeTimeout time.Duration
+	GeminiBinary  string
+	GeminiTimeout time.Duration
 }
 
 type configuredReviewer interface {
@@ -664,7 +669,7 @@ type configuredReviewer interface {
 
 func addReviewerFlags(flags *flag.FlagSet, timeoutScope string) reviewerFlagValues {
 	return reviewerFlagValues{
-		harness:       flags.String("harness", "", "review harness: codex or claude"),
+		harness:       flags.String("harness", "", "review harness: codex, claude, or gemini"),
 		model:         flags.String("model", "", "model identifier"),
 		effort:        flags.String("effort", "", "reviewer effort"),
 		codexBinary:   flags.String("codex-bin", "", "Codex CLI executable"),
@@ -672,6 +677,8 @@ func addReviewerFlags(flags *flag.FlagSet, timeoutScope string) reviewerFlagValu
 		codexTimeout:  flags.String("codex-timeout", "", timeoutScope+" Codex timeout"),
 		claudeBinary:  flags.String("claude-bin", "", "Claude Code CLI executable"),
 		claudeTimeout: flags.String("claude-timeout", "", timeoutScope+" Claude timeout"),
+		geminiBinary:  flags.String("gemini-bin", "", "Gemini CLI executable"),
+		geminiTimeout: flags.String("gemini-timeout", "", timeoutScope+" Gemini timeout"),
 	}
 }
 
@@ -729,6 +736,17 @@ func resolveReviewerConfiguration(
 		}
 		configuration.ClaudeBinary = binary.Value
 		configuration.ClaudeTimeout = timeout
+	case geminiReviewerName:
+		binary, err := resolve("gemini-bin", *values.geminiBinary)
+		if err != nil {
+			return reviewerConfiguration{}, err
+		}
+		timeout, err := resolveReviewerTimeout(resolve, "gemini-timeout", *values.geminiTimeout)
+		if err != nil {
+			return reviewerConfiguration{}, err
+		}
+		configuration.GeminiBinary = binary.Value
+		configuration.GeminiTimeout = timeout
 	default:
 		return reviewerConfiguration{}, fmt.Errorf("unsupported review harness %q", configuration.Harness)
 	}
@@ -940,6 +958,16 @@ func newConfiguredReviewer(
 			Repository: repository, Binary: configuration.ClaudeBinary, Model: configuredModel,
 			Effort: configuredEffort, Prompt: prompt.Static, Timeout: configuration.ClaudeTimeout,
 			CommandContext: environment.ClaudeCommand,
+		}, identity, nil
+	case geminiReviewerName:
+		if configuredEffort != "default" {
+			return nil, ReviewIdentity{}, fmt.Errorf(
+				"Gemini CLI does not expose per-invocation reasoning effort; use --effort default")
+		}
+		return &GeminiReviewer{
+			Repository: repository, Binary: configuration.GeminiBinary, Model: configuredModel,
+			Effort: configuredEffort, Prompt: prompt.Static, Timeout: configuration.GeminiTimeout,
+			CommandContext: environment.GeminiCommand,
 		}, identity, nil
 	default:
 		return nil, ReviewIdentity{}, fmt.Errorf("unsupported review harness %q", configuration.Harness)

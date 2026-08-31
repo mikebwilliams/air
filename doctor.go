@@ -150,9 +150,16 @@ func inspectDoctor(ctx context.Context, environment cliEnvironment) doctorReport
 		}
 	}
 
-	doctorRequiredSetting(&report, resolve, "effort", "reasoning effort")
+	effort, effortOK := doctorRequiredSetting(&report, resolve, "effort", "reasoning effort")
 	if !harnessOK {
 		return report
+	}
+	if harness.Value == geminiReviewerName && effortOK && effort.Value != "default" {
+		check := &report.Checks[len(report.Checks)-1]
+		check.Status = "fail"
+		check.Detail = `Gemini CLI does not expose per-invocation reasoning effort; use "default"`
+		report.Passed--
+		report.Failed++
 	}
 	timeoutKey := harness.Value + "-timeout"
 	binaryKey := harness.Value + "-bin"
@@ -163,6 +170,9 @@ func inspectDoctor(ctx context.Context, environment cliEnvironment) doctorReport
 		harnessLabel = "Claude"
 		authArguments = []string{"auth", "status"}
 		commandContext = environment.ClaudeCommand
+	} else if harness.Value == geminiReviewerName {
+		harnessLabel = "Gemini"
+		commandContext = environment.GeminiCommand
 	}
 	if timeout, ok := doctorRequiredSetting(&report, resolve, timeoutKey, harnessLabel+" timeout"); ok {
 		report.Checks[len(report.Checks)-1].Detail = timeout.Value + " from " + timeout.Source
@@ -181,6 +191,12 @@ func inspectDoctor(ctx context.Context, environment cliEnvironment) doctorReport
 		return report
 	}
 	report.add(harnessLabel+" executable", "pass", resolvedBinary+" from "+binary.Source)
+	if harness.Value == geminiReviewerName {
+		doctorHarnessCommand(ctx, &report, "Gemini CLI", commandContext, resolvedBinary, "--version")
+		report.add("Gemini authentication", "warn",
+			"Gemini CLI has no non-interactive authentication-status check; the first review verifies access")
+		return report
+	}
 	doctorHarnessAuth(ctx, &report, harnessLabel, commandContext, resolvedBinary, authArguments...)
 	return report
 }
@@ -204,6 +220,12 @@ func doctorRequiredSetting(report *doctorReport,
 func doctorHarnessAuth(ctx context.Context, report *doctorReport,
 	harnessLabel string, commandContext commandContextFunc, binary string, arguments ...string,
 ) {
+	doctorHarnessCommand(ctx, report, harnessLabel+" authentication", commandContext, binary, arguments...)
+}
+
+func doctorHarnessCommand(ctx context.Context, report *doctorReport,
+	checkName string, commandContext commandContextFunc, binary string, arguments ...string,
+) {
 	authContext, cancel := context.WithTimeout(ctx, doctorAuthTimeout)
 	defer cancel()
 	if commandContext == nil {
@@ -224,11 +246,11 @@ func doctorHarnessAuth(ctx context.Context, report *doctorReport,
 		} else if detail == "" {
 			detail = err.Error()
 		}
-		report.add(harnessLabel+" authentication", "fail", detail)
+		report.add(checkName, "fail", detail)
 		return
 	}
 	if detail == "" {
-		detail = strings.ToLower(harnessLabel) + " authentication status succeeded"
+		detail = strings.ToLower(checkName) + " check succeeded"
 	}
-	report.add(harnessLabel+" authentication", "pass", detail)
+	report.add(checkName, "pass", detail)
 }

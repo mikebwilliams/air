@@ -26,10 +26,10 @@ var reviewSettings = []settingSpec{
 		Key: "harness", Environment: []string{"AIR_HARNESS"}, Default: codexReviewerName,
 		Validate: func(value string) error {
 			switch value {
-			case codexReviewerName, claudeReviewerName:
+			case codexReviewerName, claudeReviewerName, geminiReviewerName:
 				return nil
 			default:
-				return errors.New("must be codex or claude")
+				return errors.New("must be codex, claude, or gemini")
 			}
 		},
 	},
@@ -48,6 +48,13 @@ var reviewSettings = []settingSpec{
 		Key:         "claude-timeout",
 		Environment: []string{"AIR_CLAUDE_TIMEOUT"},
 		Default:     defaultClaudeTimeout.String(),
+		Validate:    validatePositiveDuration,
+	},
+	{Key: "gemini-bin", Environment: []string{"AIR_GEMINI_BIN"}, Default: "gemini", Validate: requireSettingValue},
+	{
+		Key:         "gemini-timeout",
+		Environment: []string{"AIR_GEMINI_TIMEOUT"},
+		Default:     defaultGeminiTimeout.String(),
 		Validate:    validatePositiveDuration,
 	},
 }

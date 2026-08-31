@@ -276,6 +276,62 @@ func TestCLIDoctorChecksClaudeConfigurationAndAuthentication(t *testing.T) {
 	}
 }
 
+func TestCLIDoctorChecksGeminiConfiguration(t *testing.T) {
+	ctx := context.Background()
+	_, directory := newTestGitRepository(t)
+	base := testCommitFile(t, directory, "app.txt", []byte("base\n"), "base")
+	executable, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var stdout bytes.Buffer
+	var invokedName string
+	var invokedArgs []string
+	environment := cliEnvironment{
+		Cwd: directory, Stdout: &stdout, Stderr: &bytes.Buffer{}, Getenv: func(string) string { return "" },
+		GeminiCommand: func(commandContext context.Context, name string, args ...string) *exec.Cmd {
+			invokedName = name
+			invokedArgs = append([]string(nil), args...)
+			command := exec.CommandContext(commandContext, os.Args[0], "-test.run=^TestDoctorLoginHelper$")
+			command.Env = append(os.Environ(), "AIR_DOCTOR_HELPER=1")
+			return command
+		},
+	}
+	if err := runCLI(ctx, []string{"init", base}, environment); err != nil {
+		t.Fatal(err)
+	}
+	for _, setting := range [][2]string{
+		{"harness", "gemini"}, {"model", "gemini-test"},
+		{"effort", "default"}, {"gemini-bin", executable},
+	} {
+		if err := runCLI(ctx, []string{"config", "set", setting[0], setting[1]}, environment); err != nil {
+			t.Fatalf("set %s: %v", setting[0], err)
+		}
+	}
+	stdout.Reset()
+	if err := runCLI(ctx, []string{"doctor"}, environment); err != nil {
+		t.Fatalf("doctor: %v\n%s", err, stdout.String())
+	}
+	if invokedName != executable || len(invokedArgs) != 1 || invokedArgs[0] != "--version" {
+		t.Fatalf("doctor Gemini invocation = %q %q", invokedName, invokedArgs)
+	}
+	if !strings.Contains(stdout.String(), "PASS Gemini executable") ||
+		!strings.Contains(stdout.String(), "PASS Gemini CLI") ||
+		!strings.Contains(stdout.String(), "WARN Gemini authentication") ||
+		!strings.Contains(stdout.String(), "2 warnings, 0 failed") {
+		t.Fatalf("doctor output:\n%s", stdout.String())
+	}
+	if err := runCLI(ctx, []string{"config", "set", "effort", "high"}, environment); err != nil {
+		t.Fatal(err)
+	}
+	stdout.Reset()
+	err = runCLI(ctx, []string{"doctor"}, environment)
+	if err == nil || !strings.Contains(stdout.String(), "FAIL reasoning effort") ||
+		!strings.Contains(stdout.String(), `use "default"`) {
+		t.Fatalf("doctor with unsupported Gemini effort: %v\n%s", err, stdout.String())
+	}
+}
+
 func TestDoctorLoginHelper(t *testing.T) {
 	if os.Getenv("AIR_DOCTOR_HELPER") != "1" {
 		return
@@ -380,6 +436,72 @@ func TestCLIScanWithClaudeHarness(t *testing.T) {
 		*record.ReportedCostMicrousd != 1234 || record.Usage == nil ||
 		!record.Usage.ReasoningOutputTokensUnreported {
 		t.Fatalf("Claude review record = %+v", record)
+	}
+}
+
+func TestCLIScanWithGeminiHarness(t *testing.T) {
+	ctx := context.Background()
+	repository, directory := newTestGitRepository(t)
+	base := testCommitFile(t, directory, "app.txt", []byte("base\n"), "base")
+	head := testCommitFile(t, directory, "app.txt", []byte("changed\n"), "change")
+	command, invocation := newGeminiTestCommand(t, "gemini-test", ReviewOutput{
+		NewFindings: []NewFinding{}, ResolvedFindings: []ResolvedFinding{},
+		Summary: "Reviewed with local Gemini.",
+	}, "")
+	var stdout bytes.Buffer
+	environment := cliEnvironment{
+		Cwd: directory, Stdout: &stdout, Stderr: &bytes.Buffer{},
+		Getenv: func(string) string { return "" }, GeminiCommand: command,
+	}
+	if err := runCLI(ctx, []string{"init", base}, environment); err != nil {
+		t.Fatal(err)
+	}
+	if err := runCLI(ctx, []string{
+		"scan", "--harness", "gemini", "--model", "gemini-test", "--effort", "default",
+		"--gemini-bin", "/custom/gemini", "--gemini-timeout", "3m",
+	}, environment); err != nil {
+		t.Fatalf("scan: %v", err)
+	}
+	if invocation.Name != "/custom/gemini" ||
+		testArgumentValue(invocation.Args, "--model") != "gemini-test" ||
+		testArgumentValue(invocation.Args, "--approval-mode") != "plan" {
+		t.Fatalf("Gemini invocation = %+v", invocation)
+	}
+	store, err := OpenStore(ctx, repository.DatabasePath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	record, err := store.Commit(ctx, head)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if record.Harness != geminiReviewerName || record.Model != "gemini-test" ||
+		record.ReasoningEffort != "default" || record.ReportedCostMicrousd != nil ||
+		record.Usage == nil || record.Usage.InputTokens != 105 ||
+		record.Usage.CachedInputTokens != 10 || record.Usage.CacheWriteTokens != nil ||
+		record.Usage.ReasoningOutputTokens != 5 || record.Usage.ReasoningOutputTokensUnreported {
+		t.Fatalf("Gemini review record = %+v", record)
+	}
+}
+
+func TestCLIGeminiRejectsUnsupportedEffort(t *testing.T) {
+	ctx := context.Background()
+	_, directory := newTestGitRepository(t)
+	base := testCommitFile(t, directory, "app.txt", []byte("base\n"), "base")
+	testCommitFile(t, directory, "app.txt", []byte("changed\n"), "change")
+	environment := cliEnvironment{
+		Cwd: directory, Stdout: &bytes.Buffer{}, Stderr: &bytes.Buffer{},
+		Getenv: func(string) string { return "" },
+	}
+	if err := runCLI(ctx, []string{"init", base}, environment); err != nil {
+		t.Fatal(err)
+	}
+	err := runCLI(ctx, []string{
+		"scan", "--harness", "gemini", "--model", "gemini-test", "--effort", "high",
+	}, environment)
+	if err == nil || !strings.Contains(err.Error(), "use --effort default") {
+		t.Fatalf("scan error = %v", err)
 	}
 }
 

@@ -1,9 +1,9 @@
 # AIR
 
 AIR is a local semantic reviewer for commits on the first-parent history of
-`master`. For each selected commit it starts a fresh local Codex or Claude Code
-review session, lets the selected harness inspect the repository under a
-read-only policy, and stores reviews and findings in SQLite.
+`master`. For each selected commit it starts a fresh local Codex, Claude Code,
+or Gemini CLI review session, lets the selected harness inspect the repository
+under a read-only policy, and stores reviews and findings in SQLite.
 
 The database lives at:
 
@@ -38,8 +38,8 @@ modify tracked files.
 - Go 1.26 or newer
 - Git
 - A C compiler for the bundled SQLite driver
-- The Codex CLI, authenticated with `codex login`, or the Claude Code CLI,
-  authenticated with `claude auth login`
+- The Codex CLI, authenticated with `codex login`; the Claude Code CLI,
+  authenticated with `claude auth login`; or an authenticated Gemini CLI
 
 ## Build and test
 
@@ -71,7 +71,7 @@ make install DESTDIR=/tmp/air-package-root
 
 ## Review harness configuration
 
-AIR supports the local Codex and Claude Code CLIs. It uses each CLI's existing
+AIR supports the local Codex, Claude Code, and Gemini CLIs. It uses each CLI's existing
 local authentication, configuration, and repository instructions; AIR never
 reads or copies credentials. Codex is the default harness. AIR requires an
 explicit model and effort so every stored review has unambiguous provenance.
@@ -93,6 +93,19 @@ air config set effort high
 air scan
 
 air scan --harness claude --model your-claude-model --effort high
+```
+
+Gemini CLI does not currently expose a per-invocation reasoning-effort option.
+AIR therefore requires the explicit sentinel value `default` and will not
+record an effort value that it could not actually apply:
+
+```bash
+air config set harness gemini
+air config set model your-gemini-model
+air config set effort default
+air scan
+
+air scan --harness gemini --model your-gemini-model --effort default
 ```
 
 Review settings may come from a scan flag, an environment variable, the AIR
@@ -132,6 +145,8 @@ Effective output includes the winning source for every setting.
 | `codex-timeout` | `--codex-timeout` | `AIR_CODEX_TIMEOUT` | `20m` |
 | `claude-bin` | `--claude-bin` | `AIR_CLAUDE_BIN` | `claude` |
 | `claude-timeout` | `--claude-timeout` | `AIR_CLAUDE_TIMEOUT` | `20m` |
+| `gemini-bin` | `--gemini-bin` | `AIR_GEMINI_BIN` | `gemini` |
+| `gemini-timeout` | `--gemini-timeout` | `AIR_GEMINI_TIMEOUT` | `20m` |
 
 Reviewer instructions can also be customized per repository. AIR has separate
 instructions for commit review and HEAD recheck:
@@ -161,12 +176,15 @@ findings eligible for recheck again because it is a distinct review identity.
 
 Each commit gets an independent, non-persistent harness session. AIR supplies
 the exact commit and first-parent identities, bounded resolution candidates,
-and a JSON output schema. The harness discovers the diff and related repository
+and a JSON output contract. The harness discovers the diff and related repository
 context itself. Codex uses its read-only sandbox and noninteractive approval
 policy. Claude uses its sandbox with writes and network disabled, hooks and
 external MCP servers disabled, and only file search plus read-only Git commands
-allowed. An unattended scan fails instead of pausing or modifying the
-repository.
+allowed. Gemini runs in Plan Mode under an additional deny-by-default policy;
+AIR disables extensions, MCP servers, hooks, skills, network access, and plan
+model routing, ignores repository `.env` files, then permits only file
+search/read and a read-only Git allowlist. An unattended scan fails instead of
+pausing or modifying the repository.
 
 Additional optional configuration:
 
@@ -176,20 +194,22 @@ air config set codex-profile air-review
 air config set codex-timeout 20m
 air config set claude-bin /path/to/claude
 air config set claude-timeout 20m
+air config set gemini-bin /path/to/gemini
+air config set gemini-timeout 20m
 ```
 
 The corresponding flags are `--harness`, `--model`, `--effort`,
-`--codex-bin`, `--codex-profile`, `--codex-timeout`, `--claude-bin`, and
-`--claude-timeout`. For example:
+`--codex-bin`, `--codex-profile`, `--codex-timeout`, `--claude-bin`,
+`--claude-timeout`, `--gemini-bin`, and `--gemini-timeout`. For example:
 
 ```bash
 air scan --model your-codex-model --effort high
 ```
 
-AIR passes the model and effort explicitly to the selected harness and records
-the harness plus both values on every commit review or HEAD recheck. The
-selected harness's timeout applies independently to each commit review or
-recheck batch and defaults to twenty minutes.
+AIR passes the model and any supported effort control explicitly to the selected
+harness and records the harness plus both provenance values on every commit
+review or HEAD recheck. The selected harness's timeout applies independently to
+each commit review or recheck batch and defaults to twenty minutes.
 
 AIR records input, cached-input, cache-write, output, and reasoning-output token
 counts from each review. Its model registry includes a dated snapshot of the
@@ -205,7 +225,10 @@ cache-write usage is unavailable, AIR stores a minimum and maximum estimate
 spanning ordinary-input and cache-write pricing. Claude's cache-creation tokens
 map to AIR cache writes, and its cache-read tokens map to cached input. Models
 absent from AIR's registry remain usable and are stored with explicitly unknown
-pricing.
+pricing. For Gemini, prompt and tool tokens map to total input, cached tokens
+map to cached input, and candidate plus thought tokens map to total output;
+thought tokens are recorded as reasoning output. Gemini does not report cache
+writes, so that category remains explicitly unreported.
 
 Inspect or override the database-backed model registry:
 
@@ -520,9 +543,12 @@ air doctor --json
 
 The doctor checks the Git repository and master ref, state permissions, schema
 version, SQLite integrity, effective harness/model configuration, model pricing,
-the selected executable, and either `codex login status` or `claude auth
-status`. Unknown pricing is a warning, while missing harness authentication or
-an unusable database is a failed check and a nonzero exit.
+and the selected executable. It runs `codex login status` or `claude auth
+status`; for Gemini it runs `gemini --version` and warns that authentication can
+only be verified by the first model call because Gemini CLI has no
+non-interactive authentication-status command. Unknown pricing is a warning,
+while missing authentication where it can be checked or an unusable database
+is a failed check and a nonzero exit.
 
 ## Review and skip behavior
 
@@ -563,6 +589,10 @@ builds, tests, repository programs, or network commands. Local repository
 instructions remain available. Codex retains its configuration and exec-policy
 rules; Claude is launched with hooks, slash commands, agents, network tools,
 external MCP servers, and write tools disabled, plus a required sandbox and a
-read-only Git allowlist.
+read-only Git allowlist. Gemini is launched in Plan Mode with extensions, MCP,
+hooks, skills, network, model routing, and repository `.env` loading disabled;
+a deny-by-default policy allows only file reads/searches and the same read-only
+Git operations. AIR requires Gemini's per-model usage to name exactly the
+requested model.
 
 See [docs/initial_spec.md](docs/initial_spec.md) for the complete design.
