@@ -605,3 +605,8 @@ Git operations. AIR requires Gemini's per-model usage to name exactly the
 requested model.
 
 See [docs/initial_spec.md](docs/initial_spec.md) for the complete design.
+
+## License
+
+AIR is licensed under the [GNU Affero General Public License, version 3](LICENSE)
+(`AGPL-3.0-only`).
