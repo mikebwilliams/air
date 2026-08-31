@@ -55,6 +55,7 @@ type CommitRecord struct {
 	EstimatedCostMaxMicrousd *int64      `json:"estimated_cost_max_microusd,omitempty"`
 	CostContext              string      `json:"cost_context,omitempty"`
 	CostComplete             bool        `json:"cost_complete"`
+	ReportedCostMicrousd     *int64      `json:"reported_cost_microusd,omitempty"`
 	DurationMilliseconds     *int64      `json:"duration_ms,omitempty"`
 	NewCount                 int         `json:"new_count"`
 	ResolvedCount            int         `json:"resolved_count"`
@@ -76,6 +77,7 @@ type ReviewAttempt struct {
 	EstimatedCostMaxMicrousd *int64     `json:"estimated_cost_max_microusd,omitempty"`
 	CostContext              string     `json:"cost_context,omitempty"`
 	CostComplete             bool       `json:"cost_complete"`
+	ReportedCostMicrousd     *int64     `json:"reported_cost_microusd,omitempty"`
 	DurationMilliseconds     *int64     `json:"duration_ms,omitempty"`
 	NewCount                 int        `json:"new_count"`
 	ResolvedCount            int        `json:"resolved_count"`
@@ -83,40 +85,42 @@ type ReviewAttempt struct {
 }
 
 type ReviewStats struct {
-	Attempts              int
-	RecheckAttempts       int
-	Commits               int
-	InputTokens           int64
-	CachedInputTokens     int64
-	CacheWriteTokens      int64
-	CacheWritesUnreported int
-	OutputTokens          int64
-	ReasoningOutputTokens int64
-	MinimumCostMicrousd   int64
-	MaximumCostMicrousd   int64
-	PricedAttempts        int
-	UnknownCostAttempts   int
-	DurationMilliseconds  int64
-	TimedAttempts         int
-	UntimedAttempts       int
-	Groups                []ReviewStatsGroup
+	Attempts                   int
+	RecheckAttempts            int
+	Commits                    int
+	InputTokens                int64
+	CachedInputTokens          int64
+	CacheWriteTokens           int64
+	CacheWritesUnreported      int
+	OutputTokens               int64
+	ReasoningOutputTokens      int64
+	ReasoningOutputsUnreported int
+	MinimumCostMicrousd        int64
+	MaximumCostMicrousd        int64
+	PricedAttempts             int
+	UnknownCostAttempts        int
+	DurationMilliseconds       int64
+	TimedAttempts              int
+	UntimedAttempts            int
+	Groups                     []ReviewStatsGroup
 }
 
 type ReviewStatsGroup struct {
-	Harness               string
-	Model                 string
-	ReasoningEffort       string
-	Attempts              int
-	InputTokens           int64
-	CachedInputTokens     int64
-	CacheWriteTokens      int64
-	CacheWritesUnreported int
-	OutputTokens          int64
-	ReasoningOutputTokens int64
-	MinimumCostMicrousd   int64
-	MaximumCostMicrousd   int64
-	PricedAttempts        int
-	UnknownCostAttempts   int
+	Harness                    string
+	Model                      string
+	ReasoningEffort            string
+	Attempts                   int
+	InputTokens                int64
+	CachedInputTokens          int64
+	CacheWriteTokens           int64
+	CacheWritesUnreported      int
+	OutputTokens               int64
+	ReasoningOutputTokens      int64
+	ReasoningOutputsUnreported int
+	MinimumCostMicrousd        int64
+	MaximumCostMicrousd        int64
+	PricedAttempts             int
+	UnknownCostAttempts        int
 }
 
 type ReviewDurationStats struct {
@@ -211,10 +215,11 @@ type ReviewInput struct {
 }
 
 type ReviewResult struct {
-	Output      ReviewOutput
-	RawResponse string
-	Usage       *TokenUsage
-	Duration    time.Duration
+	Output               ReviewOutput
+	RawResponse          string
+	Usage                *TokenUsage
+	ReportedCostMicrousd *int64
+	Duration             time.Duration
 }
 
 type RecheckFindingResult struct {
@@ -234,18 +239,20 @@ type RecheckInput struct {
 }
 
 type RecheckResult struct {
-	Output      RecheckOutput
-	RawResponse string
-	Usage       *TokenUsage
-	Duration    time.Duration
+	Output               RecheckOutput
+	RawResponse          string
+	Usage                *TokenUsage
+	ReportedCostMicrousd *int64
+	Duration             time.Duration
 }
 
 type TokenUsage struct {
-	InputTokens           int64  `json:"input_tokens"`
-	CachedInputTokens     int64  `json:"cached_input_tokens"`
-	CacheWriteTokens      *int64 `json:"cache_write_tokens"`
-	OutputTokens          int64  `json:"output_tokens"`
-	ReasoningOutputTokens int64  `json:"reasoning_output_tokens"`
+	InputTokens                     int64  `json:"input_tokens"`
+	CachedInputTokens               int64  `json:"cached_input_tokens"`
+	CacheWriteTokens                *int64 `json:"cache_write_tokens"`
+	OutputTokens                    int64  `json:"output_tokens"`
+	ReasoningOutputTokens           int64  `json:"reasoning_output_tokens"`
+	ReasoningOutputTokensUnreported bool   `json:"reasoning_output_tokens_unreported,omitempty"`
 }
 
 type Reviewer interface {

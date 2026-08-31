@@ -76,7 +76,7 @@ func runStats(ctx context.Context, args []string, environment cliEnvironment) er
 	printReviewDurationStats(environment.Stdout, reviews)
 	printTokenTotals(environment.Stdout, reviews.InputTokens, reviews.CachedInputTokens,
 		reviews.CacheWriteTokens, reviews.CacheWritesUnreported, reviews.OutputTokens,
-		reviews.ReasoningOutputTokens)
+		reviews.ReasoningOutputTokens, reviews.ReasoningOutputsUnreported)
 	printCostTotals(environment.Stdout, reviews.MinimumCostMicrousd, reviews.MaximumCostMicrousd,
 		reviews.PricedAttempts, reviews.UnknownCostAttempts)
 	fmt.Fprintf(environment.Stdout, "Repository findings: %d open, %d dismissed, %d resolved\n",
@@ -135,12 +135,15 @@ func parseReportingFlags(command string, args []string, stderr io.Writer) (strin
 }
 
 func printTokenTotals(output io.Writer, input, cachedInput, cacheWrite int64,
-	cacheWritesUnreported int, outputTokens, reasoningOutput int64,
+	cacheWritesUnreported int, outputTokens, reasoningOutput int64, reasoningUnreported int,
 ) {
 	fmt.Fprintf(output, "Tokens: %d input (%d cached), %d cache writes, %d output (%d reasoning)\n",
 		input, cachedInput, cacheWrite, outputTokens, reasoningOutput)
 	if cacheWritesUnreported != 0 {
 		fmt.Fprintf(output, "Cache writes: unreported by %d attempts\n", cacheWritesUnreported)
+	}
+	if reasoningUnreported != 0 {
+		fmt.Fprintf(output, "Reasoning output: unreported by %d attempts\n", reasoningUnreported)
 	}
 }
 
@@ -186,6 +189,10 @@ func printReviewGroups(output io.Writer, groups []ReviewStatsGroup) {
 		}
 		fmt.Fprintf(output, "  %s: %d attempts, %d input, %d output, %s\n",
 			name, group.Attempts, group.InputTokens, group.OutputTokens, cost)
+		if group.ReasoningOutputsUnreported != 0 {
+			fmt.Fprintf(output, "    reasoning output unreported by %d attempts\n",
+				group.ReasoningOutputsUnreported)
+		}
 	}
 }
 
@@ -1503,7 +1510,8 @@ func runShow(ctx context.Context, args []string, environment cliEnvironment) err
 		fmt.Fprintf(environment.Stdout, "\nReview attempt #%d%s\n", attempt.Number, current)
 		printReviewAccounting(environment.Stdout, attempt.Harness, attempt.Model, attempt.ReasoningEffort,
 			&attempt.Usage, attempt.EstimatedCostMicrousd, attempt.EstimatedCostMaxMicrousd,
-			attempt.CostContext, attempt.CostComplete, attempt.DurationMilliseconds)
+			attempt.CostContext, attempt.CostComplete, attempt.ReportedCostMicrousd,
+			attempt.DurationMilliseconds)
 		printReviewResult(environment.Stdout, introduced, resolved, attempt.Summary)
 		return nil
 	}
@@ -1535,7 +1543,8 @@ func runShow(ctx context.Context, args []string, environment cliEnvironment) err
 	fmt.Fprintf(environment.Stdout, "%s %s\n\n", shortSHA(sha), subject)
 	printReviewAccounting(environment.Stdout, record.Harness, record.Model, record.ReasoningEffort,
 		record.Usage, record.EstimatedCostMicrousd, record.EstimatedCostMaxMicrousd,
-		record.CostContext, record.CostComplete, record.DurationMilliseconds)
+		record.CostContext, record.CostComplete, record.ReportedCostMicrousd,
+		record.DurationMilliseconds)
 	printReviewResult(environment.Stdout, introduced, resolved, record.Summary)
 	if *listReviews {
 		fmt.Fprintln(environment.Stdout, "\nReview attempts:")
@@ -1587,6 +1596,7 @@ func printReviewAccounting(
 	minimumCost, maximumCost *int64,
 	costContext string,
 	costComplete bool,
+	reportedCost *int64,
 	durationMilliseconds *int64,
 ) {
 	if harness != "" {
@@ -1604,10 +1614,18 @@ func printReviewAccounting(
 		} else {
 			fmt.Fprintf(output, "%d cache writes, ", *usage.CacheWriteTokens)
 		}
-		fmt.Fprintf(output, "%d output, %d reasoning output)\n",
-			usage.OutputTokens, usage.ReasoningOutputTokens)
+		if usage.ReasoningOutputTokensUnreported {
+			fmt.Fprintf(output, "%d output, unknown reasoning output)\n", usage.OutputTokens)
+		} else {
+			fmt.Fprintf(output, "%d output, %d reasoning output)\n",
+				usage.OutputTokens, usage.ReasoningOutputTokens)
+		}
 	}
 	fmt.Fprintf(output, "Scan time: %s\n", formatOptionalMilliseconds(durationMilliseconds))
+	if reportedCost != nil {
+		fmt.Fprintf(output, "Harness-reported cost estimate: $%.6f USD\n",
+			float64(*reportedCost)/1_000_000)
+	}
 	if minimumCost == nil {
 		fmt.Fprintln(output, "Estimated cost: unavailable (model pricing unknown)")
 		return

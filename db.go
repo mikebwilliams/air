@@ -20,7 +20,7 @@ type Store struct {
 	db *sql.DB
 }
 
-const schemaVersion = 7
+const schemaVersion = 8
 
 const schemaSQL = `
 CREATE TABLE config (
@@ -86,10 +86,12 @@ CREATE TABLE commits (
 	cache_write_tokens      INTEGER CHECK(cache_write_tokens IS NULL OR cache_write_tokens >= 0),
 	output_tokens           INTEGER CHECK(output_tokens IS NULL OR output_tokens >= 0),
 	reasoning_output_tokens INTEGER CHECK(reasoning_output_tokens IS NULL OR reasoning_output_tokens >= 0),
+	reasoning_tokens_reported INTEGER NOT NULL DEFAULT 1 CHECK(reasoning_tokens_reported IN (0, 1)),
 	estimated_cost_microusd INTEGER CHECK(estimated_cost_microusd IS NULL OR estimated_cost_microusd >= 0),
 	estimated_cost_max_microusd INTEGER CHECK(estimated_cost_max_microusd IS NULL OR estimated_cost_max_microusd >= 0),
 	cost_context            TEXT CHECK(cost_context IS NULL OR cost_context IN ('short', 'long')),
 	cost_complete           INTEGER CHECK(cost_complete IS NULL OR cost_complete IN (0, 1)),
+	reported_cost_microusd  INTEGER CHECK(reported_cost_microusd IS NULL OR reported_cost_microusd >= 0),
 	FOREIGN KEY(model) REFERENCES models(name),
     CHECK(
         (status = 'reviewed' AND skip_reason IS NULL) OR
@@ -130,10 +132,12 @@ CREATE TABLE review_attempts (
 	cache_write_tokens          INTEGER CHECK(cache_write_tokens IS NULL OR cache_write_tokens >= 0),
 	output_tokens               INTEGER NOT NULL CHECK(output_tokens >= 0),
 	reasoning_output_tokens     INTEGER NOT NULL CHECK(reasoning_output_tokens >= 0),
+	reasoning_tokens_reported   INTEGER NOT NULL DEFAULT 1 CHECK(reasoning_tokens_reported IN (0, 1)),
 	estimated_cost_microusd     INTEGER CHECK(estimated_cost_microusd IS NULL OR estimated_cost_microusd >= 0),
 	estimated_cost_max_microusd INTEGER CHECK(estimated_cost_max_microusd IS NULL OR estimated_cost_max_microusd >= 0),
 	cost_context                TEXT CHECK(cost_context IS NULL OR cost_context IN ('short', 'long')),
 	cost_complete               INTEGER CHECK(cost_complete IS NULL OR cost_complete IN (0, 1)),
+	reported_cost_microusd      INTEGER CHECK(reported_cost_microusd IS NULL OR reported_cost_microusd >= 0),
 	duration_ms                 INTEGER CHECK(duration_ms IS NULL OR duration_ms >= 0),
 	new_count                   INTEGER NOT NULL DEFAULT 0 CHECK(new_count >= 0),
 	resolved_count              INTEGER NOT NULL DEFAULT 0 CHECK(resolved_count >= 0),
@@ -167,10 +171,12 @@ CREATE TABLE recheck_attempts (
 	cache_write_tokens          INTEGER CHECK(cache_write_tokens IS NULL OR cache_write_tokens >= 0),
 	output_tokens               INTEGER NOT NULL CHECK(output_tokens >= 0),
 	reasoning_output_tokens     INTEGER NOT NULL CHECK(reasoning_output_tokens >= 0),
+	reasoning_tokens_reported   INTEGER NOT NULL DEFAULT 1 CHECK(reasoning_tokens_reported IN (0, 1)),
 	estimated_cost_microusd     INTEGER CHECK(estimated_cost_microusd IS NULL OR estimated_cost_microusd >= 0),
 	estimated_cost_max_microusd INTEGER CHECK(estimated_cost_max_microusd IS NULL OR estimated_cost_max_microusd >= 0),
 	cost_context                TEXT CHECK(cost_context IS NULL OR cost_context IN ('short', 'long')),
 	cost_complete               INTEGER CHECK(cost_complete IS NULL OR cost_complete IN (0, 1)),
+	reported_cost_microusd      INTEGER CHECK(reported_cost_microusd IS NULL OR reported_cost_microusd >= 0),
 	duration_ms                 INTEGER NOT NULL CHECK(duration_ms >= 0),
 	finding_count               INTEGER NOT NULL CHECK(finding_count > 0),
 	resolved_count              INTEGER NOT NULL CHECK(resolved_count >= 0),
@@ -260,7 +266,7 @@ CREATE INDEX recheck_attempts_identity_idx ON recheck_attempts(head_sha, reviewe
 CREATE INDEX recheck_results_finding_idx ON recheck_results(finding_id, recheck_id);
 CREATE INDEX finding_events_review_idx ON finding_events(review_id, id);
 CREATE INDEX scan_failures_failed_at_idx ON scan_failures(failed_at, sha);
-PRAGMA user_version = 7;
+PRAGMA user_version = 8;
 `
 
 func CreateStore(ctx context.Context, databasePath, startSHA string) (*Store, error) {
@@ -354,11 +360,63 @@ func OpenStore(ctx context.Context, databasePath string) (*Store, error) {
 		}
 		version = 7
 	}
+	if version == 7 {
+		if err := migrateSchema7To8(ctx, store); err != nil {
+			_ = store.Close()
+			return nil, err
+		}
+		version = 8
+	}
 	if version != schemaVersion {
 		_ = store.Close()
 		return nil, fmt.Errorf("unsupported AIR schema version %d", version)
 	}
 	return store, nil
+}
+
+func migrateSchema7To8(ctx context.Context, store *Store) error {
+	tx, err := store.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("upgrade AIR schema from 7 to 8: %w", err)
+	}
+	defer tx.Rollback()
+	for _, addition := range []struct {
+		table  string
+		column string
+		sql    string
+	}{
+		{"commits", "reported_cost_microusd", `ADD COLUMN reported_cost_microusd INTEGER
+			CHECK(reported_cost_microusd IS NULL OR reported_cost_microusd >= 0)`},
+		{"review_attempts", "reported_cost_microusd", `ADD COLUMN reported_cost_microusd INTEGER
+			CHECK(reported_cost_microusd IS NULL OR reported_cost_microusd >= 0)`},
+		{"recheck_attempts", "reported_cost_microusd", `ADD COLUMN reported_cost_microusd INTEGER
+			CHECK(reported_cost_microusd IS NULL OR reported_cost_microusd >= 0)`},
+		{"commits", "reasoning_tokens_reported", `ADD COLUMN reasoning_tokens_reported INTEGER
+			NOT NULL DEFAULT 1 CHECK(reasoning_tokens_reported IN (0, 1))`},
+		{"review_attempts", "reasoning_tokens_reported", `ADD COLUMN reasoning_tokens_reported INTEGER
+			NOT NULL DEFAULT 1 CHECK(reasoning_tokens_reported IN (0, 1))`},
+		{"recheck_attempts", "reasoning_tokens_reported", `ADD COLUMN reasoning_tokens_reported INTEGER
+			NOT NULL DEFAULT 1 CHECK(reasoning_tokens_reported IN (0, 1))`},
+	} {
+		hasColumn, err := transactionTableHasColumn(ctx, tx, addition.table, addition.column)
+		if err != nil {
+			return fmt.Errorf("upgrade AIR schema from 7 to 8: inspect %s: %w", addition.table, err)
+		}
+		if hasColumn {
+			continue
+		}
+		if _, err := tx.ExecContext(ctx, `ALTER TABLE `+addition.table+` `+addition.sql); err != nil {
+			return fmt.Errorf("upgrade AIR schema from 7 to 8: add %s.%s: %w",
+				addition.table, addition.column, err)
+		}
+	}
+	if _, err := tx.ExecContext(ctx, `PRAGMA user_version = 8`); err != nil {
+		return fmt.Errorf("upgrade AIR schema from 7 to 8: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("upgrade AIR schema from 7 to 8: %w", err)
+	}
+	return nil
 }
 
 func migrateSchema6To7(ctx context.Context, store *Store) (returnErr error) {
@@ -440,7 +498,19 @@ func migrateSchema6To7(ctx context.Context, store *Store) (returnErr error) {
 				 cost_context IS NOT NULL AND cost_complete IS NOT NULL)
 			)
 		);
-		INSERT INTO recheck_attempts_v7 SELECT * FROM recheck_attempts;
+		INSERT INTO recheck_attempts_v7(
+			id, head_sha, checked_at, reviewer, model, reasoning_effort, prompt_version,
+			summary, raw_response, input_tokens, cached_input_tokens, cache_write_tokens,
+			output_tokens, reasoning_output_tokens, estimated_cost_microusd,
+			estimated_cost_max_microusd, cost_context, cost_complete, duration_ms,
+			finding_count, resolved_count, still_present_count, uncertain_count
+		) SELECT
+			id, head_sha, checked_at, reviewer, model, reasoning_effort, prompt_version,
+			summary, raw_response, input_tokens, cached_input_tokens, cache_write_tokens,
+			output_tokens, reasoning_output_tokens, estimated_cost_microusd,
+			estimated_cost_max_microusd, cost_context, cost_complete, duration_ms,
+			finding_count, resolved_count, still_present_count, uncertain_count
+		FROM recheck_attempts;
 		DROP TABLE recheck_attempts;
 		ALTER TABLE recheck_attempts_v7 RENAME TO recheck_attempts;
 		CREATE INDEX recheck_attempts_identity_idx
@@ -558,7 +628,8 @@ func migrateSchema5To6(ctx context.Context, store *Store) error {
 
 func transactionTableHasColumn(ctx context.Context, tx *sql.Tx, table, column string) (bool, error) {
 	allowed := map[string]bool{
-		"commits": true, "findings": true, "review_attempts": true, "scan_failures": true,
+		"commits": true, "findings": true, "review_attempts": true,
+		"recheck_attempts": true, "scan_failures": true,
 	}
 	if !allowed[table] {
 		return false, fmt.Errorf("unsupported migration table %q", table)
@@ -1485,6 +1556,9 @@ func (s *Store) ApplyReview(
 	if result.Duration < 0 {
 		return nil, errors.New("review duration must not be negative")
 	}
+	if result.ReportedCostMicrousd != nil && *result.ReportedCostMicrousd < 0 {
+		return nil, errors.New("review reported cost must not be negative")
+	}
 	if err := validateTokenUsage(*result.Usage); err != nil {
 		return nil, fmt.Errorf("invalid review token usage: %w", err)
 	}
@@ -1510,11 +1584,12 @@ func (s *Store) ApplyReview(
 	_, err = tx.ExecContext(ctx, `
         INSERT INTO commits(
 			sha, parent_sha, processed_at, status, reviewer, model, reasoning_effort,
-            prompt_version, summary, raw_response, input_tokens,
+			prompt_version, summary, raw_response, input_tokens,
 			cached_input_tokens, cache_write_tokens, output_tokens, reasoning_output_tokens,
+			reasoning_tokens_reported,
 			estimated_cost_microusd, estimated_cost_max_microusd,
-			cost_context, cost_complete
-		) VALUES(?, ?, ?, 'reviewed', ?, ?, NULLIF(?, ''), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			cost_context, cost_complete, reported_cost_microusd
+		) VALUES(?, ?, ?, 'reviewed', ?, ?, NULLIF(?, ''), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(sha) DO UPDATE SET
 			parent_sha = excluded.parent_sha,
 			processed_at = excluded.processed_at,
@@ -1531,10 +1606,12 @@ func (s *Store) ApplyReview(
 			cache_write_tokens = excluded.cache_write_tokens,
 			output_tokens = excluded.output_tokens,
 			reasoning_output_tokens = excluded.reasoning_output_tokens,
+			reasoning_tokens_reported = excluded.reasoning_tokens_reported,
 			estimated_cost_microusd = excluded.estimated_cost_microusd,
 			estimated_cost_max_microusd = excluded.estimated_cost_max_microusd,
 			cost_context = excluded.cost_context,
-			cost_complete = excluded.cost_complete`,
+			cost_complete = excluded.cost_complete,
+			reported_cost_microusd = excluded.reported_cost_microusd`,
 		metadata.SHA,
 		metadata.ParentSHA,
 		processedAt,
@@ -1549,10 +1626,12 @@ func (s *Store) ApplyReview(
 		nullableInt64(result.Usage.CacheWriteTokens),
 		result.Usage.OutputTokens,
 		result.Usage.ReasoningOutputTokens,
+		!result.Usage.ReasoningOutputTokensUnreported,
 		costMinimum(estimate),
 		costMaximum(estimate),
 		costContext(estimate),
 		costComplete(estimate),
+		nullableInt64(result.ReportedCostMicrousd),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("record review for %s: %w", shortSHA(metadata.SHA), err)
@@ -1561,10 +1640,10 @@ func (s *Store) ApplyReview(
 		INSERT INTO review_attempts(
 			commit_sha, reviewed_at, reviewer, model, reasoning_effort, prompt_version,
 			summary, raw_response, input_tokens, cached_input_tokens,
-			cache_write_tokens, output_tokens, reasoning_output_tokens,
+			cache_write_tokens, output_tokens, reasoning_output_tokens, reasoning_tokens_reported,
 			estimated_cost_microusd, estimated_cost_max_microusd,
-			cost_context, cost_complete, duration_ms
-		) VALUES(?, ?, ?, ?, NULLIF(?, ''), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			cost_context, cost_complete, reported_cost_microusd, duration_ms
+		) VALUES(?, ?, ?, ?, NULLIF(?, ''), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		metadata.SHA,
 		processedAt,
 		harness,
@@ -1578,10 +1657,12 @@ func (s *Store) ApplyReview(
 		nullableInt64(result.Usage.CacheWriteTokens),
 		result.Usage.OutputTokens,
 		result.Usage.ReasoningOutputTokens,
+		!result.Usage.ReasoningOutputTokensUnreported,
 		costMinimum(estimate),
 		costMaximum(estimate),
 		costContext(estimate),
 		costComplete(estimate),
+		nullableInt64(result.ReportedCostMicrousd),
 		result.Duration.Milliseconds(),
 	)
 	if err != nil {
@@ -1670,8 +1751,9 @@ func (s *Store) Commit(ctx context.Context, sha string) (CommitRecord, error) {
             c.sha, c.parent_sha, c.processed_at, c.status, c.skip_reason,
 			c.reviewer, c.model, c.reasoning_effort, c.prompt_version, c.summary, c.raw_response,
 			c.input_tokens, c.cached_input_tokens, c.cache_write_tokens, c.output_tokens,
-			c.reasoning_output_tokens, c.estimated_cost_microusd,
+			c.reasoning_output_tokens, c.reasoning_tokens_reported, c.estimated_cost_microusd,
 			c.estimated_cost_max_microusd, c.cost_context, c.cost_complete,
+			c.reported_cost_microusd,
 			(SELECT a.duration_ms FROM review_attempts a
 			 WHERE a.commit_sha = c.sha ORDER BY a.id DESC LIMIT 1),
 			COALESCE((SELECT a.new_count FROM review_attempts a
@@ -1695,8 +1777,9 @@ func (s *Store) Log(ctx context.Context) ([]CommitRecord, error) {
             c.sha, c.parent_sha, c.processed_at, c.status, c.skip_reason,
 			c.reviewer, c.model, c.reasoning_effort, c.prompt_version, c.summary, c.raw_response,
 			c.input_tokens, c.cached_input_tokens, c.cache_write_tokens, c.output_tokens,
-			c.reasoning_output_tokens, c.estimated_cost_microusd,
+			c.reasoning_output_tokens, c.reasoning_tokens_reported, c.estimated_cost_microusd,
 			c.estimated_cost_max_microusd, c.cost_context, c.cost_complete,
+			c.reported_cost_microusd,
 			(SELECT a.duration_ms FROM review_attempts a
 			 WHERE a.commit_sha = c.sha ORDER BY a.id DESC LIMIT 1),
 			COALESCE((SELECT a.new_count FROM review_attempts a
@@ -1731,9 +1814,10 @@ func scanCommitRecord(row rowScanner) (CommitRecord, error) {
 	var processedAt string
 	var parent, skipReason, harness, model, effort, version, summary, raw sql.NullString
 	var inputTokens, cachedInputTokens, cacheWriteTokens, outputTokens, reasoningOutputTokens sql.NullInt64
-	var estimatedCost, estimatedCostMaximum, durationMilliseconds sql.NullInt64
+	var estimatedCost, estimatedCostMaximum, reportedCost, durationMilliseconds sql.NullInt64
 	var costContextValue sql.NullString
 	var costCompleteValue sql.NullBool
+	var reasoningReported bool
 	err := row.Scan(
 		&record.SHA,
 		&parent,
@@ -1751,10 +1835,12 @@ func scanCommitRecord(row rowScanner) (CommitRecord, error) {
 		&cacheWriteTokens,
 		&outputTokens,
 		&reasoningOutputTokens,
+		&reasoningReported,
 		&estimatedCost,
 		&estimatedCostMaximum,
 		&costContextValue,
 		&costCompleteValue,
+		&reportedCost,
 		&durationMilliseconds,
 		&record.NewCount,
 		&record.ResolvedCount,
@@ -1772,10 +1858,11 @@ func scanCommitRecord(row rowScanner) (CommitRecord, error) {
 	record.RawResponse = raw.String
 	if inputTokens.Valid && cachedInputTokens.Valid && outputTokens.Valid && reasoningOutputTokens.Valid {
 		record.Usage = &TokenUsage{
-			InputTokens:           inputTokens.Int64,
-			CachedInputTokens:     cachedInputTokens.Int64,
-			OutputTokens:          outputTokens.Int64,
-			ReasoningOutputTokens: reasoningOutputTokens.Int64,
+			InputTokens:                     inputTokens.Int64,
+			CachedInputTokens:               cachedInputTokens.Int64,
+			OutputTokens:                    outputTokens.Int64,
+			ReasoningOutputTokens:           reasoningOutputTokens.Int64,
+			ReasoningOutputTokensUnreported: !reasoningReported,
 		}
 		if cacheWriteTokens.Valid {
 			record.Usage.CacheWriteTokens = int64Pointer(cacheWriteTokens.Int64)
@@ -1789,6 +1876,9 @@ func scanCommitRecord(row rowScanner) (CommitRecord, error) {
 	}
 	record.CostContext = costContextValue.String
 	record.CostComplete = costCompleteValue.Bool
+	if reportedCost.Valid {
+		record.ReportedCostMicrousd = int64Pointer(reportedCost.Int64)
+	}
 	if durationMilliseconds.Valid {
 		record.DurationMilliseconds = int64Pointer(durationMilliseconds.Int64)
 	}
@@ -1804,8 +1894,10 @@ func (s *Store) ReviewAttempts(ctx context.Context, sha string) ([]ReviewAttempt
 		SELECT id, commit_sha, reviewed_at, reviewer, model, reasoning_effort, prompt_version,
 		       summary, raw_response, input_tokens, cached_input_tokens,
 		       cache_write_tokens, output_tokens, reasoning_output_tokens,
+		       reasoning_tokens_reported,
 		       estimated_cost_microusd, estimated_cost_max_microusd,
-		       cost_context, cost_complete, duration_ms, new_count, resolved_count
+		       cost_context, cost_complete, reported_cost_microusd,
+		       duration_ms, new_count, resolved_count
 		FROM review_attempts WHERE commit_sha = ? ORDER BY id`, sha)
 	if err != nil {
 		return nil, fmt.Errorf("list review attempts: %w", err)
@@ -1847,9 +1939,10 @@ func scanReviewAttempt(row rowScanner) (ReviewAttempt, error) {
 	var attempt ReviewAttempt
 	var reviewedAt string
 	var effort sql.NullString
-	var cacheWriteTokens, estimatedCost, estimatedCostMaximum, durationMilliseconds sql.NullInt64
+	var cacheWriteTokens, estimatedCost, estimatedCostMaximum, reportedCost, durationMilliseconds sql.NullInt64
 	var costContextValue sql.NullString
 	var costCompleteValue sql.NullBool
+	var reasoningReported bool
 	if err := row.Scan(
 		&attempt.ID,
 		&attempt.CommitSHA,
@@ -1865,10 +1958,12 @@ func scanReviewAttempt(row rowScanner) (ReviewAttempt, error) {
 		&cacheWriteTokens,
 		&attempt.Usage.OutputTokens,
 		&attempt.Usage.ReasoningOutputTokens,
+		&reasoningReported,
 		&estimatedCost,
 		&estimatedCostMaximum,
 		&costContextValue,
 		&costCompleteValue,
+		&reportedCost,
 		&durationMilliseconds,
 		&attempt.NewCount,
 		&attempt.ResolvedCount,
@@ -1876,6 +1971,7 @@ func scanReviewAttempt(row rowScanner) (ReviewAttempt, error) {
 		return ReviewAttempt{}, err
 	}
 	attempt.ReasoningEffort = effort.String
+	attempt.Usage.ReasoningOutputTokensUnreported = !reasoningReported
 	if cacheWriteTokens.Valid {
 		attempt.Usage.CacheWriteTokens = int64Pointer(cacheWriteTokens.Int64)
 	}
@@ -1887,6 +1983,9 @@ func scanReviewAttempt(row rowScanner) (ReviewAttempt, error) {
 	}
 	attempt.CostContext = costContextValue.String
 	attempt.CostComplete = costCompleteValue.Bool
+	if reportedCost.Valid {
+		attempt.ReportedCostMicrousd = int64Pointer(reportedCost.Int64)
+	}
 	if durationMilliseconds.Valid {
 		attempt.DurationMilliseconds = int64Pointer(durationMilliseconds.Int64)
 	}
@@ -1905,19 +2004,23 @@ func (s *Store) ReviewStats(ctx context.Context, modelFilter string, since *time
 	}
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT kind, subject_sha, reviewer, model, reasoning_effort, input_tokens, cached_input_tokens,
-		       cache_write_tokens, output_tokens, reasoning_output_tokens,
+		       cache_write_tokens, output_tokens, reasoning_output_tokens, reasoning_tokens_reported,
 		       estimated_cost_microusd, estimated_cost_max_microusd, duration_ms
 		FROM (
 			SELECT 'commit' AS kind, commit_sha AS subject_sha, reviewer, model, reasoning_effort,
 			       input_tokens, cached_input_tokens, cache_write_tokens, output_tokens,
-			       reasoning_output_tokens, estimated_cost_microusd,
-			       estimated_cost_max_microusd, duration_ms, reviewed_at AS occurred_at, id
+			       reasoning_output_tokens, reasoning_tokens_reported,
+			       COALESCE(reported_cost_microusd, estimated_cost_microusd) AS estimated_cost_microusd,
+			       COALESCE(reported_cost_microusd, estimated_cost_max_microusd) AS estimated_cost_max_microusd,
+			       duration_ms, reviewed_at AS occurred_at, id
 			FROM review_attempts
 			UNION ALL
 			SELECT 'recheck', head_sha, reviewer, model, reasoning_effort,
 			       input_tokens, cached_input_tokens, cache_write_tokens, output_tokens,
-			       reasoning_output_tokens, estimated_cost_microusd,
-			       estimated_cost_max_microusd, duration_ms, checked_at, id
+			       reasoning_output_tokens, reasoning_tokens_reported,
+			       COALESCE(reported_cost_microusd, estimated_cost_microusd) AS estimated_cost_microusd,
+			       COALESCE(reported_cost_microusd, estimated_cost_max_microusd) AS estimated_cost_max_microusd,
+			       duration_ms, checked_at, id
 			FROM recheck_attempts
 		)
 		WHERE (? = '' OR model = ?) AND (? = '' OR occurred_at >= ?)
@@ -1937,10 +2040,11 @@ func (s *Store) ReviewStats(ctx context.Context, modelFilter string, since *time
 	for rows.Next() {
 		var kind, sha, harness, model string
 		var effort sql.NullString
+		var reasoningReported bool
 		var input, cached, output, reasoning int64
 		var cacheWrite, minimumCost, maximumCost, durationMilliseconds sql.NullInt64
 		if err := rows.Scan(&kind, &sha, &harness, &model, &effort, &input, &cached, &cacheWrite,
-			&output, &reasoning, &minimumCost, &maximumCost, &durationMilliseconds); err != nil {
+			&output, &reasoning, &reasoningReported, &minimumCost, &maximumCost, &durationMilliseconds); err != nil {
 			return ReviewStats{}, fmt.Errorf("read review statistics: %w", err)
 		}
 		if kind == "commit" {
@@ -1964,6 +2068,10 @@ func (s *Store) ReviewStats(ctx context.Context, modelFilter string, since *time
 		group.OutputTokens += output
 		stats.ReasoningOutputTokens += reasoning
 		group.ReasoningOutputTokens += reasoning
+		if !reasoningReported {
+			stats.ReasoningOutputsUnreported++
+			group.ReasoningOutputsUnreported++
+		}
 		if cacheWrite.Valid {
 			stats.CacheWriteTokens += cacheWrite.Int64
 			group.CacheWriteTokens += cacheWrite.Int64

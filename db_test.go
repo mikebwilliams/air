@@ -23,6 +23,7 @@ func TestStoreFindingLifecycleAndCleanupForeignKeys(t *testing.T) {
 	commitA := testMetadata("a", "0")
 	now := time.Date(2026, 8, 14, 12, 0, 0, 0, time.UTC)
 	cacheWrites := int64(10)
+	reportedCost := int64(123)
 	newIDs, err := store.ApplyReview(ctx, commitA, ReviewIdentity{
 		Harness: claudeReviewerName, Model: modelByName("gpt-5.6-luna"), ReasoningEffort: "low",
 	}, ReviewResult{
@@ -43,6 +44,7 @@ func TestStoreFindingLifecycleAndCleanupForeignKeys(t *testing.T) {
 			OutputTokens:          20,
 			ReasoningOutputTokens: 5,
 		},
+		ReportedCostMicrousd: &reportedCost,
 	}, now)
 	if err != nil {
 		t.Fatalf("ApplyReview A: %v", err)
@@ -73,6 +75,11 @@ func TestStoreFindingLifecycleAndCleanupForeignKeys(t *testing.T) {
 		t.Fatalf("estimated cost = %v..%v, context=%q, complete=%t",
 			record.EstimatedCostMicrousd, record.EstimatedCostMaxMicrousd,
 			record.CostContext, record.CostComplete)
+	}
+	if record.ReportedCostMicrousd == nil || *record.ReportedCostMicrousd != reportedCost ||
+		attempts[0].ReportedCostMicrousd == nil || *attempts[0].ReportedCostMicrousd != reportedCost {
+		t.Fatalf("reported cost record=%v attempt=%v",
+			record.ReportedCostMicrousd, attempts[0].ReportedCostMicrousd)
 	}
 	var pricingStatus string
 	var shortInputRate, longOutputRate int64
@@ -668,6 +675,39 @@ func TestReviewStatsAggregateEveryAttemptAndPreserveUnknownCosts(t *testing.T) {
 	if filtered.Attempts != 1 || filtered.Commits != 1 || filtered.UnknownCostAttempts != 1 ||
 		filtered.InputTokens != 7 || filtered.DurationMilliseconds != 30_000 || filtered.TimedAttempts != 1 {
 		t.Fatalf("filtered review stats = %+v", filtered)
+	}
+}
+
+func TestReviewStatsUsesHarnessReportedCostWhenModelPricingIsUnknown(t *testing.T) {
+	ctx := context.Background()
+	store, err := CreateStore(ctx, filepath.Join(t.TempDir(), "air.sqlite"), strings.Repeat("0", 40))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	review := cleanReview("Claude review.")
+	review.Usage.ReasoningOutputTokensUnreported = true
+	reportedCost := int64(4_321)
+	review.ReportedCostMicrousd = &reportedCost
+	if _, err := store.ApplyReview(ctx, testMetadata("j", "0"), ReviewIdentity{
+		Harness: claudeReviewerName, Model: modelByName("claude-private-model"), ReasoningEffort: "high",
+	}, review, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	stats, err := store.ReviewStats(ctx, "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stats.PricedAttempts != 1 || stats.UnknownCostAttempts != 0 ||
+		stats.MinimumCostMicrousd != reportedCost || stats.MaximumCostMicrousd != reportedCost ||
+		stats.ReasoningOutputsUnreported != 1 || len(stats.Groups) != 1 ||
+		stats.Groups[0].Harness != claudeReviewerName ||
+		stats.Groups[0].ReasoningOutputsUnreported != 1 {
+		t.Fatalf("reported-cost stats = %+v", stats)
+	}
+	record, err := store.Commit(ctx, strings.Repeat("j", 40))
+	if err != nil || record.Usage == nil || !record.Usage.ReasoningOutputTokensUnreported {
+		t.Fatalf("stored reasoning usage = %+v, %v", record.Usage, err)
 	}
 }
 

@@ -61,6 +61,9 @@ func (s *Store) ApplyRecheck(
 	if result.Duration < 0 {
 		return 0, errors.New("recheck duration must not be negative")
 	}
+	if result.ReportedCostMicrousd != nil && *result.ReportedCostMicrousd < 0 {
+		return 0, errors.New("recheck reported cost must not be negative")
+	}
 	if err := validateTokenUsage(*result.Usage); err != nil {
 		return 0, fmt.Errorf("invalid recheck token usage: %w", err)
 	}
@@ -115,17 +118,19 @@ func (s *Store) ApplyRecheck(
 		INSERT INTO recheck_attempts(
 			head_sha, checked_at, reviewer, model, reasoning_effort, prompt_version,
 			summary, raw_response, input_tokens, cached_input_tokens,
-			cache_write_tokens, output_tokens, reasoning_output_tokens,
+			cache_write_tokens, output_tokens, reasoning_output_tokens, reasoning_tokens_reported,
 			estimated_cost_microusd, estimated_cost_max_microusd,
-			cost_context, cost_complete, duration_ms, finding_count,
+			cost_context, cost_complete, reported_cost_microusd, duration_ms, finding_count,
 			resolved_count, still_present_count, uncertain_count
-		) VALUES(?, ?, ?, ?, NULLIF(?, ''), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		) VALUES(?, ?, ?, ?, NULLIF(?, ''), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		headSHA, timestamp, harness, identity.Model.Name, identity.ReasoningEffort,
 		attemptPromptVersion, result.Output.Summary, result.RawResponse,
 		result.Usage.InputTokens, result.Usage.CachedInputTokens,
 		nullableInt64(result.Usage.CacheWriteTokens), result.Usage.OutputTokens,
-		result.Usage.ReasoningOutputTokens, costMinimum(estimate), costMaximum(estimate),
-		costContext(estimate), costComplete(estimate), result.Duration.Milliseconds(),
+		result.Usage.ReasoningOutputTokens, !result.Usage.ReasoningOutputTokensUnreported,
+		costMinimum(estimate), costMaximum(estimate),
+		costContext(estimate), costComplete(estimate), nullableInt64(result.ReportedCostMicrousd),
+		result.Duration.Milliseconds(),
 		len(findings), resolved, stillPresent, uncertain)
 	if err != nil {
 		return 0, fmt.Errorf("record HEAD recheck attempt: %w", err)
