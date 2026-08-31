@@ -1,0 +1,624 @@
+.TH AIR 1 "August 2026" "AIR" "User Commands"
+.SH NAME
+air \- review commits with a local AI coding harness
+.SH SYNOPSIS
+.B air
+.I COMMAND
+.RI [ OPTIONS ]
+.br
+.B air help
+.RI [ COMMAND
+.RI [ SUBCOMMAND ]]
+.br
+.B air
+.RB [ \-h | \-\-help ]
+.SH DESCRIPTION
+.B AIR
+is a local semantic reviewer for commits on the first-parent history of
+.BR master .
+It starts a fresh Codex, Claude Code, or Gemini CLI session for each selected
+commit, lets that harness inspect the repository under a read-only policy, and
+stores the resulting reviews and findings in a repository-specific SQLite
+database.
+.PP
+AIR processes commits independently and supports both continuous and disjoint
+review ranges. It does not check out historical commits. The selected harness
+inspects each requested commit and any related repository context through its
+own local tools.
+.PP
+Binary-only and empty diffs, and textual diffs larger than 256 KiB, are
+recorded as skipped. Previously reviewed or skipped commits are not processed
+again unless explicitly rescanned. Failed reviews enter a durable failure
+queue and are deferred by later ordinary scans until
+.B air retry
+is run.
+.SH OPTIONS
+.TP
+.BR \-h , " " \-\-help
+Show global, command, or subcommand help. Long options may appear before or
+after positional arguments. Use
+.B \-\-
+to stop option parsing when a positional value starts with a hyphen.
+.SH COMMANDS
+.SS Getting started
+.TP
+.BI "air init " COMMIT
+Initialize AIR with
+.I COMMIT
+as the baseline. The baseline must occur on the first-parent history of local
+.B master
+and is not itself reviewed.
+.TP
+.BR "air doctor" " [\-\-json]"
+Check the Git repository, master ref, state permissions, database schema and
+integrity, effective review configuration, model pricing, selected harness
+executable, and authentication where the harness exposes a noninteractive
+check. Write a stable JSON report with
+.BR \-\-json .
+.TP
+.BR "air status" " [\-\-json]"
+Summarize total, open, dismissed, and resolved findings, as well as unscanned,
+failed, and deferred commits. Estimate the remaining ordinary scan time from
+successful timed commit reviews. Deferred failures are excluded from the
+estimate.
+.SS Commit review
+.TP
+.BR "air pending" " [\-\-limit " N "] [" FROM .. TO "]"
+List the commits an equivalent scan would process, without constructing a
+reviewer or modifying AIR state. A zero limit means unlimited.
+.TP
+.BR "air scan" " [" OPTIONS "] [" FROM .. TO "]"
+Review unprocessed commits after the baseline through local master, oldest
+first. An explicit range excludes
+.I FROM
+and includes
+.IR TO ;
+both endpoints must occur on master's first-parent history.
+.RS
+.TP
+.BI "\-\-limit " N
+Process at most
+.I N
+commits. Zero, the default, means unlimited. The limit includes commits AIR
+records as skipped.
+.TP
+.B \-\-dry-run
+Show pending work without invoking a harness or writing state.
+.TP
+.B \-\-stop-on-error
+Stop after recording the first failed commit. By default, AIR continues with
+later commits and returns a failure after the batch.
+.TP
+.B "Review options"
+The common review options described under
+.B REVIEW OPTIONS
+are also accepted.
+.RE
+.TP
+.BR "air retry" " [" OPTIONS "]"
+Retry live commits in the durable failure queue, oldest failure first, using
+the current review configuration.
+.RS
+.TP
+.BI "\-\-limit " N
+Retry at most
+.I N
+commits. Zero means unlimited.
+.TP
+.B \-\-continue-on-error
+Continue after recording another failed attempt. The default is to stop on
+the first retry failure.
+.TP
+.B "Review options"
+The common review options are also accepted.
+.RE
+.TP
+.BR "air failures" " [\-\-json]"
+List the durable failure queue. Each entry includes the latest error, attempt
+count, timestamp, reviewer identity, and whether it was a rescan.
+.TP
+.BI "air rescan [" OPTIONS "] " COMMIT
+Review one already processed commit again. The latest successful result
+becomes current, while earlier review attempts and their accounting remain
+available. The common review options are accepted.
+.TP
+.BI "air skip [\-\-reason " TEXT "] [\-\-dry-run] " COMMIT
+Mark one unprocessed commit as skipped.
+.TP
+.BI "air skip \-\-filter " TEXT " [\-\-reason " TEXT "] [\-\-dry-run]"
+Mark every unprocessed commit whose full commit message contains the literal
+.I TEXT
+substring, matched case-insensitively, as skipped. The default reason is
+"manual skip". Selection is limited to commits after the baseline on master's
+first-parent history. A bulk skip is atomic; skipping a failed commit removes
+it from the retry queue.
+.TP
+.BR "air clean" " [\-\-dry-run]"
+Remove processed-commit and failure records for commits no longer on master's
+first-parent history. Use
+.B \-\-dry-run
+to preview stale records.
+.SS Finding review
+.TP
+.BR "air recheck" " [" OPTIONS "] [" FINDING_ID " ...]"
+Ask the configured harness whether selected open findings are resolved in the
+exact current HEAD snapshot. With no IDs, recheck every eligible open finding.
+HEAD must be the tip of master.
+.RS
+.TP
+.BI "\-\-limit " N
+Recheck at most
+.I N
+findings. Zero means unlimited.
+.TP
+.BI "\-\-batch-size " N
+Send
+.I N
+findings per model call. The default is 20 and the maximum is 50.
+.TP
+.B \-\-force
+Repeat checks already completed at HEAD with the same harness, model, effort,
+and prompt identity.
+.TP
+.B \-\-dry-run
+Show pending work without invoking the harness or writing state.
+.TP
+.B \-\-continue-on-error
+Continue after a failed model batch.
+.TP
+.B "Review options"
+The common review options are also accepted. The selected timeout applies to
+each batch.
+.RE
+.TP
+.BR "air findings" " [\-\-all]"
+Open the interactive findings browser. It defaults to open findings; use
+.B \-\-all
+to start with every disposition. An interactive terminal is required. See
+.B FINDINGS BROWSER
+for keys.
+.TP
+.BI "air finding " FINDING_ID
+Show one finding and its complete event history.
+.TP
+.BR "air finding list" " [" OPTIONS "]"
+List findings without opening the interactive browser.
+.RS
+.TP
+.B \-\-all
+Include every disposition; shorthand for
+.BR "\-\-status all" .
+.TP
+.BI "\-\-status " STATUS
+Filter by
+.BR open ,
+.BR dismissed ,
+.BR resolved ,
+or
+.BR all .
+The default is
+.BR open .
+.TP
+.BI "\-\-severity " SEVERITY
+Filter by
+.BR error ,
+.BR warning ,
+.BR info ,
+or
+.BR all .
+The default is
+.BR all .
+.TP
+.BI "\-\-sort " SORT
+Sort by
+.BR newest ,
+.BR file ,
+or
+.BR severity .
+The default is
+.BR newest .
+.TP
+.BI "\-\-limit " N
+Return at most
+.I N
+findings. Zero means unlimited.
+.TP
+.B \-\-json
+Write the selected full findings and review attribution as JSON.
+.RE
+.TP
+.BI "air finding dismiss \-\-reason " TEXT " " FINDING_ID
+Dismiss an open finding and record the required reason in its history.
+.TP
+.BI "air finding reopen " FINDING_ID
+Return a dismissed or resolved finding to open.
+.TP
+.BI "air finding note " FINDING_ID " " TEXT
+Append a timestamped note to a finding's history.
+.TP
+.BI "air finding diff " FINDING_ID
+Open the finding's introducing commit with
+.BR "git difftool" .
+.TP
+.BI "air finding open " FINDING_ID
+Open the current working-tree file at the recorded line using the editor from
+.BR "git var GIT_EDITOR" .
+.SS History and reports
+.TP
+.B air log
+List reviewed and skipped commits in AIR's stored log.
+.TP
+.BI "air show [" OPTIONS "] " COMMIT
+Show the current review for one processed commit.
+.RS
+.TP
+.B \-\-reviews
+List all retained review attempts.
+.TP
+.BI "\-\-review " N
+Show retained review attempt
+.IR N .
+.TP
+.B \-\-json
+Write the selected review data as JSON.
+.RE
+.TP
+.BR "air stats" " [\-\-model " MODEL "] [\-\-since " DATE "]"
+Summarize token usage, estimated cost, commit-review timing, retained review
+and recheck attempts, and current finding counts. Superseded attempts remain
+included. The date may be YYYY-MM-DD or RFC3339.
+.TP
+.BR "air cost" " [\-\-model " MODEL "] [\-\-since " DATE "]"
+Show the accounting-focused summary, with attempts grouped by harness, model,
+and effort. Unknown prices and token categories not reported by a harness
+remain explicit.
+.TP
+.BI "air export \-\-format " FORMAT
+Write findings to standard output. The format must be
+.BR json ,
+.BR sarif ,
+or
+.BR html .
+JSON and SARIF include current open findings. HTML is one self-contained,
+offline, read-only viewer containing every disposition, search and filters,
+sorting, details, history, attribution, and bounded introducing-diff excerpts.
+.SS Configuration and maintenance
+.TP
+.B air prompt list
+List prompt kinds, sources, and identities.
+.TP
+.BR "air prompt show" " [\-\-full] " KIND
+Show the editable instructions for prompt
+.IR KIND .
+With
+.BR \-\-full ,
+also show AIR's fixed protocol, safety constraints, and response contract.
+The supported kinds are
+.B review
+and
+.BR recheck .
+.TP
+.BI "air prompt set \-\-file " PATH " " KIND
+Store repository-specific editable instructions read from a UTF-8 file.
+.TP
+.BI "air prompt set \-\-stdin " KIND
+Store repository-specific editable instructions read from standard input.
+AIR keeps the fixed protocol and response contract unchanged.
+.TP
+.BI "air prompt reset " KIND
+Remove the repository override and restore the built-in instructions.
+.TP
+.BI "air config get [\-\-effective] " NAME
+Print one database setting. With
+.BR \-\-effective ,
+print the winning value and its source after applying precedence.
+.TP
+.BI "air config set [\-\-stdin] " NAME " [" VALUE "]"
+Store one repository setting. Use
+.B \-\-stdin
+to read the value from standard input.
+.TP
+.BI "air config unset " NAME
+Remove one stored repository setting.
+.TP
+.BR "air config list" " [\-\-effective]"
+List stored settings. With
+.BR \-\-effective ,
+include overrides, defaults, and value sources.
+.TP
+.B air model list
+List known models and whether each has pricing.
+.TP
+.BI "air model show " NAME
+Show one model's pricing details.
+.TP
+.BI "air model set-pricing [" OPTIONS "] " NAME
+Store short- and long-context token prices in USD per million tokens. All
+eight price categories are required:
+.BR \-\-short-input ,
+.BR \-\-short-cached-input ,
+.BR \-\-short-cache-write ,
+.BR \-\-short-output ,
+.BR \-\-long-input ,
+.BR \-\-long-cached-input ,
+.BR \-\-long-cache-write ,
+and
+.BR \-\-long-output .
+.RS
+.TP
+.BI "\-\-service-tier " TIER
+Set the service tier. The default is
+.BR standard .
+.TP
+.BI "\-\-source " TEXT
+Record the pricing source. The default is
+.BR manual .
+.TP
+.BI "\-\-as-of " DATE
+Record the pricing date. The default is today.
+.TP
+.BI "\-\-long-context-threshold " N
+Use long-context rates above
+.I N
+input tokens. The default is 272000.
+.RE
+.TP
+.BI "air model mark-pricing-unknown " NAME
+Explicitly record that the model's pricing is unknown.
+.TP
+.B air db path
+Print the AIR database path for the current Git repository. This works before
+initialization.
+.TP
+.BR "air backup" " [" PATH "]"
+Create a consistent, private SQLite backup. With no path, AIR creates
+.B air-backup-YYYYMMDD-HHMMSS.sqlite
+in the current directory and adds a numeric suffix if necessary. The online
+backup includes committed WAL state, is integrity-checked, uses mode 0600, and
+never overwrites an existing file.
+.TP
+.BR "air reset" " [\-\-force]"
+Delete all AIR state for the repository, including reviews and configuration.
+AIR displays the exact state directory and asks for confirmation unless
+.B \-\-force
+is supplied.
+.SH REVIEW OPTIONS
+The commands
+.BR scan ,
+.BR retry ,
+.BR rescan ,
+and
+.B recheck
+accept these common overrides:
+.TP
+.BI "\-\-harness " HARNESS
+Select
+.BR codex ,
+.BR claude ,
+or
+.BR gemini .
+.TP
+.BI "\-\-model " MODEL
+Set the exact model identifier recorded with the attempt.
+.TP
+.BI "\-\-effort " EFFORT
+Set the reviewer effort recorded with the attempt. The harness must support
+the requested value. Gemini has no per-invocation effort control and therefore
+requires the sentinel value
+.BR default .
+.TP
+.BI "\-\-codex-bin " PATH
+Set the Codex CLI executable.
+.TP
+.BI "\-\-codex-profile " PROFILE
+Set the Codex configuration profile.
+.TP
+.BI "\-\-codex-timeout " DURATION
+Set the Codex per-commit or per-batch timeout. Go duration syntax is accepted,
+such as
+.BR 20m .
+.TP
+.BI "\-\-claude-bin " PATH
+Set the Claude Code CLI executable.
+.TP
+.BI "\-\-claude-timeout " DURATION
+Set the Claude Code per-commit or per-batch timeout.
+.TP
+.BI "\-\-gemini-bin " PATH
+Set the Gemini CLI executable.
+.TP
+.BI "\-\-gemini-timeout " DURATION
+Set the Gemini per-commit or per-batch timeout.
+.SH CONFIGURATION
+Review configuration is resolved in this order:
+.PP
+.RS
+command-line flag > environment variable > database > built-in default
+.RE
+.PP
+The persistent database setting names are:
+.BR harness ,
+.BR model ,
+.BR effort ,
+.BR codex-bin ,
+.BR codex-profile ,
+.BR codex-timeout ,
+.BR claude-bin ,
+.BR claude-timeout ,
+.BR gemini-bin ,
+and
+.BR gemini-timeout .
+.PP
+The built-in harness is
+.BR codex .
+The executable defaults are
+.BR codex ,
+.BR claude ,
+and
+.BR gemini .
+All three timeout defaults are 20 minutes. Model and effort have no built-in
+defaults and must be configured or supplied for a review.
+.PP
+Each harness uses its existing local authentication and configuration. AIR
+does not read or copy credentials. Each review runs in an independent,
+non-persistent process with AIR's additional read-only constraints.
+.SH FINDINGS BROWSER
+Within
+.BR "air findings" :
+.TP
+.BR Up , " " Down , " " j , " " k
+Move between findings.
+.TP
+.BR Left , " " Right
+Cycle newest-first, file/line, and severity sorting.
+.TP
+.B /
+Search.
+.TP
+.BR s , " " v
+Cycle status and severity filters.
+.TP
+.BR Ctrl+U , " " Ctrl+D
+Scroll long details.
+.TP
+.B d
+Open the introducing commit in the configured Git difftool.
+.TP
+.B o
+Open the recorded file and line in the configured Git editor.
+.TP
+.B D
+Dismiss the selected finding with a required reason.
+.TP
+.B r
+Reopen the finding after confirmation.
+.TP
+.B n
+Add a note.
+.TP
+.B ?
+Show the complete key reference.
+.PP
+The detail pane includes the description, location, introducing review,
+model and effort, event history, and, where terminal size and source data
+allow, the relevant introducing diff hunk.
+.SH REVIEW AND ACCOUNTING BEHAVIOR
+Commits are reviewed oldest to newest. A merge on master is reviewed against
+its first parent; commits on merged branches are not individually reviewed.
+Comments, string-content changes, translations, localization resources, and
+documentation remain available as context but are out of scope for findings.
+.PP
+AIR stores harness, model, effort, prompt identity, token usage, cost estimate,
+elapsed time for successful commit reviews, summary, findings, and raw response
+for each retained attempt. Reasoning tokens are part of output tokens and are
+not charged twice. Unknown model prices and usage categories a harness does not
+report are kept explicit rather than treated as zero.
+.PP
+Rescanning is conservative and additive: a new review does not silently delete
+findings created by an earlier attempt. Rechecking records
+.BR resolved ,
+.BR still_present ,
+or
+.BR uncertain ;
+only
+.B resolved
+closes a finding.
+.SH ENVIRONMENT
+.TP
+.B AIR_HARNESS
+Review harness: codex, claude, or gemini.
+.TP
+.B AIR_MODEL
+Exact model identifier.
+.TP
+.B AIR_REASONING_EFFORT
+Reviewer effort.
+.TP
+.B AIR_CODEX_BIN
+Codex CLI executable. Default:
+.BR codex .
+.TP
+.B AIR_CODEX_PROFILE
+Codex configuration profile.
+.TP
+.B AIR_CODEX_TIMEOUT
+Codex timeout as a positive Go duration. Default:
+.BR 20m .
+.TP
+.B AIR_CLAUDE_BIN
+Claude Code CLI executable. Default:
+.BR claude .
+.TP
+.B AIR_CLAUDE_TIMEOUT
+Claude Code timeout as a positive Go duration. Default:
+.BR 20m .
+.TP
+.B AIR_GEMINI_BIN
+Gemini CLI executable. Default:
+.BR gemini .
+.TP
+.B AIR_GEMINI_TIMEOUT
+Gemini timeout as a positive Go duration. Default:
+.BR 20m .
+.SH FILES
+.TP
+.I <git-common-dir>/air/reviews.sqlite
+Repository database. It is shared by linked worktrees.
+.TP
+.I <git-common-dir>/air/scan.lock
+Lock preventing concurrent scans and other conflicting operations.
+.TP
+.I <git-common-dir>/air/
+Private repository state directory. It does not modify tracked files.
+.SH EXIT STATUS
+.TP
+.B 0
+The command completed successfully.
+.TP
+.B 1
+The command failed, configuration or arguments were invalid, or a scan batch
+recorded one or more review failures. Unless
+.B \-\-stop-on-error
+was used, a failed scan may still have successfully processed later commits.
+.SH EXAMPLES
+Initialize at a release and configure Codex:
+.PP
+.EX
+air init v1.0.0
+air config set model gpt-5.6-luna
+air config set effort high
+air doctor
+air scan --limit 10
+.EE
+.PP
+Review with another harness for one invocation:
+.PP
+.EX
+air scan --harness claude --model claude-model --effort high
+air scan --harness gemini --model gemini-model --effort default
+.EE
+.PP
+Retry failures and inspect findings:
+.PP
+.EX
+air failures
+air retry --continue-on-error
+air finding list --all --sort file
+air findings
+.EE
+.PP
+Export a shareable report and back up the database:
+.PP
+.EX
+air export --format html > air-findings.html
+air backup
+.EE
+.SH SEE ALSO
+.BR git (1),
+.BR git-difftool (1),
+.BR sqlite3 (1)
+.PP
+The project README and complete design are available in the source tree as
+.B README.md
+and
+.BR docs/initial_spec.md .

@@ -56,6 +56,13 @@ make build
 sudo make install
 ```
 
+This installs both the executable and the manual page. After installation,
+open the complete command reference with:
+
+```bash
+man air
+```
+
 The first AIR command after this upgrade automatically advances older supported
 databases through schema v8. The additive migrations preserve reviews and
 findings while adding harness provenance, harness-reported cost, and explicit
