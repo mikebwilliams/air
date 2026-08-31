@@ -127,13 +127,12 @@ The database must not modify or require files in the tracked working tree.
 
 ## 5. SQLite Schema
 
-The schema should remain intentionally small. Schema version 5 adds the
-nullable `review_attempts.duration_ms` column. Schema version 6 adds separate
-HEAD-recheck attempts and per-finding results plus a nullable finding link for
-recheck resolutions. Opening a version-4 or version-5 database upgrades it
-transactionally without rewriting or deleting review data; historical review
-attempts retain a null, explicitly unknown duration. Other schema version
-mismatches remain errors.
+The schema should remain intentionally small. Schema version 5 adds successful
+review timing, and version 6 adds separate HEAD-recheck attempts and results.
+Version 7 records the local harness (`codex` or `claude`) on reviews, failures,
+rechecks, and finding attribution. Version 8 adds optional harness-reported
+cost and an explicit flag for unreported reasoning-token detail. Supported
+older databases upgrade transactionally without deleting reviews or findings.
 
 ### 5.1 `config`
 
@@ -151,14 +150,17 @@ start_sha
 prompt_version
 ```
 
-Optional public Codex-setting keys are:
+Optional public review-setting keys are:
 
 ```text
+harness
 model
 effort
 codex-bin
 codex-profile
 codex-timeout
+claude-bin
+claude-timeout
 ```
 
 The CLI owns validation for these values and does not expose the internal
@@ -167,12 +169,14 @@ The CLI owns validation for these values and does not expose the internal
 Optional multiline prompt overrides use these internal keys:
 
 ```text
-prompt.review.codex
-prompt.recheck.codex
+prompt.review
+prompt.recheck
 ```
 
 They are managed by `air prompt`, not exposed as ordinary scalar values through
-`air config`, and require no additional tables or schema migration.
+`air config`, and require no additional tables or schema migration. AIR reads
+the former `prompt.review.codex` and `prompt.recheck.codex` keys as legacy
+aliases so existing repository overrides continue to work.
 
 ### 5.2 `models`
 
@@ -242,6 +246,7 @@ CREATE TABLE commits (
     processed_at    TEXT NOT NULL,
     status          TEXT NOT NULL CHECK(status IN ('reviewed', 'skipped')),
     skip_reason     TEXT,
+    reviewer        TEXT,
     model           TEXT,
     reasoning_effort TEXT,
     prompt_version  TEXT,
@@ -252,10 +257,12 @@ CREATE TABLE commits (
     cache_write_tokens      INTEGER,
     output_tokens           INTEGER,
     reasoning_output_tokens INTEGER,
+    reasoning_tokens_reported INTEGER NOT NULL DEFAULT 1,
     estimated_cost_microusd INTEGER,
     estimated_cost_max_microusd INTEGER,
     cost_context            TEXT,
     cost_complete           INTEGER,
+    reported_cost_microusd  INTEGER,
 
     FOREIGN KEY(model) REFERENCES models(name)
 );
@@ -269,8 +276,10 @@ Fields:
 - `status`: either `reviewed` or `skipped`.
 - `skip_reason`: reason a skipped commit was not sent to the model; null for a
   reviewed commit.
+- `reviewer`: local harness identifier used for a review (`codex` or `claude`);
+  null for a skipped commit.
 - `model`: model identifier used for a review; null for a skipped commit.
-- `reasoning_effort`: Codex reasoning effort used for a review; null for a
+- `reasoning_effort`: harness effort used for a review; null for a
   skipped commit.
 - `prompt_version`: version of the reviewer prompt; null for a skipped commit.
 - `summary`: short human-readable review log; null for a skipped commit.
@@ -281,11 +290,13 @@ Fields:
 - `cached_input_tokens`: cached subset of `input_tokens`; null for a skipped
   commit.
 - `cache_write_tokens`: subset of `input_tokens` newly written to the prompt
-  cache; null when Codex does not report it or for a skipped commit.
+  cache; null when the harness does not report it or for a skipped commit.
 - `output_tokens`: total output tokens reported by the reviewer, including
   reasoning output tokens; null for a skipped commit.
 - `reasoning_output_tokens`: reasoning subset of `output_tokens`; null for a
   skipped commit.
+- `reasoning_tokens_reported`: false when the harness reports total output but
+  not its reasoning subset.
 - `estimated_cost_microusd`: optional estimated cost rounded to millionths of
   a US dollar; the lower bound when cache-write usage is unavailable, and null
   when model pricing is unknown or for a skipped commit.
@@ -295,6 +306,8 @@ Fields:
   review's reported input-token count.
 - `cost_complete`: true when cache-write usage was reported and the two cost
   bounds are therefore equal.
+- `reported_cost_microusd`: optional cost estimate supplied by the harness,
+  stored independently of AIR's model-registry estimate.
 
 A skipped commit remains in the table so later scans do not retry it
 automatically.
@@ -306,7 +319,7 @@ simple without losing historical accounting.
 ### 5.4 `review_attempts`
 
 `review_attempts` contains one immutable row for every successful model call.
-It stores the commit SHA, review timestamp, model, effort, prompt version, raw
+It stores the commit SHA, review timestamp, harness, model, effort, prompt version, raw
 response, summary, all token and cost fields, and the attempt's new/resolved
 finding counts. `duration_ms` records elapsed wall time for new successful
 attempts and is null for attempts created before schema version 5. Rows are
@@ -390,6 +403,7 @@ CREATE TABLE scan_failures (
     failed_at        TEXT NOT NULL,
     attempt_count    INTEGER NOT NULL,
     error            TEXT NOT NULL,
+    reviewer         TEXT,
     model            TEXT,
     reasoning_effort TEXT,
     force            INTEGER NOT NULL
@@ -406,14 +420,14 @@ transaction.
 
 ### 5.8 `recheck_attempts` and `recheck_results`
 
-Schema version 6 stores HEAD reconciliation independently of commit reviews:
+HEAD reconciliation is stored independently of commit reviews:
 
 ```sql
 CREATE TABLE recheck_attempts (
     id                      INTEGER PRIMARY KEY,
     head_sha                TEXT NOT NULL,
     checked_at              TEXT NOT NULL,
-    reviewer                TEXT NOT NULL CHECK(reviewer IN ('codex', 'http')),
+    reviewer                TEXT NOT NULL CHECK(length(trim(reviewer)) > 0),
     model                   TEXT NOT NULL,
     reasoning_effort        TEXT,
     prompt_version          TEXT NOT NULL,
@@ -424,10 +438,12 @@ CREATE TABLE recheck_attempts (
     cache_write_tokens      INTEGER,
     output_tokens           INTEGER NOT NULL,
     reasoning_output_tokens INTEGER NOT NULL,
+    reasoning_tokens_reported INTEGER NOT NULL DEFAULT 1,
     estimated_cost_microusd INTEGER,
     estimated_cost_max_microusd INTEGER,
     cost_context            TEXT,
     cost_complete           INTEGER,
+    reported_cost_microusd  INTEGER,
     duration_ms             INTEGER NOT NULL,
     finding_count           INTEGER NOT NULL,
     resolved_count          INTEGER NOT NULL,
@@ -450,10 +466,9 @@ CREATE TABLE recheck_results (
 );
 ```
 
-New recheck attempts always store `reviewer = 'codex'`. Schema version 6 keeps
-the original `http` value valid solely so databases created by earlier AIR
-builds remain readable; HTTP is not a selectable reviewer and no new HTTP
-attempts are created.
+New recheck attempts store the selected local harness. Recheck resumability is
+keyed by HEAD, harness, model, effort, prompt identity, and finding ID, so a
+second harness can independently reassess the same finding.
 
 `outcome` is `resolved`, `still_present`, or `uncertain`. Only `resolved`
 populates `findings.resolved_recheck_id`. The effective resolving SHA is the
@@ -551,7 +566,7 @@ Failed commits remain unprocessed but are excluded from later ordinary scans,
 including explicit-range scans, dry runs, and `air pending`. They do not count
 toward `--limit`. `air retry` selects the explicit failure queue, filters it
 against the current first-parent history of master, and processes live failures
-oldest first. Current Codex configuration and command-line overrides are
+oldest first. Current harness configuration and command-line overrides are
 used for the retry; the failed attempt's model and effort remain diagnostic
 metadata.
 
@@ -617,7 +632,7 @@ reason.
 Comments, string-content changes, translations, localization resources, and
 documentation are outside review scope. AIR passes the textual diff through
 unchanged, subject only to the binary and size transport limits above, and
-Codex enforces these exclusions semantically. AIR deliberately does
+the selected harness enforces these exclusions semantically. AIR deliberately does
 not use path, extension, comment, or string heuristics that could hide relevant
 executable context.
 
@@ -659,9 +674,9 @@ False negatives are preferable to large quantities of speculative warnings.
 
 ## 10. Repository Inspection
 
-The model should be allowed to inspect repository contents when necessary. The
-initial implementation delegates inspection to a fresh local Codex CLI session
-for each commit.
+The model should be allowed to inspect repository contents when necessary. AIR
+delegates inspection to a fresh local Codex or Claude Code CLI session for each
+commit.
 
 At minimum, the reviewer may need equivalent access to:
 
@@ -675,11 +690,13 @@ git log ...
 
 The reviewer should generally inspect repository state through Git object access rather than requiring the worktree to be checked out at each historical commit.
 
-AIR invokes `codex exec` in the repository with an ephemeral, read-only sandbox
-and a noninteractive approval policy. The prompt identifies the exact commit
-and first parent. Codex's normal repository context, `AGENTS.md` instructions,
-local configuration, and exec-policy rules remain available. AIR does not
-reproduce Codex's context gathering or tool harness.
+AIR invokes the selected local harness in the repository with a non-persistent,
+read-only policy. The prompt identifies the exact commit and first parent.
+Codex's normal repository context, `AGENTS.md` instructions, local
+configuration, and exec-policy rules remain available. Claude's normal local
+context, including `CLAUDE.md`, remains available while AIR disables hooks,
+external MCP servers, slash commands, subagents, network access, and writes.
+AIR does not reproduce either harness's context gathering.
 
 Repository inspection must be read-only.
 
@@ -692,9 +709,9 @@ The initial model context should contain:
 - a bounded set of open resolution candidates associated with changed files.
 
 AIR computes and bounds the textual diff to decide whether the commit should be
-reviewed, but it does not embed that diff in the Codex prompt. AIR supplies the
-exact commit and first-parent SHAs to `codex exec`, and Codex inspects that diff
-and the surrounding repository state itself.
+reviewed, but it does not embed that diff in the harness prompt. AIR supplies
+the exact commit and first-parent SHAs, and the harness inspects that diff and
+the surrounding repository state itself.
 
 An approximate prompt structure:
 
@@ -960,11 +977,11 @@ SQLite inspection scripts independent of worktree layout.
 
 `air doctor` is a preflight for unattended or expensive scans. It checks
 repository discovery, `refs/heads/master`, state-directory and database
-permissions, supported schema version, SQLite `quick_check`, effective Codex
-settings, selected model and pricing, and Codex prerequisites. It locates the
-effective executable and runs `codex login status` with a bounded timeout.
-Unknown pricing is a warning; missing configuration, Codex authentication,
-master, or a usable database is a failed check. Any failed check produces a
+permissions, supported schema version, SQLite `quick_check`, effective harness
+settings, selected model and pricing, and harness prerequisites. It locates the
+effective executable and runs `codex login status` or `claude auth status` with
+a bounded timeout. Unknown pricing is a warning; missing configuration or
+harness authentication, master, or a usable database is a failed check. Any failed check produces a
 nonzero exit after all safe applicable checks have been reported. `--json`
 emits the same named checks and aggregate pass/warning/failure counts.
 
@@ -1005,18 +1022,18 @@ failures, continues through the selected batch, then returns a nonzero result
 summarizing the number of failed commits. `air scan --stop-on-error` records the
 first such failure and stops immediately. Subsequent ordinary scans defer
 recorded failures and report their count; only `air retry` attempts them again.
-Database failures and invalid global Codex configuration always stop
+Database failures and invalid global review configuration always stop
 immediately.
 
 ### Failed commits
 
 ```bash
 air failures [--json]
-air retry [--continue-on-error] [Codex flags]
+air retry [--continue-on-error] [reviewer flags]
 ```
 
 `air failures` displays the durable failure queue. `air retry` processes only
-live failed commits, oldest first, and accepts `--limit` plus the same Codex
+live failed commits, oldest first, and accepts `--limit` plus the same reviewer
 configuration overrides as `scan`. A failed rescan is retried as a rescan so
 the prior successful review remains current until the retry succeeds. Failure
 records for rewritten-away commits are left for `air clean`.
@@ -1203,7 +1220,7 @@ air show <commit-ish> --review 2
 ### Recheck open findings at HEAD
 
 ```bash
-air recheck [Codex flags] [<finding-id> ...]
+air recheck [reviewer flags] [<finding-id> ...]
 air recheck --model gpt-5.6-sol --effort xhigh
 air recheck --model gpt-5.6-sol --effort xhigh 17 31 562
 ```
@@ -1230,11 +1247,11 @@ after failed model batches and returns a nonzero result at the end. Failed
 recheck batches do not change finding state or create successful-attempt rows;
 rerunning the command naturally selects them while skipping completed batches.
 
-Successful results are resumable by finding ID, target HEAD, model, effort, and
-recheck prompt version. The same identity at the same HEAD is skipped on later
+Successful results are resumable by finding ID, target HEAD, harness, model,
+effort, and recheck prompt version. The same identity at the same HEAD is skipped on later
 runs; a changed HEAD or model/effort is eligible again.
 `--force` repeats otherwise identical successful checks. Recheck uses the same
-CLI/environment/database Codex-setting precedence as `scan`, so a one-off
+CLI/environment/database review-setting precedence as `scan`, so a one-off
 stronger model needs no separate configuration record.
 
 ### Reviewer prompts
@@ -1272,9 +1289,10 @@ Accounting includes every retained commit-review and HEAD-recheck attempt
 because superseded rescans and reconciliation calls still consumed tokens.
 Totals include input, cached-input, cache-write, output, and reasoning-output
 tokens and are grouped by model and reasoning effort. Costs are summed as lower
-and upper bounds from the estimates stored on each attempt. Attempts with
-unknown prices and attempts for which Codex omitted cache-write usage are counted
-explicitly. `--since` accepts either a UTC date or an RFC3339 timestamp;
+and upper bounds from the estimates stored on each attempt, preferring a
+harness-reported cost when one exists. Attempts with unknown prices and
+attempts for which a harness omitted cache-write or reasoning detail are
+counted explicitly. `--since` accepts either a UTC date or an RFC3339 timestamp;
 `--model` is an exact model identifier match. Commit reviews and rechecks have
 separate attempt counts. `stats` reports average scan time per commit only from
 successful timed commit reviews selected by those filters; recheck batch
@@ -1318,16 +1336,16 @@ list/detail layout. It is a static snapshot and therefore cannot mutate the AIR
 database or invoke editors and Git difftools. It contains no repository
 configuration, API keys, raw model responses, or external assets.
 
-## 19. Codex Configuration
+## 19. Review Harness Configuration
 
-AIR uses the locally installed Codex CLI as its reviewer. It reuses Codex's
-existing authentication, configuration, repository instructions, and exec
-policy. AIR never reads or copies Codex credentials. There is no remote HTTP
-review backend.
+AIR supports the locally installed Codex and Claude Code CLIs. It reuses the
+selected harness's existing authentication, configuration, and repository
+instructions and never reads or copies credentials. Codex remains the default.
+There is no remote HTTP review backend.
 
-Every Codex setting has a database representation, an environment-variable
-override, and a `scan`, `retry`, `rescan`, or `recheck` flag override. Values are
-resolved with this fixed precedence:
+Every review setting has a database representation, an environment-variable
+override, and, where applicable, a `scan`, `retry`, `rescan`, or `recheck` flag
+override. Values are resolved with this fixed precedence:
 
 ```text
 command-line flag > environment variable > database > built-in default
@@ -1335,30 +1353,37 @@ command-line flag > environment variable > database > built-in default
 
 | Database setting | Scan flag | Environment variable | Default |
 | --- | --- | --- | --- |
+| `harness` | `--harness` | `AIR_HARNESS` | `codex` |
 | `model` | `--model` | `AIR_MODEL` | none |
 | `effort` | `--effort` | `AIR_REASONING_EFFORT` | none |
 | `codex-bin` | `--codex-bin` | `AIR_CODEX_BIN` | `codex` |
 | `codex-profile` | `--codex-profile` | `AIR_CODEX_PROFILE` | none |
 | `codex-timeout` | `--codex-timeout` | `AIR_CODEX_TIMEOUT` | `20m` |
+| `claude-bin` | `--claude-bin` | `AIR_CLAUDE_BIN` | `claude` |
+| `claude-timeout` | `--claude-timeout` | `AIR_CLAUDE_TIMEOUT` | `20m` |
 
-`air config set`, `get`, `unset`, and `list` manage only these public Codex
+`air config set`, `get`, `unset`, and `list` manage only these public review
 settings in the existing `config` table. `air config list --effective` includes
 all settings, their resolved values, and their winning sources.
 
-Codex reviews require explicit effective `model` and `effort` values so the exact
-review provenance is known rather than inferred from changing local Codex
-defaults. AIR passes them to Codex as `--model` and
-`model_reasoning_effort=<value>`. `codex-timeout` is a positive Go duration and
+Reviews require explicit effective `model` and `effort` values so provenance is
+known rather than inferred from changing harness defaults. AIR passes both
+values explicitly. The selected harness timeout is a positive Go duration and
 bounds each commit review or recheck batch independently.
 
-Codex must report token usage. AIR records input, cached-input, cache-write,
-output, and reasoning-output counts for every commit review and recheck batch.
-A Codex JSONL attempt uses the usage in its final `turn.completed` event.
+The harness must report token usage. AIR records input, cached-input,
+cache-write, output, and reasoning-output counts for every commit review and
+recheck batch, plus whether cache-write or reasoning detail was unavailable.
+Codex usage comes from the final JSONL `turn.completed` event. For Claude,
+ordinary input, cache creation, and cache reads sum to AIR total input; cache
+creation maps to cache writes and cache reads map to cached input. Claude does
+not expose the reasoning subset of output, so AIR records that category as
+unreported rather than as a measured zero.
 
-Codex does not report an authoritative monetary charge. In particular, Codex
-authenticated through a ChatGPT account consumes plan limits or credits, not a
-distinct per-run USD bill. AIR's model registry therefore produces an
-API-equivalent estimate from a dated Standard price snapshot.
+AIR's model registry produces an API-equivalent estimate from stored pricing.
+If a harness also reports an invocation cost (Claude's `total_cost_usd`), AIR
+stores it separately and prefers it when aggregating costs. Subscription-backed
+harness execution may not represent a distinct billed USD amount.
 
 Cached reads, cache writes, ordinary input, and output are separate billing
 categories. Reasoning output is already included in output and is not added
@@ -1367,8 +1392,8 @@ by treating the uncategorized input as ordinary input at one bound and cache
 writes at the other. Unknown model pricing produces a null cost rather than a
 fabricated estimate. `air show` identifies ranges and unknown costs clearly.
 
-No model-specific behavior is embedded into the database schema. A Codex
-review records the exact supplied model identifier and reasoning effort.
+No model-specific behavior is embedded into the database schema. Every review
+records the selected harness and exact supplied model identifier and effort.
 
 ## 20. Prompt Versioning
 
@@ -1407,8 +1432,9 @@ uses this form:
 custom:sha256:<64 lowercase hexadecimal digits>
 ```
 
-The digest covers a fixed Codex domain tag, the prompt kind, compiled protocol
-version, and complete effective static prompt. It therefore changes when the
+For compatibility with existing custom prompt identities, the digest retains a
+fixed historical Codex domain tag. It also covers the prompt kind, compiled
+protocol version, and complete effective static prompt. It therefore changes when the
 stored instructions change or when AIR changes the fixed protocol. The custom
 identity is stored in the existing
 `prompt_version` columns on commit-review and recheck attempts. No schema
@@ -1503,15 +1529,21 @@ The LLM must not be allowed to:
 - execute build products from untrusted historical commits.
 
 The local Codex reviewer runs with `--sandbox read-only` and
-`approval_policy="never"`. It is instructed to rely on Git inspection, search,
-and ordinary file reading, and not to run builds, tests, repository scripts, or
-network commands. User and project exec-policy rules are still loaded; a
-command requiring approval fails rather than pausing an unattended scan.
+`approval_policy="never"`. User and project exec-policy rules are still loaded;
+a command requiring approval fails rather than pausing an unattended scan.
+Each Codex review uses `--ephemeral`.
 
-Each review uses `--ephemeral`. AIR captures Codex's JSONL event stream for the
-raw review record and reads the final answer through a strict JSON output
-schema. A nonzero Codex exit, absent output, invalid output, or attempted
-resolution of an unknown finding fails the commit without recording it.
+The local Claude reviewer requires Claude's sandbox and disables unsandboxed
+commands, writes to the repository, network access, hooks, external MCP
+servers, slash commands, subagents, web tools, and write tools. It enables only
+file reading/search plus an allowlist of read-only Git commands. Sessions are
+not persisted, and the fallback model is pinned to the requested model so
+stored provenance remains exact.
+
+Both harnesses receive the same fixed read-only inspection policy and strict
+JSON response schema. AIR retains the raw harness response. A nonzero harness
+exit, absent output or usage, invalid output, or attempted resolution of an
+unknown finding fails the commit without recording it as reviewed.
 
 ## 24. Performance
 
@@ -1522,9 +1554,9 @@ Important principles:
 - review only newly discovered commits;
 - do not re-review unchanged commits;
 - do not repeatedly ask whether findings remain open during ordinary scans;
-- make explicit HEAD rechecks resumable by target and Codex configuration;
+- make explicit HEAD rechecks resumable by target and harness configuration;
 - identify the exact target commit rather than packaging entire repositories;
-- let Codex fetch the diff and additional context only when required;
+- let the harness fetch the diff and additional context only when required;
 - retain responses locally for debugging;
 - avoid expensive indexing infrastructure.
 
@@ -1550,7 +1582,7 @@ Suggested implementation:
 Go
 SQLite via database/sql and a SQLite driver
 Git via os/exec
-Codex CLI via os/exec
+Codex or Claude Code CLI via os/exec
 JSON via encoding/json
 flag-based CLI
 ```
@@ -1565,6 +1597,7 @@ db.go
 git.go
 reviewer.go
 codex_reviewer.go
+claude_reviewer.go
 prompt.go
 ```
 

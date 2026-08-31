@@ -1,9 +1,9 @@
 # AIR
 
 AIR is a local semantic reviewer for commits on the first-parent history of
-`master`. For each selected commit it starts a fresh local Codex review session,
-lets Codex inspect the repository under a read-only sandbox, and stores reviews
-and findings in SQLite.
+`master`. For each selected commit it starts a fresh local Codex or Claude Code
+review session, lets the selected harness inspect the repository under a
+read-only policy, and stores reviews and findings in SQLite.
 
 The database lives at:
 
@@ -38,7 +38,8 @@ modify tracked files.
 - Go 1.26 or newer
 - Git
 - A C compiler for the bundled SQLite driver
-- The Codex CLI, authenticated with `codex login`
+- The Codex CLI, authenticated with `codex login`, or the Claude Code CLI,
+  authenticated with `claude auth login`
 
 ## Build and test
 
@@ -55,10 +56,10 @@ make build
 sudo make install
 ```
 
-The first AIR command after this upgrade automatically advances schema-v4 or
-schema-v5 databases to schema v6. The migrations add successful scan timing and
-separate HEAD-recheck history without rewriting existing reviews or findings.
-Historical review attempts retain an explicitly unknown duration.
+The first AIR command after this upgrade automatically advances older supported
+databases through schema v8. The additive migrations preserve reviews and
+findings while adding harness provenance, harness-reported cost, and explicit
+accounting for token categories a harness does not report.
 
 The install prefix is configurable. For example, a user-local or packaging
 install can use:
@@ -68,12 +69,12 @@ make install PREFIX="$HOME/.local"
 make install DESTDIR=/tmp/air-package-root
 ```
 
-## Codex configuration
+## Review harness configuration
 
-AIR uses the `codex` executable and its existing local authentication,
-configuration, repository instructions, and exec-policy rules. AIR requires an
-explicit model and reasoning effort so every stored review has unambiguous
-provenance.
+AIR supports the local Codex and Claude Code CLIs. It uses each CLI's existing
+local authentication, configuration, and repository instructions; AIR never
+reads or copies credentials. Codex is the default harness. AIR requires an
+explicit model and effort so every stored review has unambiguous provenance.
 
 ```bash
 codex login status
@@ -82,7 +83,19 @@ air config set effort low
 air scan
 ```
 
-Codex settings may come from a scan flag, an environment variable, the AIR
+Select Claude persistently, or override the harness for one invocation:
+
+```bash
+claude auth status
+air config set harness claude
+air config set model your-claude-model
+air config set effort high
+air scan
+
+air scan --harness claude --model your-claude-model --effort high
+```
+
+Review settings may come from a scan flag, an environment variable, the AIR
 database, or a built-in default, in that order of precedence:
 
 ```text
@@ -111,11 +124,14 @@ Effective output includes the winning source for every setting.
 
 | Database setting | Scan flag | Environment variable | Built-in default |
 | --- | --- | --- | --- |
+| `harness` | `--harness` | `AIR_HARNESS` | `codex` |
 | `model` | `--model` | `AIR_MODEL` | none |
 | `effort` | `--effort` | `AIR_REASONING_EFFORT` | none |
 | `codex-bin` | `--codex-bin` | `AIR_CODEX_BIN` | `codex` |
 | `codex-profile` | `--codex-profile` | `AIR_CODEX_PROFILE` | none |
 | `codex-timeout` | `--codex-timeout` | `AIR_CODEX_TIMEOUT` | `20m` |
+| `claude-bin` | `--claude-bin` | `AIR_CLAUDE_BIN` | `claude` |
+| `claude-timeout` | `--claude-timeout` | `AIR_CLAUDE_TIMEOUT` | `20m` |
 
 Reviewer instructions can also be customized per repository. AIR has separate
 instructions for commit review and HEAD recheck:
@@ -137,18 +153,20 @@ remains parseable and repository inspection remains read-only. The override is
 stored in the repository database and is included by `air backup`.
 
 Each custom prompt receives a stable `custom:sha256:...` identity derived from
-its complete static prompt, kind, fixed Codex domain tag, and built-in protocol
+its complete static prompt, kind, compatibility domain tag, and built-in protocol
 version. AIR records that identity on every commit-review or recheck attempt.
 Resetting an
 override restores the numeric built-in version. Changing a recheck prompt makes
 findings eligible for recheck again because it is a distinct review identity.
 
-Each commit gets an independent ephemeral `codex exec` session. AIR supplies
+Each commit gets an independent, non-persistent harness session. AIR supplies
 the exact commit and first-parent identities, bounded resolution candidates,
-and a JSON output schema. Codex discovers the diff and related repository
-context itself. Its commands run with a read-only sandbox and an approval
-policy of `never`, so an unattended scan fails instead of pausing or modifying
-the repository.
+and a JSON output schema. The harness discovers the diff and related repository
+context itself. Codex uses its read-only sandbox and noninteractive approval
+policy. Claude uses its sandbox with writes and network disabled, hooks and
+external MCP servers disabled, and only file search plus read-only Git commands
+allowed. An unattended scan fails instead of pausing or modifying the
+repository.
 
 Additional optional configuration:
 
@@ -156,19 +174,22 @@ Additional optional configuration:
 air config set codex-bin /path/to/codex
 air config set codex-profile air-review
 air config set codex-timeout 20m
+air config set claude-bin /path/to/claude
+air config set claude-timeout 20m
 ```
 
-The corresponding flags are `--model`, `--effort`, `--codex-bin`,
-`--codex-profile`, and `--codex-timeout`. For example:
+The corresponding flags are `--harness`, `--model`, `--effort`,
+`--codex-bin`, `--codex-profile`, `--codex-timeout`, `--claude-bin`, and
+`--claude-timeout`. For example:
 
 ```bash
 air scan --model your-codex-model --effort high
 ```
 
-AIR passes both values explicitly to Codex and records them on every commit
-review or HEAD recheck. The timeout applies independently to each commit review
-or recheck batch and defaults to twenty minutes. AIR does not read or copy
-Codex credentials.
+AIR passes the model and effort explicitly to the selected harness and records
+the harness plus both values on every commit review or HEAD recheck. The
+selected harness's timeout applies independently to each commit review or
+recheck batch and defaults to twenty minutes.
 
 AIR records input, cached-input, cache-write, output, and reasoning-output token
 counts from each review. Its model registry includes a dated snapshot of the
@@ -178,11 +199,12 @@ configuration are stored in SQLite automatically; no pricing environment
 variables are required.
 
 Requests above 272,000 input tokens use the stored long-context rates.
-Reasoning tokens are included in output tokens and are not charged twice. When
-Codex reports cache-write usage, AIR calculates one estimate. The Codex
-JSONL format may omit cache-write usage; in that case AIR stores a minimum and
-maximum estimate spanning ordinary-input and cache-write pricing. Models absent
-from AIR's registry remain usable and are stored with explicitly unknown
+Reasoning tokens are included in output tokens and are not charged twice. AIR
+records when a harness omits reasoning-token or cache-write detail. When
+cache-write usage is unavailable, AIR stores a minimum and maximum estimate
+spanning ordinary-input and cache-write pricing. Claude's cache-creation tokens
+map to AIR cache writes, and its cache-read tokens map to cached input. Models
+absent from AIR's registry remain usable and are stored with explicitly unknown
 pricing.
 
 Inspect or override the database-backed model registry:
@@ -208,8 +230,10 @@ air model set-pricing private-model \
 
 Stored model records override compiled pricing snapshots during later scans.
 
-These are API-equivalent USD estimates. A Codex run authenticated through a
-ChatGPT account does not expose an authoritative per-run monetary charge.
+Model-registry calculations are API-equivalent USD estimates. When a harness
+reports its own per-run cost, AIR stores that amount separately and uses it in
+aggregate statistics; Claude currently exposes this as `total_cost_usd` when
+available. A subscription-backed run may still omit an authoritative charge.
 
 ## Usage
 
@@ -253,12 +277,12 @@ air retry --continue-on-error
 `air failures --json` exposes the same queue to automation. Each record keeps
 the latest error, timestamp, model/effort, whether it was a rescan, and the
 number of failed attempts. `air retry` processes live failed commits oldest
-first using current Codex configuration and accepts the normal model, effort,
-timeout, and limit overrides. A successful review or intentional
-skip atomically removes its failure record. `air clean` removes failure records
-whose commits no longer exist on master.
+first using the current review-harness configuration and accepts the normal
+harness, model, effort, timeout, and limit overrides. A successful review or
+intentional skip atomically removes its failure record. `air clean` removes
+failure records whose commits no longer exist on master.
 
-Preview the same work without starting Codex or changing the database:
+Preview the same work without starting a review harness or changing the database:
 
 ```bash
 air pending
@@ -346,7 +370,7 @@ air recheck --dry-run
 
 With no IDs, `recheck` processes all eligible open findings. It requires `HEAD`
 to be the tip of `master`, pins that SHA for the entire invocation, and uses
-the same Codex configuration precedence as `scan`. Findings are processed
+the same harness configuration precedence as `scan`. Findings are processed
 in batches of 20 by default; `--batch-size N` accepts 1 through 50.
 
 Every finding receives one recorded outcome: `resolved`, `still_present`, or
@@ -357,12 +381,12 @@ inspection to the recorded file, allowing it to recognize renames and
 cross-file fixes.
 
 Successful results are resumable per finding. A later invocation skips a
-finding already checked at the same HEAD with the same model, effort, and
-recheck prompt version. A changed HEAD or different model/effort checks it
-again; `--force` repeats an otherwise identical check. Each successful batch
-is committed independently, and `--continue-on-error` continues after a failed
-model batch. Failed batches do not change finding state; rerunning naturally
-selects them while skipping successful batches.
+finding already checked at the same HEAD with the same harness, model, effort,
+and recheck prompt version. A changed HEAD or different harness/model/effort
+checks it again; `--force` repeats an otherwise identical check. Each successful
+batch is committed independently, and `--continue-on-error` continues after a
+failed model batch. Failed batches do not change finding state; rerunning
+naturally selects them while skipping successful batches.
 
 Inspect results:
 
@@ -495,10 +519,10 @@ air doctor --json
 ```
 
 The doctor checks the Git repository and master ref, state permissions, schema
-version, SQLite integrity, effective Codex/model configuration, model pricing,
-the configured Codex binary, and `codex login status`. Unknown pricing is a
-warning, while missing Codex authentication or an unusable database is a failed
-check and a nonzero exit.
+version, SQLite integrity, effective harness/model configuration, model pricing,
+the selected executable, and either `codex login status` or `claude auth
+status`. Unknown pricing is a warning, while missing harness authentication or
+an unusable database is a failed check and a nonzero exit.
 
 ## Review and skip behavior
 
@@ -528,15 +552,17 @@ check and a nonzero exit.
 
 ## Reviewer access
 
-Codex receives commit metadata and a bounded set of open
-resolution candidates associated with files changed by the commit. Codex is
+The selected harness receives commit metadata and a bounded set of open
+resolution candidates associated with files changed by the commit. It is
 pointed at the exact commit and may inspect the diff, repository files, and Git
-history using its normal local tools. AIR does not check out historical commits
-or permit the reviewer to resolve findings outside the supplied candidate set.
+history using its local tools. AIR does not check out historical commits or
+permit the reviewer to resolve findings outside the supplied candidate set.
 
-The Codex subprocess is ephemeral and read-only. AIR asks it not to run builds,
-tests, repository programs, or network commands. Local Codex configuration and
-exec-policy rules remain active, but actions requiring approval fail because
-the scan is noninteractive.
+Harness subprocesses are non-persistent and read-only. AIR asks them not to run
+builds, tests, repository programs, or network commands. Local repository
+instructions remain available. Codex retains its configuration and exec-policy
+rules; Claude is launched with hooks, slash commands, agents, network tools,
+external MCP servers, and write tools disabled, plus a required sandbox and a
+read-only Git allowlist.
 
 See [docs/initial_spec.md](docs/initial_spec.md) for the complete design.

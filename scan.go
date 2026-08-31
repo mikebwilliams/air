@@ -23,6 +23,7 @@ type scanOptions struct {
 	Now             func() time.Time
 	ElapsedNow      func() time.Time
 	NewReviewer     reviewerFactory
+	FailureIdentity ReviewIdentity
 }
 
 func scanRepository(
@@ -119,7 +120,7 @@ func scanRepository(
 		elapsedNow = time.Now
 	}
 	var reviewer Reviewer
-	var identity ReviewIdentity
+	identity := options.FailureIdentity
 	failureCount := 0
 	reviewableCount := 0
 	skippedCount := 0

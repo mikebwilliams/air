@@ -163,6 +163,13 @@ func runPromptReset(ctx context.Context, args []string, environment cliEnvironme
 	if err != nil {
 		return err
 	}
+	if spec.LegacyConfigKey != "" {
+		legacyRemoved, err := store.UnsetConfig(ctx, spec.LegacyConfigKey)
+		if err != nil {
+			return err
+		}
+		removed = removed || legacyRemoved
+	}
 	if removed {
 		fmt.Fprintf(environment.Stdout, "Reset %s prompt to built-in version %s\n",
 			spec.Kind, spec.BuiltinVersion)

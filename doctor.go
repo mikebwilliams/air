@@ -135,6 +135,7 @@ func inspectDoctor(ctx context.Context, environment cliEnvironment) doctorReport
 		setting, _ := settingByKey(key)
 		return resolveSettingValue(ctx, store, environment.Getenv, setting, "", false)
 	}
+	harness, harnessOK := doctorRequiredSetting(&report, resolve, "harness", "review harness")
 	model, modelOK := doctorRequiredSetting(&report, resolve, "model", "model")
 	if modelOK {
 		configuredModel, found, err := modelForDisplay(ctx, store, model.Value)
@@ -150,10 +151,23 @@ func inspectDoctor(ctx context.Context, environment cliEnvironment) doctorReport
 	}
 
 	doctorRequiredSetting(&report, resolve, "effort", "reasoning effort")
-	if timeout, ok := doctorRequiredSetting(&report, resolve, "codex-timeout", "Codex timeout"); ok {
+	if !harnessOK {
+		return report
+	}
+	timeoutKey := harness.Value + "-timeout"
+	binaryKey := harness.Value + "-bin"
+	harnessLabel := "Codex"
+	authArguments := []string{"login", "status"}
+	commandContext := environment.CodexCommand
+	if harness.Value == claudeReviewerName {
+		harnessLabel = "Claude"
+		authArguments = []string{"auth", "status"}
+		commandContext = environment.ClaudeCommand
+	}
+	if timeout, ok := doctorRequiredSetting(&report, resolve, timeoutKey, harnessLabel+" timeout"); ok {
 		report.Checks[len(report.Checks)-1].Detail = timeout.Value + " from " + timeout.Source
 	}
-	binary, ok := doctorRequiredSetting(&report, resolve, "codex-bin", "Codex executable setting")
+	binary, ok := doctorRequiredSetting(&report, resolve, binaryKey, harnessLabel+" executable setting")
 	if !ok {
 		return report
 	}
@@ -163,11 +177,11 @@ func inspectDoctor(ctx context.Context, environment cliEnvironment) doctorReport
 	}
 	resolvedBinary, err := exec.LookPath(lookup)
 	if err != nil {
-		report.add("Codex executable", "fail", fmt.Sprintf("%s: %v", binary.Value, err))
+		report.add(harnessLabel+" executable", "fail", fmt.Sprintf("%s: %v", binary.Value, err))
 		return report
 	}
-	report.add("Codex executable", "pass", resolvedBinary+" from "+binary.Source)
-	doctorCodexAuth(ctx, &report, environment, resolvedBinary)
+	report.add(harnessLabel+" executable", "pass", resolvedBinary+" from "+binary.Source)
+	doctorHarnessAuth(ctx, &report, harnessLabel, commandContext, resolvedBinary, authArguments...)
 	return report
 }
 
@@ -187,16 +201,15 @@ func doctorRequiredSetting(report *doctorReport,
 	return value, true
 }
 
-func doctorCodexAuth(ctx context.Context, report *doctorReport,
-	environment cliEnvironment, binary string,
+func doctorHarnessAuth(ctx context.Context, report *doctorReport,
+	harnessLabel string, commandContext commandContextFunc, binary string, arguments ...string,
 ) {
 	authContext, cancel := context.WithTimeout(ctx, doctorAuthTimeout)
 	defer cancel()
-	commandContext := environment.CodexCommand
 	if commandContext == nil {
 		commandContext = exec.CommandContext
 	}
-	command := commandContext(authContext, binary, "login", "status")
+	command := commandContext(authContext, binary, arguments...)
 	var output bytes.Buffer
 	command.Stdout = &output
 	command.Stderr = &output
@@ -211,11 +224,11 @@ func doctorCodexAuth(ctx context.Context, report *doctorReport,
 		} else if detail == "" {
 			detail = err.Error()
 		}
-		report.add("Codex authentication", "fail", detail)
+		report.add(harnessLabel+" authentication", "fail", detail)
 		return
 	}
 	if detail == "" {
-		detail = "codex login status succeeded"
+		detail = strings.ToLower(harnessLabel) + " authentication status succeeded"
 	}
-	report.add("Codex authentication", "pass", detail)
+	report.add(harnessLabel+" authentication", "pass", detail)
 }

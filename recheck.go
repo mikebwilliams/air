@@ -92,6 +92,9 @@ func recheckRepository(
 		pending = pending[:options.Limit]
 	}
 	identityLabel := options.Model
+	if options.Harness != "" && options.Harness != codexReviewerName {
+		identityLabel = options.Harness + ":" + identityLabel
+	}
 	if options.ReasoningEffort != "" {
 		identityLabel += "/" + options.ReasoningEffort
 	}

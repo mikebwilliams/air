@@ -23,6 +23,12 @@ func resolveReviewerPrompt(
 	if err != nil {
 		return reviewerPrompt{}, err
 	}
+	if !found && prompt.LegacyConfigKey != "" {
+		instructions, found, err = store.ConfigValue(ctx, prompt.LegacyConfigKey)
+		if err != nil {
+			return reviewerPrompt{}, err
+		}
+	}
 	if !found {
 		return prompt, nil
 	}

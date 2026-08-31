@@ -21,7 +21,18 @@ type resolvedSetting struct {
 	Source string
 }
 
-var codexSettings = []settingSpec{
+var reviewSettings = []settingSpec{
+	{
+		Key: "harness", Environment: []string{"AIR_HARNESS"}, Default: codexReviewerName,
+		Validate: func(value string) error {
+			switch value {
+			case codexReviewerName, claudeReviewerName:
+				return nil
+			default:
+				return errors.New("must be codex or claude")
+			}
+		},
+	},
 	{Key: "model", Environment: []string{"AIR_MODEL"}, Validate: requireSettingValue},
 	{Key: "effort", Environment: []string{"AIR_REASONING_EFFORT"}, Validate: requireSettingValue},
 	{Key: "codex-bin", Environment: []string{"AIR_CODEX_BIN"}, Default: "codex", Validate: requireSettingValue},
@@ -30,14 +41,23 @@ var codexSettings = []settingSpec{
 		Key:         "codex-timeout",
 		Environment: []string{"AIR_CODEX_TIMEOUT"},
 		Default:     defaultCodexTimeout.String(),
-		Validate: func(value string) error {
-			duration, err := time.ParseDuration(value)
-			if err != nil || duration <= 0 {
-				return errors.New("must be a positive duration")
-			}
-			return nil
-		},
+		Validate:    validatePositiveDuration,
 	},
+	{Key: "claude-bin", Environment: []string{"AIR_CLAUDE_BIN"}, Default: "claude", Validate: requireSettingValue},
+	{
+		Key:         "claude-timeout",
+		Environment: []string{"AIR_CLAUDE_TIMEOUT"},
+		Default:     defaultClaudeTimeout.String(),
+		Validate:    validatePositiveDuration,
+	},
+}
+
+func validatePositiveDuration(value string) error {
+	duration, err := time.ParseDuration(value)
+	if err != nil || duration <= 0 {
+		return errors.New("must be a positive duration")
+	}
+	return nil
 }
 
 func requireSettingValue(value string) error {
@@ -48,7 +68,7 @@ func requireSettingValue(value string) error {
 }
 
 func settingByKey(key string) (settingSpec, bool) {
-	for _, setting := range codexSettings {
+	for _, setting := range reviewSettings {
 		if setting.Key == key {
 			return setting, true
 		}

@@ -50,8 +50,8 @@ var cliCommands = []cliCommandSpec{
 	},
 	{
 		Name: "doctor", Category: commandCategoryGettingStarted,
-		Summary:     "Check repository, database, and Codex setup.",
-		Description: "Inspect AIR's repository state, database integrity, effective Codex configuration, pricing, and Codex CLI prerequisites.",
+		Summary:     "Check repository, database, and review setup.",
+		Description: "Inspect AIR's repository state, database integrity, effective review configuration, pricing, and selected harness prerequisites.",
 		Usage:       []string{"air doctor [OPTIONS]"},
 		Options:     []cliHelpOption{{"--json", "Write the report as JSON."}}, Run: runDoctor,
 	},
@@ -83,7 +83,7 @@ var cliCommands = []cliCommandSpec{
 	{
 		Name: "retry", Category: commandCategoryCommitReview,
 		Summary:     "Retry commits in the durable failure queue.",
-		Description: "Review failed commits that still occur on master, oldest first, using the current Codex configuration.",
+		Description: "Review failed commits that still occur on master, oldest first, using the current harness configuration.",
 		Usage:       []string{"air retry [OPTIONS]"},
 		Options: append([]cliHelpOption{
 			{"--limit N", "Process at most N failed commits; zero means unlimited."},
@@ -128,12 +128,12 @@ var cliCommands = []cliCommandSpec{
 	{
 		Name: "recheck", Category: commandCategoryFindingReview,
 		Summary:     "Reconcile open findings against the current HEAD.",
-		Description: "Ask Codex whether selected open findings are resolved in the exact HEAD snapshot. With no IDs, recheck every eligible open finding.",
+		Description: "Ask the configured harness whether selected open findings are resolved in the exact HEAD snapshot. With no IDs, recheck every eligible open finding.",
 		Usage:       []string{"air recheck [OPTIONS] [FINDING_ID ...]"},
 		Options: append([]cliHelpOption{
 			{"--limit N", "Recheck at most N findings; zero means unlimited."},
 			{"--batch-size N", fmt.Sprintf("Send N findings per model call (default: %d; maximum: %d).", defaultRecheckBatchSize, maxRecheckBatchSize)},
-			{"--force", "Repeat checks already completed with this Codex configuration at HEAD."},
+			{"--force", "Repeat checks already completed with this harness configuration at HEAD."},
 			{"--dry-run", "Show pending work without reviewing or writing."},
 			{"--continue-on-error", "Continue after a failed model batch."},
 		}, reviewerHelpOptions("per-batch")...), Run: runRecheck,
@@ -215,8 +215,8 @@ var cliCommands = []cliCommandSpec{
 	},
 	{
 		Name: "prompt", Category: commandCategoryMaintenance,
-		Summary:     "Inspect and customize Codex prompts.",
-		Description: "List repository prompt identities, inspect editable Codex instructions or the full static prompt, and store or reset repository-specific overrides. AIR keeps its protocol and response contract fixed.",
+		Summary:     "Inspect and customize reviewer prompts.",
+		Description: "List repository prompt identities, inspect editable reviewer instructions or the full static prompt, and store or reset repository-specific overrides. AIR keeps its protocol and response contract fixed.",
 		Usage:       []string{"air prompt COMMAND [ARGUMENTS]"},
 		Children: []cliCommandSpec{
 			{Name: "list", Summary: "List prompt sources and identities.", Usage: []string{"air prompt list"}},
@@ -226,7 +226,7 @@ var cliCommands = []cliCommandSpec{
 				Options: []cliHelpOption{{"--full", "Include AIR's fixed protocol and response contract."}},
 			},
 			{
-				Name: "set", Summary: "Store repository-specific Codex instructions.",
+				Name: "set", Summary: "Store repository-specific reviewer instructions.",
 				Usage: []string{
 					"air prompt set --file PATH KIND",
 					"air prompt set --stdin KIND",
@@ -244,8 +244,8 @@ var cliCommands = []cliCommandSpec{
 	},
 	{
 		Name: "config", Category: commandCategoryMaintenance,
-		Summary:     "Manage repository Codex configuration.",
-		Description: "Read and write Codex settings stored in AIR's repository database. Effective values use command-line flags, environment variables, database settings, and built-in defaults in that order.",
+		Summary:     "Manage repository review configuration.",
+		Description: "Read and write review settings stored in AIR's repository database. Effective values use command-line flags, environment variables, database settings, and built-in defaults in that order.",
 		Usage:       []string{"air config COMMAND [ARGUMENTS]"},
 		Children: []cliCommandSpec{
 			{
@@ -303,11 +303,14 @@ var cliCommands = []cliCommandSpec{
 
 func reviewerHelpOptions(timeoutScope string) []cliHelpOption {
 	return []cliHelpOption{
+		{"--harness HARNESS", "Override the review harness: codex or claude."},
 		{"--model MODEL", "Override the configured model identifier."},
-		{"--effort EFFORT", "Override the Codex reasoning effort."},
+		{"--effort EFFORT", "Override the reviewer effort."},
 		{"--codex-bin PATH", "Override the Codex CLI executable."},
 		{"--codex-profile PROFILE", "Override the Codex configuration profile."},
 		{"--codex-timeout DURATION", "Override the " + timeoutScope + " Codex timeout."},
+		{"--claude-bin PATH", "Override the Claude Code CLI executable."},
+		{"--claude-timeout DURATION", "Override the " + timeoutScope + " Claude timeout."},
 	}
 }
 
@@ -422,7 +425,7 @@ func printUsage(output io.Writer) {
 		}
 	}
 	fmt.Fprintln(output, "\nHelp:\n  help       Show global or command-specific help.")
-	fmt.Fprintln(output, "\nCodex configuration precedence:\n  command-line flag > environment variable > database > built-in default")
+	fmt.Fprintln(output, "\nReview configuration precedence:\n  command-line flag > environment variable > database > built-in default")
 	fmt.Fprintln(output, "\nRun \"air help COMMAND\" for command details.")
 }
 

@@ -44,6 +44,20 @@ func TestSettingPrecedence(t *testing.T) {
 	if err != nil || resolved.Value != "20m0s" || resolved.Source != "built-in" {
 		t.Fatalf("built-in timeout = %+v, %v", resolved, err)
 	}
+	harness, _ := settingByKey("harness")
+	resolved, err = resolveSettingValue(ctx, store, func(string) string { return "" }, harness, "", false)
+	if err != nil || resolved.Value != codexReviewerName || resolved.Source != "built-in" {
+		t.Fatalf("built-in harness = %+v, %v", resolved, err)
+	}
+	resolved, err = resolveSettingValue(ctx, store, func(name string) string {
+		if name == "AIR_HARNESS" {
+			return claudeReviewerName
+		}
+		return ""
+	}, harness, "", false)
+	if err != nil || resolved.Value != claudeReviewerName || resolved.Source != "AIR_HARNESS" {
+		t.Fatalf("environment harness = %+v, %v", resolved, err)
+	}
 }
 
 func TestSettingValidationIdentifiesSource(t *testing.T) {
@@ -62,6 +76,17 @@ func TestSettingValidationIdentifiesSource(t *testing.T) {
 	}, timeout, "", false)
 	if err == nil || !strings.Contains(err.Error(), "AIR_CODEX_TIMEOUT") || !strings.Contains(err.Error(), "positive duration") {
 		t.Fatalf("invalid timeout error = %v", err)
+	}
+}
+
+func TestHarnessSettingRejectsUnknownValue(t *testing.T) {
+	harness, _ := settingByKey("harness")
+	if _, err := validateSettingValue(harness, "http"); err == nil || !strings.Contains(err.Error(), "codex or claude") {
+		t.Fatalf("invalid harness error = %v", err)
+	}
+	claudeTimeout, _ := settingByKey("claude-timeout")
+	if _, err := validateSettingValue(claudeTimeout, "later"); err == nil || !strings.Contains(err.Error(), "positive duration") {
+		t.Fatalf("invalid Claude timeout error = %v", err)
 	}
 }
 

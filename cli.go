@@ -25,6 +25,7 @@ type cliEnvironment struct {
 	Stderr          io.Writer
 	Getenv          func(string) string
 	CodexCommand    commandContextFunc
+	ClaudeCommand   commandContextFunc
 	Now             func() time.Time
 	FindingsUI      findingsUIRunner
 	ExternalCommand commandContextFunc
@@ -359,7 +360,7 @@ func runConfig(ctx context.Context, args []string, environment cliEnvironment) e
 			return errors.New("usage: air config list [--effective]")
 		}
 		printed := false
-		for _, setting := range codexSettings {
+		for _, setting := range reviewSettings {
 			if *effective {
 				resolved, err := effectiveSettingForDisplay(ctx, store, environment.Getenv, setting)
 				if err != nil {
@@ -380,7 +381,7 @@ func runConfig(ctx context.Context, args []string, environment cliEnvironment) e
 			}
 		}
 		if !printed {
-			fmt.Fprintln(environment.Stdout, "No Codex configuration stored.")
+			fmt.Fprintln(environment.Stdout, "No review configuration stored.")
 		}
 		return nil
 
@@ -399,8 +400,8 @@ func effectiveSettingForDisplay(
 }
 
 func unknownSettingError(key string) error {
-	keys := make([]string, 0, len(codexSettings))
-	for _, setting := range codexSettings {
+	keys := make([]string, 0, len(reviewSettings))
+	for _, setting := range reviewSettings {
 		keys = append(keys, setting.Key)
 	}
 	return fmt.Errorf("unknown configuration setting %q; expected one of: %s", key, strings.Join(keys, ", "))
@@ -634,6 +635,120 @@ const (
 	retryCommand
 )
 
+type reviewerFlagValues struct {
+	harness       *string
+	model         *string
+	effort        *string
+	codexBinary   *string
+	codexProfile  *string
+	codexTimeout  *string
+	claudeBinary  *string
+	claudeTimeout *string
+}
+
+type reviewerConfiguration struct {
+	Harness       string
+	Model         string
+	Effort        string
+	CodexBinary   string
+	CodexProfile  string
+	CodexTimeout  time.Duration
+	ClaudeBinary  string
+	ClaudeTimeout time.Duration
+}
+
+type configuredReviewer interface {
+	Reviewer
+	RecheckReviewer
+}
+
+func addReviewerFlags(flags *flag.FlagSet, timeoutScope string) reviewerFlagValues {
+	return reviewerFlagValues{
+		harness:       flags.String("harness", "", "review harness: codex or claude"),
+		model:         flags.String("model", "", "model identifier"),
+		effort:        flags.String("effort", "", "reviewer effort"),
+		codexBinary:   flags.String("codex-bin", "", "Codex CLI executable"),
+		codexProfile:  flags.String("codex-profile", "", "Codex configuration profile"),
+		codexTimeout:  flags.String("codex-timeout", "", timeoutScope+" Codex timeout"),
+		claudeBinary:  flags.String("claude-bin", "", "Claude Code CLI executable"),
+		claudeTimeout: flags.String("claude-timeout", "", timeoutScope+" Claude timeout"),
+	}
+}
+
+func resolveReviewerConfiguration(
+	ctx context.Context,
+	store *Store,
+	environment cliEnvironment,
+	values reviewerFlagValues,
+	setFlags map[string]bool,
+) (reviewerConfiguration, error) {
+	resolve := func(key, commandLineValue string) (resolvedSetting, error) {
+		setting, _ := settingByKey(key)
+		return resolveSettingValue(ctx, store, environment.Getenv, setting, commandLineValue, setFlags[key])
+	}
+	harness, err := resolve("harness", *values.harness)
+	if err != nil {
+		return reviewerConfiguration{}, err
+	}
+	model, err := resolve("model", *values.model)
+	if err != nil {
+		return reviewerConfiguration{}, err
+	}
+	effort, err := resolve("effort", *values.effort)
+	if err != nil {
+		return reviewerConfiguration{}, err
+	}
+	configuration := reviewerConfiguration{
+		Harness: harness.Value, Model: model.Value, Effort: effort.Value,
+	}
+	switch configuration.Harness {
+	case codexReviewerName:
+		binary, err := resolve("codex-bin", *values.codexBinary)
+		if err != nil {
+			return reviewerConfiguration{}, err
+		}
+		profile, err := resolve("codex-profile", *values.codexProfile)
+		if err != nil {
+			return reviewerConfiguration{}, err
+		}
+		timeout, err := resolveReviewerTimeout(resolve, "codex-timeout", *values.codexTimeout)
+		if err != nil {
+			return reviewerConfiguration{}, err
+		}
+		configuration.CodexBinary = binary.Value
+		configuration.CodexProfile = profile.Value
+		configuration.CodexTimeout = timeout
+	case claudeReviewerName:
+		binary, err := resolve("claude-bin", *values.claudeBinary)
+		if err != nil {
+			return reviewerConfiguration{}, err
+		}
+		timeout, err := resolveReviewerTimeout(resolve, "claude-timeout", *values.claudeTimeout)
+		if err != nil {
+			return reviewerConfiguration{}, err
+		}
+		configuration.ClaudeBinary = binary.Value
+		configuration.ClaudeTimeout = timeout
+	default:
+		return reviewerConfiguration{}, fmt.Errorf("unsupported review harness %q", configuration.Harness)
+	}
+	return configuration, nil
+}
+
+func resolveReviewerTimeout(
+	resolve func(string, string) (resolvedSetting, error), key, commandLineValue string,
+) (time.Duration, error) {
+	value, err := resolve(key, commandLineValue)
+	if err != nil {
+		return 0, err
+	}
+	timeout, err := time.ParseDuration(value.Value)
+	if err != nil {
+		return 0, fmt.Errorf("parse %s: %w", key, err)
+	}
+	return timeout, nil
+}
+
 func runScanCommand(ctx context.Context, args []string, environment cliEnvironment, mode scanCommandMode) error {
 	rescan := mode == rescanCommand
 	retry := mode == retryCommand
@@ -653,11 +768,7 @@ func runScanCommand(ctx context.Context, args []string, environment cliEnvironme
 	} else if !rescan {
 		flags.BoolVar(&stopOnError, "stop-on-error", false, "stop after recording the first failed commit")
 	}
-	modelFlag := flags.String("model", "", "model identifier")
-	effortFlag := flags.String("effort", "", "Codex reasoning effort")
-	codexBinaryFlag := flags.String("codex-bin", "", "Codex CLI executable")
-	codexProfileFlag := flags.String("codex-profile", "", "Codex configuration profile")
-	codexTimeoutFlag := flags.String("codex-timeout", "", "per-commit Codex timeout")
+	reviewerFlags := addReviewerFlags(flags, "per-commit")
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
@@ -757,33 +868,9 @@ func runScanCommand(ctx context.Context, args []string, environment cliEnvironme
 		}
 	}
 	setFlags := visitedFlagNames(flags)
-	resolve := func(key, commandLineValue string) (resolvedSetting, error) {
-		setting, _ := settingByKey(key)
-		return resolveSettingValue(ctx, store, environment.Getenv, setting, commandLineValue, setFlags[key])
-	}
-	model, err := resolve("model", *modelFlag)
+	configuration, err := resolveReviewerConfiguration(ctx, store, environment, reviewerFlags, setFlags)
 	if err != nil {
 		return err
-	}
-	effort, err := resolve("effort", *effortFlag)
-	if err != nil {
-		return err
-	}
-	codexBinary, err := resolve("codex-bin", *codexBinaryFlag)
-	if err != nil {
-		return err
-	}
-	codexProfile, err := resolve("codex-profile", *codexProfileFlag)
-	if err != nil {
-		return err
-	}
-	codexTimeoutValue, err := resolve("codex-timeout", *codexTimeoutFlag)
-	if err != nil {
-		return err
-	}
-	codexTimeout, err := time.ParseDuration(codexTimeoutValue.Value)
-	if err != nil {
-		return fmt.Errorf("parse codex-timeout: %w", err)
 	}
 	reviewPrompt, err := resolveReviewerPrompt(ctx, store, "review")
 	if err != nil {
@@ -791,12 +878,8 @@ func runScanCommand(ctx context.Context, args []string, environment cliEnvironme
 	}
 
 	factory := func() (Reviewer, ReviewIdentity, error) {
-		backend, identity, err := newCodexReviewer(
-			ctx, repository, store, environment,
-			model.Value, effort.Value,
-			codexBinary.Value, codexProfile.Value, codexTimeout,
-			reviewPrompt,
-		)
+		backend, identity, err := newConfiguredReviewer(
+			ctx, repository, store, environment, configuration, reviewPrompt)
 		return backend, identity, err
 	}
 	return scanRepository(ctx, repository, store, scanOptions{
@@ -813,23 +896,26 @@ func runScanCommand(ctx context.Context, args []string, environment cliEnvironme
 		Now:             environment.Now,
 		ElapsedNow:      environment.ElapsedNow,
 		NewReviewer:     factory,
+		FailureIdentity: ReviewIdentity{
+			Harness: configuration.Harness, Model: modelByName(configuration.Model),
+			ReasoningEffort: configuration.Effort, PromptVersion: reviewPrompt.PromptVersion,
+		},
 	})
 }
 
-func newCodexReviewer(
+func newConfiguredReviewer(
 	ctx context.Context,
 	repository *GitRepository,
 	store *Store,
 	environment cliEnvironment,
-	model, effort, codexBinary, codexProfile string,
-	codexTimeout time.Duration,
+	configuration reviewerConfiguration,
 	prompt reviewerPrompt,
-) (*CodexReviewer, ReviewIdentity, error) {
-	configuredModel := strings.TrimSpace(model)
+) (configuredReviewer, ReviewIdentity, error) {
+	configuredModel := strings.TrimSpace(configuration.Model)
 	if configuredModel == "" {
 		return nil, ReviewIdentity{}, errors.New("model is required; configure it, set AIR_MODEL, or pass --model")
 	}
-	configuredEffort := strings.TrimSpace(effort)
+	configuredEffort := strings.TrimSpace(configuration.Effort)
 	if configuredEffort == "" {
 		return nil, ReviewIdentity{}, errors.New("reasoning effort is required; configure it, set AIR_REASONING_EFFORT, or pass --effort")
 	}
@@ -837,28 +923,37 @@ func newCodexReviewer(
 	if err != nil {
 		return nil, ReviewIdentity{}, err
 	}
-	return &CodexReviewer{
-			Repository: repository, Binary: codexBinary, Model: configuredModel,
-			Effort: configuredEffort, Profile: codexProfile, Prompt: prompt.Static, Timeout: codexTimeout,
+	identity := ReviewIdentity{
+		Harness: configuration.Harness, Model: reviewModel,
+		ReasoningEffort: configuredEffort, PromptVersion: prompt.PromptVersion,
+	}
+	switch configuration.Harness {
+	case codexReviewerName:
+		return &CodexReviewer{
+			Repository: repository, Binary: configuration.CodexBinary, Model: configuredModel,
+			Effort: configuredEffort, Profile: configuration.CodexProfile,
+			Prompt: prompt.Static, Timeout: configuration.CodexTimeout,
 			CommandContext: environment.CodexCommand,
-		}, ReviewIdentity{
-			Harness: codexReviewerName, Model: reviewModel,
-			ReasoningEffort: configuredEffort, PromptVersion: prompt.PromptVersion,
-		}, nil
+		}, identity, nil
+	case claudeReviewerName:
+		return &ClaudeReviewer{
+			Repository: repository, Binary: configuration.ClaudeBinary, Model: configuredModel,
+			Effort: configuredEffort, Prompt: prompt.Static, Timeout: configuration.ClaudeTimeout,
+			CommandContext: environment.ClaudeCommand,
+		}, identity, nil
+	default:
+		return nil, ReviewIdentity{}, fmt.Errorf("unsupported review harness %q", configuration.Harness)
+	}
 }
 
 func runRecheck(ctx context.Context, args []string, environment cliEnvironment) error {
 	flags := newFlagSet("recheck", environment.Stderr)
 	limit := flags.Int("limit", 0, "maximum findings to recheck; zero means unlimited")
 	batchSize := flags.Int("batch-size", defaultRecheckBatchSize, "findings per model call")
-	force := flags.Bool("force", false, "repeat checks already completed with this model at HEAD")
+	force := flags.Bool("force", false, "repeat checks already completed with this harness configuration at HEAD")
 	dryRun := flags.Bool("dry-run", false, "show pending work without reviewing or writing")
 	continueOnError := flags.Bool("continue-on-error", false, "continue after a failed model batch")
-	modelFlag := flags.String("model", "", "model identifier")
-	effortFlag := flags.String("effort", "", "Codex reasoning effort")
-	codexBinaryFlag := flags.String("codex-bin", "", "Codex CLI executable")
-	codexProfileFlag := flags.String("codex-profile", "", "Codex configuration profile")
-	codexTimeoutFlag := flags.String("codex-timeout", "", "per-batch Codex timeout")
+	reviewerFlags := addReviewerFlags(flags, "per-batch")
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
@@ -889,57 +984,29 @@ func runRecheck(ctx context.Context, args []string, environment cliEnvironment) 
 	}
 	defer store.Close()
 	setFlags := visitedFlagNames(flags)
-	resolve := func(key, commandLineValue string) (resolvedSetting, error) {
-		setting, _ := settingByKey(key)
-		return resolveSettingValue(ctx, store, environment.Getenv, setting, commandLineValue, setFlags[key])
-	}
-	model, err := resolve("model", *modelFlag)
+	configuration, err := resolveReviewerConfiguration(ctx, store, environment, reviewerFlags, setFlags)
 	if err != nil {
 		return err
-	}
-	effort, err := resolve("effort", *effortFlag)
-	if err != nil {
-		return err
-	}
-	codexBinary, err := resolve("codex-bin", *codexBinaryFlag)
-	if err != nil {
-		return err
-	}
-	codexProfile, err := resolve("codex-profile", *codexProfileFlag)
-	if err != nil {
-		return err
-	}
-	codexTimeoutValue, err := resolve("codex-timeout", *codexTimeoutFlag)
-	if err != nil {
-		return err
-	}
-	codexTimeout, err := time.ParseDuration(codexTimeoutValue.Value)
-	if err != nil {
-		return fmt.Errorf("parse codex-timeout: %w", err)
 	}
 	recheckPrompt, err := resolveReviewerPrompt(ctx, store, "recheck")
 	if err != nil {
 		return err
 	}
-	configuredModel := strings.TrimSpace(model.Value)
+	configuredModel := strings.TrimSpace(configuration.Model)
 	if configuredModel == "" {
 		return errors.New("model is required; configure it, set AIR_MODEL, or pass --model")
 	}
-	configuredEffort := strings.TrimSpace(effort.Value)
+	configuredEffort := strings.TrimSpace(configuration.Effort)
 	if configuredEffort == "" {
 		return errors.New("reasoning effort is required; configure it, set AIR_REASONING_EFFORT, or pass --effort")
 	}
 	factory := func() (RecheckReviewer, ReviewIdentity, error) {
-		backend, identity, err := newCodexReviewer(
-			ctx, repository, store, environment,
-			configuredModel, configuredEffort,
-			codexBinary.Value, codexProfile.Value, codexTimeout,
-			recheckPrompt,
-		)
+		backend, identity, err := newConfiguredReviewer(
+			ctx, repository, store, environment, configuration, recheckPrompt)
 		return backend, identity, err
 	}
 	return recheckRepository(ctx, repository, store, recheckOptions{
-		FindingIDs: ids, Harness: codexReviewerName, Model: configuredModel,
+		FindingIDs: ids, Harness: configuration.Harness, Model: configuredModel,
 		ReasoningEffort: configuredEffort, PromptVersion: recheckPrompt.PromptVersion,
 		Limit: *limit, BatchSize: *batchSize,
 		Force: *force, DryRun: *dryRun, ContinueOnError: *continueOnError,

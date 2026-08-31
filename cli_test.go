@@ -230,6 +230,52 @@ func TestCLIDoctorChecksCodexConfigurationAndAuthentication(t *testing.T) {
 	}
 }
 
+func TestCLIDoctorChecksClaudeConfigurationAndAuthentication(t *testing.T) {
+	ctx := context.Background()
+	_, directory := newTestGitRepository(t)
+	base := testCommitFile(t, directory, "app.txt", []byte("base\n"), "base")
+	executable, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var stdout bytes.Buffer
+	var invokedName string
+	var invokedArgs []string
+	environment := cliEnvironment{
+		Cwd: directory, Stdout: &stdout, Stderr: &bytes.Buffer{}, Getenv: func(string) string { return "" },
+		ClaudeCommand: func(commandContext context.Context, name string, args ...string) *exec.Cmd {
+			invokedName = name
+			invokedArgs = append([]string(nil), args...)
+			command := exec.CommandContext(commandContext, os.Args[0], "-test.run=^TestDoctorLoginHelper$")
+			command.Env = append(os.Environ(), "AIR_DOCTOR_HELPER=1")
+			return command
+		},
+	}
+	if err := runCLI(ctx, []string{"init", base}, environment); err != nil {
+		t.Fatal(err)
+	}
+	for _, setting := range [][2]string{
+		{"harness", "claude"}, {"model", "claude-sonnet-test"},
+		{"effort", "high"}, {"claude-bin", executable},
+	} {
+		if err := runCLI(ctx, []string{"config", "set", setting[0], setting[1]}, environment); err != nil {
+			t.Fatalf("set %s: %v", setting[0], err)
+		}
+	}
+	stdout.Reset()
+	if err := runCLI(ctx, []string{"doctor"}, environment); err != nil {
+		t.Fatalf("doctor: %v\n%s", err, stdout.String())
+	}
+	if invokedName != executable || len(invokedArgs) != 2 || invokedArgs[0] != "auth" || invokedArgs[1] != "status" {
+		t.Fatalf("doctor Claude invocation = %q %q", invokedName, invokedArgs)
+	}
+	if !strings.Contains(stdout.String(), "PASS review harness") ||
+		!strings.Contains(stdout.String(), "PASS Claude executable") ||
+		!strings.Contains(stdout.String(), "PASS Claude authentication") {
+		t.Fatalf("doctor output:\n%s", stdout.String())
+	}
+}
+
 func TestDoctorLoginHelper(t *testing.T) {
 	if os.Getenv("AIR_DOCTOR_HELPER") != "1" {
 		return
@@ -289,6 +335,51 @@ func TestCLIScanDefaultsToCodex(t *testing.T) {
 		!strings.Contains(stdout.String(), "Tokens: 15 total (10 input, 4 cached input, 2 cache writes, 5 output, 2 reasoning output)") ||
 		!strings.Contains(stdout.String(), "Estimated cost: unavailable") {
 		t.Fatalf("show output lacks review identity:\n%s", stdout.String())
+	}
+}
+
+func TestCLIScanWithClaudeHarness(t *testing.T) {
+	ctx := context.Background()
+	repository, directory := newTestGitRepository(t)
+	base := testCommitFile(t, directory, "app.txt", []byte("base\n"), "base")
+	head := testCommitFile(t, directory, "app.txt", []byte("changed\n"), "change")
+	command, invocation := newClaudeTestCommand(t, ReviewOutput{
+		NewFindings: []NewFinding{}, ResolvedFindings: []ResolvedFinding{},
+		Summary: "Reviewed with local Claude.",
+	}, "")
+	var stdout bytes.Buffer
+	environment := cliEnvironment{
+		Cwd: directory, Stdout: &stdout, Stderr: &bytes.Buffer{},
+		Getenv: func(string) string { return "" }, ClaudeCommand: command,
+	}
+	if err := runCLI(ctx, []string{"init", base}, environment); err != nil {
+		t.Fatal(err)
+	}
+	if err := runCLI(ctx, []string{
+		"scan", "--harness", "claude", "--model", "claude-test", "--effort", "high",
+		"--claude-bin", "/custom/claude", "--claude-timeout", "3m",
+	}, environment); err != nil {
+		t.Fatalf("scan: %v", err)
+	}
+	if invocation.Name != "/custom/claude" ||
+		testArgumentValue(invocation.Args, "--model") != "claude-test" ||
+		testArgumentValue(invocation.Args, "--effort") != "high" {
+		t.Fatalf("Claude invocation = %+v", invocation)
+	}
+	store, err := OpenStore(ctx, repository.DatabasePath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	record, err := store.Commit(ctx, head)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if record.Harness != claudeReviewerName || record.Model != "claude-test" ||
+		record.ReasoningEffort != "high" || record.ReportedCostMicrousd == nil ||
+		*record.ReportedCostMicrousd != 1234 || record.Usage == nil ||
+		!record.Usage.ReasoningOutputTokensUnreported {
+		t.Fatalf("Claude review record = %+v", record)
 	}
 }
 
@@ -426,7 +517,9 @@ func TestCLIStoredConfigurationDrivesScan(t *testing.T) {
 		t.Fatalf("config list: %v", err)
 	}
 	configOutput := stdout.String()
-	if !strings.Contains(configOutput, "model") || !strings.Contains(configOutput, "stored-model") ||
+	if !strings.Contains(configOutput, "harness") || !strings.Contains(configOutput, "codex") ||
+		!strings.Contains(configOutput, "claude-bin") || !strings.Contains(configOutput, "claude") ||
+		!strings.Contains(configOutput, "model") || !strings.Contains(configOutput, "stored-model") ||
 		!strings.Contains(configOutput, "database") || !strings.Contains(configOutput, "codex-bin") ||
 		strings.Contains(configOutput, "base-url") || strings.Contains(configOutput, "api-key") ||
 		strings.Contains(configOutput, "reviewer") {
@@ -499,7 +592,7 @@ func TestCLIConfigGetUnsetAndValidation(t *testing.T) {
 	if err := runCLI(ctx, []string{"config", "list"}, environment); err != nil {
 		t.Fatalf("empty list: %v", err)
 	}
-	if !strings.Contains(stdout.String(), "No Codex configuration stored") {
+	if !strings.Contains(stdout.String(), "No review configuration stored") {
 		t.Fatalf("empty list output = %q", stdout.String())
 	}
 	if err := runCLI(ctx, []string{"config", "set", "model", "test-model"}, environment); err != nil {
@@ -663,6 +756,24 @@ func TestCLIRecheckUsesModelOverridesAndResumesAtHEAD(t *testing.T) {
 	if !strings.Contains(stdout.String(), "gpt-5.6-sol/xhigh") || !strings.Contains(stdout.String(), "1 uncertain") {
 		t.Fatalf("strong recheck output:\n%s", stdout.String())
 	}
+	claudeCommand, claudeInvocation := newClaudeTestCommand(t, RecheckOutput{
+		Findings: []RecheckFindingResult{
+			{ID: 2, Outcome: "still_present", Reason: "Claude confirmed the path still fails."},
+		},
+		Summary: "Checked with a second harness.",
+	}, "")
+	environment.ClaudeCommand = claudeCommand
+	stdout.Reset()
+	if err := runCLI(ctx, []string{
+		"recheck", "--harness", "claude", "--model", "gpt-5.6-sol", "--effort", "xhigh", "2",
+	}, environment); err != nil {
+		t.Fatalf("Claude recheck: %v", err)
+	}
+	if claudeInvocation.Name == "" ||
+		!strings.Contains(stdout.String(), "claude:gpt-5.6-sol/xhigh") ||
+		!strings.Contains(stdout.String(), "1 still present") {
+		t.Fatalf("Claude recheck invocation=%q output=%q", claudeInvocation.Name, stdout.String())
+	}
 	stdout.Reset()
 	if err := runCLI(ctx, []string{"finding", "2"}, environment); err != nil {
 		t.Fatal(err)
@@ -675,7 +786,7 @@ func TestCLIRecheckUsesModelOverridesAndResumesAtHEAD(t *testing.T) {
 	if err := runCLI(ctx, []string{"stats"}, environment); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(stdout.String(), "Rechecks: 2 attempts") {
+	if !strings.Contains(stdout.String(), "Rechecks: 3 attempts") {
 		t.Fatalf("stats with rechecks:\n%s", stdout.String())
 	}
 }

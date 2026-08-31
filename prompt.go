@@ -45,26 +45,27 @@ Return only the JSON object required by the supplied output schema.`
 const codexRecheckPrompt = codexRecheckInstructions + "\n\n" + codexRecheckProtocol
 
 type reviewerPrompt struct {
-	Kind           string
-	ConfigKey      string
-	Instructions   string
-	Static         string
-	Source         string
-	PromptVersion  string
-	BuiltinVersion string
-	Protocol       string
+	Kind            string
+	ConfigKey       string
+	LegacyConfigKey string
+	Instructions    string
+	Static          string
+	Source          string
+	PromptVersion   string
+	BuiltinVersion  string
+	Protocol        string
 }
 
 func reviewerPromptSpecs() []reviewerPrompt {
 	return []reviewerPrompt{
 		{
-			Kind: "review", ConfigKey: "prompt.review.codex",
+			Kind: "review", ConfigKey: "prompt.review", LegacyConfigKey: "prompt.review.codex",
 			Instructions: codexReviewInstructions, Static: codexReviewerPrompt,
 			Source: "built-in", PromptVersion: promptVersion, BuiltinVersion: promptVersion,
 			Protocol: codexReviewProtocol,
 		},
 		{
-			Kind: "recheck", ConfigKey: "prompt.recheck.codex",
+			Kind: "recheck", ConfigKey: "prompt.recheck", LegacyConfigKey: "prompt.recheck.codex",
 			Instructions: codexRecheckInstructions, Static: codexRecheckPrompt,
 			Source: "built-in", PromptVersion: recheckPromptVersion, BuiltinVersion: recheckPromptVersion,
 			Protocol: codexRecheckProtocol,
