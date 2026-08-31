@@ -9,7 +9,6 @@ import (
 	"os/exec"
 	"path"
 	"path/filepath"
-	"strconv"
 	"strings"
 )
 
@@ -265,61 +264,11 @@ func (r *GitRepository) CommitDiff(ctx context.Context, parentSHA, sha string) (
 	}, nil
 }
 
-func (r *GitRepository) ReadFile(ctx context.Context, sha, repositoryPath string) (string, error) {
-	if err := validateRepositoryPath(repositoryPath); err != nil {
-		return "", err
-	}
-	out, err := r.runBytes(ctx, maxToolBytes, "show", sha+":"+repositoryPath)
-	if err != nil {
-		return "", err
-	}
-	return formatLimitedOutput(out), nil
-}
-
-func (r *GitRepository) Grep(ctx context.Context, sha, pattern, repositoryPath string) (string, error) {
-	if pattern == "" || len(pattern) > 256 || strings.ContainsRune(pattern, '\x00') {
-		return "", errors.New("grep pattern must contain 1 to 256 bytes")
-	}
-	args := []string{"grep", "-n", "-F", "-e", pattern, sha}
-	if repositoryPath != "" {
-		if err := validateRepositoryPath(repositoryPath); err != nil {
-			return "", err
-		}
-		args = append(args, "--", repositoryPath)
-	}
-	out, err := r.runBytesAllowExitOne(ctx, maxToolBytes, args...)
-	if err != nil {
-		return "", err
-	}
-	if len(out.data) == 0 {
-		return "no matches", nil
-	}
-	return formatLimitedOutput(out), nil
-}
-
 func (r *GitRepository) DiffFile(ctx context.Context, parentSHA, sha, repositoryPath string) (string, error) {
 	if err := validateRepositoryPath(repositoryPath); err != nil {
 		return "", err
 	}
 	out, err := r.runBytes(ctx, maxToolBytes, "diff", "--no-ext-diff", "--no-textconv", "--no-color", parentSHA, sha, "--", repositoryPath)
-	if err != nil {
-		return "", err
-	}
-	return formatLimitedOutput(out), nil
-}
-
-func (r *GitRepository) Log(ctx context.Context, sha, repositoryPath string, maxCount int) (string, error) {
-	if maxCount < 1 || maxCount > 20 {
-		return "", errors.New("max_count must be between 1 and 20")
-	}
-	args := []string{"log", "--format=%H %aI %s", "-n", strconv.Itoa(maxCount), sha}
-	if repositoryPath != "" {
-		if err := validateRepositoryPath(repositoryPath); err != nil {
-			return "", err
-		}
-		args = append(args, "--", repositoryPath)
-	}
-	out, err := r.runBytes(ctx, maxToolBytes, args...)
 	if err != nil {
 		return "", err
 	}
@@ -397,14 +346,6 @@ func (r *GitRepository) run(ctx context.Context, args ...string) (string, error)
 }
 
 func (r *GitRepository) runBytes(ctx context.Context, limit int, args ...string) (limitedOutput, error) {
-	return r.runBytesWithExitOne(ctx, limit, false, args...)
-}
-
-func (r *GitRepository) runBytesAllowExitOne(ctx context.Context, limit int, args ...string) (limitedOutput, error) {
-	return r.runBytesWithExitOne(ctx, limit, true, args...)
-}
-
-func (r *GitRepository) runBytesWithExitOne(ctx context.Context, limit int, allowExitOne bool, args ...string) (limitedOutput, error) {
 	cmdArgs := []string{"-C", r.WorkTree, "--literal-pathspecs"}
 	cmdArgs = append(cmdArgs, args...)
 	cmd := exec.CommandContext(ctx, "git", cmdArgs...)
@@ -415,10 +356,7 @@ func (r *GitRepository) runBytesWithExitOne(ctx context.Context, limit int, allo
 	cmd.Stderr = &stderr
 	err := cmd.Run()
 	if err != nil {
-		var exitError *exec.ExitError
-		if !(allowExitOne && errors.As(err, &exitError) && exitError.ExitCode() == 1) {
-			return limitedOutput{}, commandError("git", cmdArgs, stderr.String(), err)
-		}
+		return limitedOutput{}, commandError("git", cmdArgs, stderr.String(), err)
 	}
 	return limitedOutput{data: stdout.data.Bytes(), exceeded: stdout.exceeded}, nil
 }

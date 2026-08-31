@@ -52,7 +52,7 @@ func TestRecheckContinuesAndResumesSuccessfulBatches(t *testing.T) {
 	}}
 	var output bytes.Buffer
 	err = recheckRepository(ctx, repository, store, recheckOptions{
-		Reviewer: "codex", Model: "check-model", ReasoningEffort: "high",
+		Model: "check-model", ReasoningEffort: "high",
 		BatchSize: 2, ContinueOnError: true, Output: &output,
 		NewReviewer: func() (RecheckReviewer, ReviewIdentity, error) {
 			return first, ReviewIdentity{Model: modelByName("check-model"), ReasoningEffort: "high"}, nil
@@ -61,7 +61,7 @@ func TestRecheckContinuesAndResumesSuccessfulBatches(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "1 recheck batches failed") || len(first.calls) != 2 {
 		t.Fatalf("first run calls=%d err=%v output=%s", len(first.calls), err, output.String())
 	}
-	prior, err := store.PreviouslyRecheckedFindingIDs(ctx, head, "codex", "check-model", "high", recheckPromptVersion)
+	prior, err := store.PreviouslyRecheckedFindingIDs(ctx, head, "check-model", "high", recheckPromptVersion)
 	if err != nil || len(prior) != 2 {
 		t.Fatalf("successful first batch = %v, %v", prior, err)
 	}
@@ -74,7 +74,7 @@ func TestRecheckContinuesAndResumesSuccessfulBatches(t *testing.T) {
 	}}
 	output.Reset()
 	if err := recheckRepository(ctx, repository, store, recheckOptions{
-		Reviewer: "codex", Model: "check-model", ReasoningEffort: "high",
+		Model: "check-model", ReasoningEffort: "high",
 		BatchSize: 2, Output: &output,
 		NewReviewer: func() (RecheckReviewer, ReviewIdentity, error) {
 			return second, ReviewIdentity{Model: modelByName("check-model"), ReasoningEffort: "high"}, nil
@@ -95,7 +95,7 @@ func TestRecheckContinuesAndResumesSuccessfulBatches(t *testing.T) {
 	}}
 	output.Reset()
 	if err := recheckRepository(ctx, repository, store, recheckOptions{
-		Reviewer: "codex", Model: "check-model", ReasoningEffort: "high",
+		Model: "check-model", ReasoningEffort: "high",
 		PromptVersion: customPromptIdentity, BatchSize: 3, Output: &output,
 		NewReviewer: func() (RecheckReviewer, ReviewIdentity, error) {
 			return third, ReviewIdentity{
@@ -109,7 +109,7 @@ func TestRecheckContinuesAndResumesSuccessfulBatches(t *testing.T) {
 	if len(third.calls) != 1 || strings.Contains(output.String(), "already checked") {
 		t.Fatalf("custom prompt calls=%d output=%s", len(third.calls), output.String())
 	}
-	prior, err = store.PreviouslyRecheckedFindingIDs(ctx, head, "codex", "check-model", "high", customPromptIdentity)
+	prior, err = store.PreviouslyRecheckedFindingIDs(ctx, head, "check-model", "high", customPromptIdentity)
 	if err != nil || len(prior) != 3 {
 		t.Fatalf("custom-prompt results = %v, %v", prior, err)
 	}

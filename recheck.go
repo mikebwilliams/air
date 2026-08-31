@@ -13,7 +13,6 @@ type recheckReviewerFactory func() (RecheckReviewer, ReviewIdentity, error)
 
 type recheckOptions struct {
 	FindingIDs      []int64
-	Reviewer        string
 	Model           string
 	ReasoningEffort string
 	PromptVersion   string
@@ -39,9 +38,6 @@ func recheckRepository(
 	}
 	if options.BatchSize <= 0 || options.BatchSize > maxRecheckBatchSize {
 		return fmt.Errorf("recheck batch size must be between 1 and %d", maxRecheckBatchSize)
-	}
-	if options.Reviewer != "codex" && options.Reviewer != "http" {
-		return fmt.Errorf("unknown reviewer %q; expected codex or http", options.Reviewer)
 	}
 	if options.Model == "" {
 		return errors.New("recheck model must not be empty")
@@ -76,7 +72,7 @@ func recheckRepository(
 	previous := map[int64]struct{}{}
 	promptIdentity := promptVersionOrDefault(options.PromptVersion, recheckPromptVersion)
 	if !options.Force {
-		previous, err = store.PreviouslyRecheckedFindingIDs(ctx, headSHA, options.Reviewer,
+		previous, err = store.PreviouslyRecheckedFindingIDs(ctx, headSHA,
 			options.Model, options.ReasoningEffort, promptIdentity)
 		if err != nil {
 			return err
@@ -170,7 +166,7 @@ func recheckRepository(
 			}
 			return fmt.Errorf("recheck %s: %w", formatFindingIDRange(batch), err)
 		}
-		if _, err := store.ApplyRecheck(ctx, headSHA, options.Reviewer, identity, batch, result, now()); err != nil {
+		if _, err := store.ApplyRecheck(ctx, headSHA, identity, batch, result, now()); err != nil {
 			return err
 		}
 		resolved, stillPresent, uncertain := countRecheckOutcomes(result.Output)

@@ -82,7 +82,7 @@ air config set effort low
 air scan
 ```
 
-Reviewer settings may come from a scan flag, an environment variable, the AIR
+Codex settings may come from a scan flag, an environment variable, the AIR
 database, or a built-in default, in that order of precedence:
 
 ```text
@@ -107,33 +107,27 @@ air config list
 air config list --effective
 ```
 
-Effective output includes the winning source for every setting. API keys are
-always redacted in `config get` and `config list` output.
+Effective output includes the winning source for every setting.
 
 | Database setting | Scan flag | Environment variable | Built-in default |
 | --- | --- | --- | --- |
-| `reviewer` | `--reviewer` | `AIR_REVIEWER` | `codex` |
 | `model` | `--model` | `AIR_MODEL` | none |
 | `effort` | `--effort` | `AIR_REASONING_EFFORT` | none |
 | `codex-bin` | `--codex-bin` | `AIR_CODEX_BIN` | `codex` |
 | `codex-profile` | `--codex-profile` | `AIR_CODEX_PROFILE` | none |
 | `codex-timeout` | `--codex-timeout` | `AIR_CODEX_TIMEOUT` | `20m` |
-| `base-url` | `--base-url` | `AIR_BASE_URL` | `https://api.openai.com/v1` |
-| `api-key-env` | `--api-key-env` | `AIR_API_KEY_ENV` | none |
-| `api-key` | `--api-key` | `AIR_API_KEY`, then `OPENAI_API_KEY` | none |
 
 Reviewer instructions can also be customized per repository. AIR has separate
-instructions for commit review and HEAD recheck, and for the Codex and HTTP
-backends:
+instructions for commit review and HEAD recheck:
 
 ```bash
 air prompt list
-air prompt show review --reviewer codex
-air prompt show review --reviewer codex --full
-air prompt set review --reviewer codex --file review-prompt.txt
+air prompt show review
+air prompt show review --full
+air prompt set review --file review-prompt.txt
 printf '%s\n' 'Focus on transaction and lifetime safety.' | \
-  air prompt set review --reviewer codex --stdin
-air prompt reset review --reviewer codex
+  air prompt set review --stdin
+air prompt reset review
 ```
 
 `show` prints the editable instructions. `show --full` also includes AIR's
@@ -143,8 +137,9 @@ remains parseable and repository inspection remains read-only. The override is
 stored in the repository database and is included by `air backup`.
 
 Each custom prompt receives a stable `custom:sha256:...` identity derived from
-its complete static prompt, kind, backend, and built-in protocol version. AIR
-records that identity on every commit-review or recheck attempt. Resetting an
+its complete static prompt, kind, fixed Codex domain tag, and built-in protocol
+version. AIR records that identity on every commit-review or recheck attempt.
+Resetting an
 override restores the numeric built-in version. Changing a recheck prompt makes
 findings eligible for recheck again because it is a distinct review identity.
 
@@ -184,7 +179,7 @@ variables are required.
 
 Requests above 272,000 input tokens use the stored long-context rates.
 Reasoning tokens are included in output tokens and are not charged twice. When
-the backend reports cache-write usage, AIR calculates one estimate. The Codex
+Codex reports cache-write usage, AIR calculates one estimate. The Codex
 JSONL format may omit cache-write usage; in that case AIR stores a minimum and
 maximum estimate spanning ordinary-input and cache-write pricing. Models absent
 from AIR's registry remain usable and are stored with explicitly unknown
@@ -215,23 +210,6 @@ Stored model records override compiled pricing snapshots during later scans.
 
 These are API-equivalent USD estimates. A Codex run authenticated through a
 ChatGPT account does not expose an authoritative per-run monetary charge.
-
-The original OpenAI-compatible HTTP reviewer remains available as an explicit
-fallback:
-
-```bash
-air config set reviewer http
-air config set model your-model
-printf '%s\n' 'your-key' | air config set --stdin api-key
-air scan
-```
-
-For that backend, `AIR_BASE_URL` defaults to `https://api.openai.com/v1`.
-`AIR_API_KEY_ENV` may name another key variable, and `OPENAI_API_KEY` is the
-final environment fallback. The corresponding database settings are `base-url`,
-`api-key-env`, and `api-key`; the corresponding flags are `--base-url`,
-`--api-key-env`, and `--api-key`. A stored API key is plaintext in the mode-0600
-SQLite database, so an environment variable is preferable on shared machines.
 
 ## Usage
 
@@ -275,12 +253,12 @@ air retry --continue-on-error
 `air failures --json` exposes the same queue to automation. Each record keeps
 the latest error, timestamp, model/effort, whether it was a rescan, and the
 number of failed attempts. `air retry` processes live failed commits oldest
-first using current reviewer configuration and accepts the normal reviewer,
-model, effort, timeout, and limit overrides. A successful review or intentional
+first using current Codex configuration and accepts the normal model, effort,
+timeout, and limit overrides. A successful review or intentional
 skip atomically removes its failure record. `air clean` removes failure records
 whose commits no longer exist on master.
 
-Preview the same work without creating a reviewer or changing the database:
+Preview the same work without starting Codex or changing the database:
 
 ```bash
 air pending
@@ -368,7 +346,7 @@ air recheck --dry-run
 
 With no IDs, `recheck` processes all eligible open findings. It requires `HEAD`
 to be the tip of `master`, pins that SHA for the entire invocation, and uses
-the same reviewer configuration precedence as `scan`. Findings are processed
+the same Codex configuration precedence as `scan`. Findings are processed
 in batches of 20 by default; `--batch-size N` accepts 1 through 50.
 
 Every finding receives one recorded outcome: `resolved`, `still_present`, or
@@ -379,8 +357,8 @@ inspection to the recorded file, allowing it to recognize renames and
 cross-file fixes.
 
 Successful results are resumable per finding. A later invocation skips a
-finding already checked at the same HEAD with the same reviewer, model, effort,
-and recheck prompt version. A changed HEAD or different model/effort checks it
+finding already checked at the same HEAD with the same model, effort, and
+recheck prompt version. A changed HEAD or different model/effort checks it
 again; `--force` repeats an otherwise identical check. Each successful batch
 is committed independently, and `--continue-on-error` continues after a failed
 model batch. Failed batches do not change finding state; rerunning naturally
@@ -504,11 +482,9 @@ air doctor --json
 ```
 
 The doctor checks the Git repository and master ref, state permissions, schema
-version, SQLite integrity, effective reviewer/model configuration, model
-pricing, and backend prerequisites. For Codex it locates the configured binary
-and runs `codex login status`; for HTTP it validates the endpoint configuration
-and confirms that a key is available without printing it. Unknown pricing is a
-warning, while missing review credentials or an unusable database is a failed
+version, SQLite integrity, effective Codex/model configuration, model pricing,
+the configured Codex binary, and `codex login status`. Unknown pricing is a
+warning, while missing Codex authentication or an unusable database is a failed
 check and a nonzero exit.
 
 ## Review and skip behavior
@@ -539,7 +515,7 @@ check and a nonzero exit.
 
 ## Reviewer access
 
-The default reviewer receives commit metadata and a bounded set of open
+Codex receives commit metadata and a bounded set of open
 resolution candidates associated with files changed by the commit. Codex is
 pointed at the exact commit and may inspect the diff, repository files, and Git
 history using its normal local tools. AIR does not check out historical commits
@@ -549,7 +525,5 @@ The Codex subprocess is ephemeral and read-only. AIR asks it not to run builds,
 tests, repository programs, or network commands. Local Codex configuration and
 exec-policy rules remain active, but actions requiring approval fail because
 the scan is noninteractive.
-
-The HTTP fallback retains AIR's constrained read-only Git tool interface.
 
 See [docs/initial_spec.md](docs/initial_spec.md) for the complete design.

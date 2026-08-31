@@ -42,34 +42,33 @@ func runPromptList(ctx context.Context, args []string, environment cliEnvironmen
 	}
 	defer closeStore()
 
-	fmt.Fprintln(environment.Stdout, "KIND     REVIEWER SOURCE    IDENTITY")
+	fmt.Fprintln(environment.Stdout, "KIND     SOURCE    IDENTITY")
 	for _, spec := range reviewerPromptSpecs() {
-		prompt, err := resolveReviewerPrompt(ctx, store, spec.Kind, spec.Reviewer)
+		prompt, err := resolveReviewerPrompt(ctx, store, spec.Kind)
 		if err != nil {
 			return err
 		}
-		fmt.Fprintf(environment.Stdout, "%-8s %-8s %-9s %s\n",
-			prompt.Kind, prompt.Reviewer, prompt.Source, prompt.PromptVersion)
+		fmt.Fprintf(environment.Stdout, "%-8s %-9s %s\n",
+			prompt.Kind, prompt.Source, prompt.PromptVersion)
 	}
 	return nil
 }
 
 func runPromptShow(ctx context.Context, args []string, environment cliEnvironment) error {
 	flags := newFlagSet("prompt show", environment.Stderr)
-	reviewer := flags.String("reviewer", "", "review backend: codex or http")
 	full := flags.Bool("full", false, "include AIR's fixed protocol and response contract")
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
-	if flags.NArg() != 1 || *reviewer == "" {
-		return errors.New("usage: air prompt show --reviewer <codex|http> [--full] <review|recheck>")
+	if flags.NArg() != 1 {
+		return errors.New("usage: air prompt show [--full] <review|recheck>")
 	}
 	_, store, closeStore, err := openRepositoryStore(ctx, environment.Cwd)
 	if err != nil {
 		return err
 	}
 	defer closeStore()
-	prompt, err := resolveReviewerPrompt(ctx, store, flags.Arg(0), strings.ToLower(*reviewer))
+	prompt, err := resolveReviewerPrompt(ctx, store, flags.Arg(0))
 	if err != nil {
 		return err
 	}
@@ -86,16 +85,15 @@ func runPromptShow(ctx context.Context, args []string, environment cliEnvironmen
 
 func runPromptSet(ctx context.Context, args []string, environment cliEnvironment) error {
 	flags := newFlagSet("prompt set", environment.Stderr)
-	reviewer := flags.String("reviewer", "", "review backend: codex or http")
 	filename := flags.String("file", "", "read instructions from this file")
 	fromStdin := flags.Bool("stdin", false, "read instructions from standard input")
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
-	if flags.NArg() != 1 || *reviewer == "" || ((*filename == "") == !*fromStdin) {
-		return errors.New("usage: air prompt set --reviewer <codex|http> (--file <path>|--stdin) <review|recheck>")
+	if flags.NArg() != 1 || ((*filename == "") == !*fromStdin) {
+		return errors.New("usage: air prompt set (--file <path>|--stdin) <review|recheck>")
 	}
-	spec, err := reviewerPromptSpec(flags.Arg(0), strings.ToLower(*reviewer))
+	spec, err := reviewerPromptSpec(flags.Arg(0))
 	if err != nil {
 		return err
 	}
@@ -139,21 +137,20 @@ func runPromptSet(ctx context.Context, args []string, environment cliEnvironment
 		return err
 	}
 	custom := spec.withCustomInstructions(instructions)
-	fmt.Fprintf(environment.Stdout, "Set %s/%s prompt (%s)\n",
-		custom.Kind, custom.Reviewer, custom.PromptVersion)
+	fmt.Fprintf(environment.Stdout, "Set %s prompt (%s)\n",
+		custom.Kind, custom.PromptVersion)
 	return nil
 }
 
 func runPromptReset(ctx context.Context, args []string, environment cliEnvironment) error {
 	flags := newFlagSet("prompt reset", environment.Stderr)
-	reviewer := flags.String("reviewer", "", "review backend: codex or http")
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
-	if flags.NArg() != 1 || *reviewer == "" {
-		return errors.New("usage: air prompt reset --reviewer <codex|http> <review|recheck>")
+	if flags.NArg() != 1 {
+		return errors.New("usage: air prompt reset <review|recheck>")
 	}
-	spec, err := reviewerPromptSpec(flags.Arg(0), strings.ToLower(*reviewer))
+	spec, err := reviewerPromptSpec(flags.Arg(0))
 	if err != nil {
 		return err
 	}
@@ -167,11 +164,11 @@ func runPromptReset(ctx context.Context, args []string, environment cliEnvironme
 		return err
 	}
 	if removed {
-		fmt.Fprintf(environment.Stdout, "Reset %s/%s prompt to built-in version %s\n",
-			spec.Kind, spec.Reviewer, spec.BuiltinVersion)
+		fmt.Fprintf(environment.Stdout, "Reset %s prompt to built-in version %s\n",
+			spec.Kind, spec.BuiltinVersion)
 	} else {
-		fmt.Fprintf(environment.Stdout, "%s/%s prompt already uses built-in version %s\n",
-			spec.Kind, spec.Reviewer, spec.BuiltinVersion)
+		fmt.Fprintf(environment.Stdout, "%s prompt already uses built-in version %s\n",
+			spec.Kind, spec.BuiltinVersion)
 	}
 	return nil
 }

@@ -29,11 +29,11 @@ func TestCLIHelpWorksWithoutRepositoryState(t *testing.T) {
 		{
 			name: "command topic", args: []string{"help", "scan"},
 			contains: []string{"air scan [OPTIONS] [FROM..TO]", "--stop-on-error", "--codex-timeout DURATION"},
-			excludes: []string{"Getting started:", "flag: help requested"},
+			excludes: []string{"Getting started:", "flag: help requested", "--reviewer", "--base-url", "--api-key"},
 		},
 		{
 			name: "command flag", args: []string{"scan", "--help"},
-			contains: []string{"air scan [OPTIONS] [FROM..TO]", "--reviewer BACKEND", "-h, --help"},
+			contains: []string{"air scan [OPTIONS] [FROM..TO]", "--model MODEL", "-h, --help"},
 		},
 		{
 			name: "short command flag", args: []string{"scan", "-h"},
@@ -61,7 +61,8 @@ func TestCLIHelpWorksWithoutRepositoryState(t *testing.T) {
 		},
 		{
 			name: "prompt nested flag", args: []string{"prompt", "show", "--help"},
-			contains: []string{"air prompt show --reviewer BACKEND [--full] KIND", "--reviewer BACKEND", "--full"},
+			contains: []string{"air prompt show [--full] KIND", "--full"},
+			excludes: []string{"--reviewer"},
 		},
 	}
 
@@ -100,6 +101,24 @@ func TestCLIHelpRejectsUnknownTopics(t *testing.T) {
 	for _, args := range [][]string{{"help", "missing"}, {"help", "finding", "missing"}} {
 		err := runCLI(context.Background(), args, environment)
 		if err == nil || !strings.Contains(err.Error(), "unknown help topic") {
+			t.Errorf("runCLI(%q) error = %v", args, err)
+		}
+	}
+}
+
+func TestCLIRemovedHTTPFlagsAreRejected(t *testing.T) {
+	tests := [][]string{
+		{"scan", "--reviewer", "http"},
+		{"recheck", "--base-url", "https://example.invalid/v1"},
+		{"prompt", "show", "--reviewer", "http", "review"},
+	}
+	for _, args := range tests {
+		environment := cliEnvironment{
+			Cwd: t.TempDir(), Stdout: &bytes.Buffer{}, Stderr: &bytes.Buffer{},
+			Getenv: func(string) string { return "" },
+		}
+		err := runCLI(context.Background(), args, environment)
+		if err == nil || !strings.Contains(err.Error(), "unknown flag") {
 			t.Errorf("runCLI(%q) error = %v", args, err)
 		}
 	}

@@ -151,18 +151,14 @@ start_sha
 prompt_version
 ```
 
-Optional public reviewer-setting keys are:
+Optional public Codex-setting keys are:
 
 ```text
-reviewer
 model
 effort
 codex-bin
 codex-profile
 codex-timeout
-base-url
-api-key-env
-api-key
 ```
 
 The CLI owns validation for these values and does not expose the internal
@@ -172,9 +168,7 @@ Optional multiline prompt overrides use these internal keys:
 
 ```text
 prompt.review.codex
-prompt.review.http
 prompt.recheck.codex
-prompt.recheck.http
 ```
 
 They are managed by `air prompt`, not exposed as ordinary scalar values through
@@ -277,7 +271,7 @@ Fields:
   reviewed commit.
 - `model`: model identifier used for a review; null for a skipped commit.
 - `reasoning_effort`: Codex reasoning effort used for a review; null for a
-  skipped commit or a backend where the concept does not apply.
+  skipped commit.
 - `prompt_version`: version of the reviewer prompt; null for a skipped commit.
 - `summary`: short human-readable review log; null for a skipped commit.
 - `raw_response`: complete raw model response for debugging and
@@ -287,7 +281,7 @@ Fields:
 - `cached_input_tokens`: cached subset of `input_tokens`; null for a skipped
   commit.
 - `cache_write_tokens`: subset of `input_tokens` newly written to the prompt
-  cache; null when the backend does not report it or for a skipped commit.
+  cache; null when Codex does not report it or for a skipped commit.
 - `output_tokens`: total output tokens reported by the reviewer, including
   reasoning output tokens; null for a skipped commit.
 - `reasoning_output_tokens`: reasoning subset of `output_tokens`; null for a
@@ -419,7 +413,7 @@ CREATE TABLE recheck_attempts (
     id                      INTEGER PRIMARY KEY,
     head_sha                TEXT NOT NULL,
     checked_at              TEXT NOT NULL,
-    reviewer                TEXT NOT NULL,
+    reviewer                TEXT NOT NULL CHECK(reviewer IN ('codex', 'http')),
     model                   TEXT NOT NULL,
     reasoning_effort        TEXT,
     prompt_version          TEXT NOT NULL,
@@ -455,6 +449,11 @@ CREATE TABLE recheck_results (
     UNIQUE(recheck_id, finding_id)
 );
 ```
+
+New recheck attempts always store `reviewer = 'codex'`. Schema version 6 keeps
+the original `http` value valid solely so databases created by earlier AIR
+builds remain readable; HTTP is not a selectable reviewer and no new HTTP
+attempts are created.
 
 `outcome` is `resolved`, `still_present`, or `uncertain`. Only `resolved`
 populates `findings.resolved_recheck_id`. The effective resolving SHA is the
@@ -552,7 +551,7 @@ Failed commits remain unprocessed but are excluded from later ordinary scans,
 including explicit-range scans, dry runs, and `air pending`. They do not count
 toward `--limit`. `air retry` selects the explicit failure queue, filters it
 against the current first-parent history of master, and processes live failures
-oldest first. Current reviewer configuration and command-line overrides are
+oldest first. Current Codex configuration and command-line overrides are
 used for the retry; the failed attempt's model and effort remain diagnostic
 metadata.
 
@@ -617,8 +616,8 @@ reason.
 
 Comments, string-content changes, translations, localization resources, and
 documentation are outside review scope. AIR passes the textual diff through
-unchanged, subject only to the binary and size transport limits above, and both
-reviewer backends enforce these exclusions semantically. AIR deliberately does
+unchanged, subject only to the binary and size transport limits above, and
+Codex enforces these exclusions semantically. AIR deliberately does
 not use path, extension, comment, or string heuristics that could hide relevant
 executable context.
 
@@ -961,15 +960,13 @@ SQLite inspection scripts independent of worktree layout.
 
 `air doctor` is a preflight for unattended or expensive scans. It checks
 repository discovery, `refs/heads/master`, state-directory and database
-permissions, supported schema version, SQLite `quick_check`, effective reviewer
-settings, selected model and pricing, and backend prerequisites. For Codex it
-locates the effective executable and runs `codex login status` with a bounded
-timeout. For HTTP it validates the effective endpoint setting and verifies that
-an API key can be resolved without displaying the secret. Unknown pricing is a
-warning; missing credentials, configuration, master, or a usable database is a
-failed check. Any failed check produces a nonzero exit after all safe applicable
-checks have been reported. `--json` emits the same named checks and aggregate
-pass/warning/failure counts.
+permissions, supported schema version, SQLite `quick_check`, effective Codex
+settings, selected model and pricing, and Codex prerequisites. It locates the
+effective executable and runs `codex login status` with a bounded timeout.
+Unknown pricing is a warning; missing configuration, Codex authentication,
+master, or a usable database is a failed check. Any failed check produces a
+nonzero exit after all safe applicable checks have been reported. `--json`
+emits the same named checks and aggregate pass/warning/failure counts.
 
 ### Backup
 
@@ -1008,18 +1005,18 @@ failures, continues through the selected batch, then returns a nonzero result
 summarizing the number of failed commits. `air scan --stop-on-error` records the
 first such failure and stops immediately. Subsequent ordinary scans defer
 recorded failures and report their count; only `air retry` attempts them again.
-Database failures and invalid global reviewer configuration always stop
+Database failures and invalid global Codex configuration always stop
 immediately.
 
 ### Failed commits
 
 ```bash
 air failures [--json]
-air retry [--continue-on-error] [reviewer flags]
+air retry [--continue-on-error] [Codex flags]
 ```
 
 `air failures` displays the durable failure queue. `air retry` processes only
-live failed commits, oldest first, and accepts `--limit` plus the same reviewer
+live failed commits, oldest first, and accepts `--limit` plus the same Codex
 configuration overrides as `scan`. A failed rescan is retried as a rescan so
 the prior successful review remains current until the retry succeeds. Failure
 records for rewritten-away commits are left for `air clean`.
@@ -1184,7 +1181,7 @@ air show <commit-ish> --review 2
 ### Recheck open findings at HEAD
 
 ```bash
-air recheck [reviewer flags] [<finding-id> ...]
+air recheck [Codex flags] [<finding-id> ...]
 air recheck --model gpt-5.6-sol --effort xhigh
 air recheck --model gpt-5.6-sol --effort xhigh 17 31 562
 ```
@@ -1211,30 +1208,29 @@ after failed model batches and returns a nonzero result at the end. Failed
 recheck batches do not change finding state or create successful-attempt rows;
 rerunning the command naturally selects them while skipping completed batches.
 
-Successful results are resumable by finding ID, target HEAD, reviewer backend,
-model, effort, and recheck prompt version. The same identity at the same HEAD is
-skipped on later runs; a changed HEAD or model/effort is eligible again.
+Successful results are resumable by finding ID, target HEAD, model, effort, and
+recheck prompt version. The same identity at the same HEAD is skipped on later
+runs; a changed HEAD or model/effort is eligible again.
 `--force` repeats otherwise identical successful checks. Recheck uses the same
-CLI/environment/database reviewer-setting precedence as `scan`, so a one-off
+CLI/environment/database Codex-setting precedence as `scan`, so a one-off
 stronger model needs no separate configuration record.
 
 ### Reviewer prompts
 
 ```bash
 air prompt list
-air prompt show --reviewer <codex|http> [--full] <review|recheck>
-air prompt set --reviewer <codex|http> --file <path> <review|recheck>
-air prompt set --reviewer <codex|http> --stdin <review|recheck>
-air prompt reset --reviewer <codex|http> <review|recheck>
+air prompt show [--full] <review|recheck>
+air prompt set --file <path> <review|recheck>
+air prompt set --stdin <review|recheck>
+air prompt reset <review|recheck>
 ```
 
-There are four independently configurable instruction sets: commit review and
-HEAD recheck for each reviewer backend. `list` reports whether each uses the
-built-in or database source and prints its prompt identity. `show` prints the
-editable instruction portion; `--full` appends AIR's effective fixed protocol
-and response contract. A relative `--file` path is resolved against the current
-directory. File and standard-input content must be nonempty UTF-8 and no larger
-than 256 KiB.
+There are two independently configurable instruction sets: commit review and
+HEAD recheck. `list` reports whether each uses the built-in or database source
+and prints its prompt identity. `show` prints the editable instruction portion;
+`--full` appends AIR's effective fixed protocol and response contract. A
+relative `--file` path is resolved against the current directory. File and
+standard-input content must be nonempty UTF-8 and no larger than 256 KiB.
 
 `set` stores repository-specific instructions in the existing `config` table.
 It replaces the editable instructions but cannot replace AIR's fixed
@@ -1255,7 +1251,7 @@ because superseded rescans and reconciliation calls still consumed tokens.
 Totals include input, cached-input, cache-write, output, and reasoning-output
 tokens and are grouped by model and reasoning effort. Costs are summed as lower
 and upper bounds from the estimates stored on each attempt. Attempts with
-unknown prices and attempts whose backend omitted cache-write usage are counted
+unknown prices and attempts for which Codex omitted cache-write usage are counted
 explicitly. `--since` accepts either a UTC date or an RFC3339 timestamp;
 `--model` is an exact model identifier match. Commit reviews and rechecks have
 separate attempt counts. `stats` reports average scan time per commit only from
@@ -1300,13 +1296,14 @@ list/detail layout. It is a static snapshot and therefore cannot mutate the AIR
 database or invoke editors and Git difftools. It contains no repository
 configuration, API keys, raw model responses, or external assets.
 
-## 19. Reviewer Configuration
+## 19. Codex Configuration
 
-The default reviewer is the locally installed Codex CLI. It reuses Codex's
+AIR uses the locally installed Codex CLI as its reviewer. It reuses Codex's
 existing authentication, configuration, repository instructions, and exec
-policy. AIR never reads or copies Codex credentials.
+policy. AIR never reads or copies Codex credentials. There is no remote HTTP
+review backend.
 
-Every reviewer setting has a database representation, an environment-variable
+Every Codex setting has a database representation, an environment-variable
 override, and a `scan`, `retry`, `rescan`, or `recheck` flag override. Values are
 resolved with this fixed precedence:
 
@@ -1316,22 +1313,15 @@ command-line flag > environment variable > database > built-in default
 
 | Database setting | Scan flag | Environment variable | Default |
 | --- | --- | --- | --- |
-| `reviewer` | `--reviewer` | `AIR_REVIEWER` | `codex` |
 | `model` | `--model` | `AIR_MODEL` | none |
 | `effort` | `--effort` | `AIR_REASONING_EFFORT` | none |
 | `codex-bin` | `--codex-bin` | `AIR_CODEX_BIN` | `codex` |
 | `codex-profile` | `--codex-profile` | `AIR_CODEX_PROFILE` | none |
 | `codex-timeout` | `--codex-timeout` | `AIR_CODEX_TIMEOUT` | `20m` |
-| `base-url` | `--base-url` | `AIR_BASE_URL` | `https://api.openai.com/v1` |
-| `api-key-env` | `--api-key-env` | `AIR_API_KEY_ENV` | none |
-| `api-key` | `--api-key` | `AIR_API_KEY`, then `OPENAI_API_KEY` | none |
 
-`air config set`, `get`, `unset`, and `list` manage only these public reviewer
+`air config set`, `get`, `unset`, and `list` manage only these public Codex
 settings in the existing `config` table. `air config list --effective` includes
-all settings, their resolved values, and their winning sources. Sensitive values
-are redacted by both `get` and `list`. `air config set --stdin api-key` avoids
-putting a persisted API key in shell history, though the value remains plaintext
-in AIR's mode-0600 SQLite database.
+all settings, their resolved values, and their winning sources.
 
 Codex reviews require explicit effective `model` and `effort` values so the exact
 review provenance is known rather than inferred from changing local Codex
@@ -1339,22 +1329,13 @@ defaults. AIR passes them to Codex as `--model` and
 `model_reasoning_effort=<value>`. `codex-timeout` is a positive Go duration and
 bounds each commit review or recheck batch independently.
 
-The `http` reviewer remains as an explicit fallback. `api-key-env` may name a
-different key variable. Credential resolution is `--api-key`,
-`--api-key-env`, `AIR_API_KEY_ENV`, `AIR_API_KEY`, `OPENAI_API_KEY`, database
-`api-key-env`, then database `api-key`. The HTTP reviewer requires an effective
-model and API key and uses an OpenAI-compatible `/chat/completions` endpoint
-with function tool calls.
+Codex must report token usage. AIR records input, cached-input, cache-write,
+output, and reasoning-output counts for every commit review and recheck batch.
+A Codex JSONL attempt uses the usage in its final `turn.completed` event.
 
-Both reviewers must report token usage. AIR records input, cached-input,
-cache-write, output, and reasoning-output counts for every commit review and
-recheck batch. HTTP usage is summed across all tool-call and repair rounds for
-that attempt. A Codex JSONL attempt uses the usage in its final
-`turn.completed` event.
-
-Neither backend reports an authoritative monetary charge. In particular,
-Codex authenticated through a ChatGPT account consumes plan limits or credits,
-not a distinct per-run USD bill. AIR's model registry therefore produces an
+Codex does not report an authoritative monetary charge. In particular, Codex
+authenticated through a ChatGPT account consumes plan limits or credits, not a
+distinct per-run USD bill. AIR's model registry therefore produces an
 API-equivalent estimate from a dated Standard price snapshot.
 
 Cached reads, cache writes, ordinary input, and output are separate billing
@@ -1365,9 +1346,7 @@ writes at the other. Unknown model pricing produces a null cost rather than a
 fabricated estimate. `air show` identifies ranges and unknown costs clearly.
 
 No model-specific behavior is embedded into the database schema. A Codex
-review records the exact supplied model identifier and reasoning effort. The
-HTTP fallback records its supplied model identifier and leaves reasoning effort
-null because Chat Completions does not expose that Codex setting.
+review records the exact supplied model identifier and reasoning effort.
 
 ## 20. Prompt Versioning
 
@@ -1406,10 +1385,10 @@ uses this form:
 custom:sha256:<64 lowercase hexadecimal digits>
 ```
 
-The digest covers the prompt kind, reviewer backend, compiled protocol version,
-and complete effective static prompt. It therefore changes when the stored
-instructions change, when a different backend is selected, or when AIR changes
-the fixed protocol. The custom identity is stored in the existing
+The digest covers a fixed Codex domain tag, the prompt kind, compiled protocol
+version, and complete effective static prompt. It therefore changes when the
+stored instructions change or when AIR changes the fixed protocol. The custom
+identity is stored in the existing
 `prompt_version` columns on commit-review and recheck attempts. No schema
 migration is required. Recheck resumability includes this identity, so changing
 recheck instructions makes otherwise identical findings eligible again.
@@ -1521,7 +1500,7 @@ Important principles:
 - review only newly discovered commits;
 - do not re-review unchanged commits;
 - do not repeatedly ask whether findings remain open during ordinary scans;
-- make explicit HEAD rechecks resumable by target and reviewer identity;
+- make explicit HEAD rechecks resumable by target and Codex configuration;
 - identify the exact target commit rather than packaging entire repositories;
 - let Codex fetch the diff and additional context only when required;
 - retain responses locally for debugging;
@@ -1550,7 +1529,6 @@ Go
 SQLite via database/sql and a SQLite driver
 Git via os/exec
 Codex CLI via os/exec
-optional HTTP fallback via net/http
 JSON via encoding/json
 flag-based CLI
 ```

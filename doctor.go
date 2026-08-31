@@ -135,12 +135,6 @@ func inspectDoctor(ctx context.Context, environment cliEnvironment) doctorReport
 		setting, _ := settingByKey(key)
 		return resolveSettingValue(ctx, store, environment.Getenv, setting, "", false)
 	}
-	reviewer, err := resolve("reviewer")
-	if err != nil {
-		report.add("reviewer", "fail", err.Error())
-		return report
-	}
-	report.add("reviewer", "pass", reviewer.Value+" from "+reviewer.Source)
 	model, modelOK := doctorRequiredSetting(&report, resolve, "model", "model")
 	if modelOK {
 		configuredModel, found, err := modelForDisplay(ctx, store, model.Value)
@@ -155,40 +149,25 @@ func inspectDoctor(ctx context.Context, environment cliEnvironment) doctorReport
 		}
 	}
 
-	switch reviewer.Value {
-	case "codex":
-		doctorRequiredSetting(&report, resolve, "effort", "reasoning effort")
-		if timeout, ok := doctorRequiredSetting(&report, resolve, "codex-timeout", "Codex timeout"); ok {
-			report.Checks[len(report.Checks)-1].Detail = timeout.Value + " from " + timeout.Source
-		}
-		binary, ok := doctorRequiredSetting(&report, resolve, "codex-bin", "Codex executable setting")
-		if !ok {
-			return report
-		}
-		lookup := binary.Value
-		if strings.ContainsRune(lookup, filepath.Separator) && !filepath.IsAbs(lookup) {
-			lookup = filepath.Join(environment.Cwd, lookup)
-		}
-		resolvedBinary, err := exec.LookPath(lookup)
-		if err != nil {
-			report.add("Codex executable", "fail", fmt.Sprintf("%s: %v", binary.Value, err))
-			return report
-		}
-		report.add("Codex executable", "pass", resolvedBinary+" from "+binary.Source)
-		doctorCodexAuth(ctx, &report, environment, resolvedBinary)
-	case "http":
-		if baseURL, ok := doctorRequiredSetting(&report, resolve, "base-url", "HTTP endpoint"); ok {
-			report.Checks[len(report.Checks)-1].Detail = baseURL.Value + " from " + baseURL.Source
-		}
-		key, source, err := configuredAPIKey(ctx, store, environment.Getenv, "", false, "", false)
-		if err != nil {
-			report.add("HTTP credentials", "fail", err.Error())
-		} else if key == "" {
-			report.add("HTTP credentials", "fail", "API key is unset")
-		} else {
-			report.add("HTTP credentials", "pass", "API key available from "+source)
-		}
+	doctorRequiredSetting(&report, resolve, "effort", "reasoning effort")
+	if timeout, ok := doctorRequiredSetting(&report, resolve, "codex-timeout", "Codex timeout"); ok {
+		report.Checks[len(report.Checks)-1].Detail = timeout.Value + " from " + timeout.Source
 	}
+	binary, ok := doctorRequiredSetting(&report, resolve, "codex-bin", "Codex executable setting")
+	if !ok {
+		return report
+	}
+	lookup := binary.Value
+	if strings.ContainsRune(lookup, filepath.Separator) && !filepath.IsAbs(lookup) {
+		lookup = filepath.Join(environment.Cwd, lookup)
+	}
+	resolvedBinary, err := exec.LookPath(lookup)
+	if err != nil {
+		report.add("Codex executable", "fail", fmt.Sprintf("%s: %v", binary.Value, err))
+		return report
+	}
+	report.add("Codex executable", "pass", resolvedBinary+" from "+binary.Source)
+	doctorCodexAuth(ctx, &report, environment, resolvedBinary)
 	return report
 }
 

@@ -39,11 +39,6 @@ func TestSettingPrecedence(t *testing.T) {
 		t.Fatalf("command-line resolution = %+v, %v", resolved, err)
 	}
 
-	reviewer, _ := settingByKey("reviewer")
-	resolved, err = resolveSettingValue(ctx, store, func(string) string { return "" }, reviewer, "", false)
-	if err != nil || resolved.Value != "codex" || resolved.Source != "built-in" {
-		t.Fatalf("built-in resolution = %+v, %v", resolved, err)
-	}
 	timeout, _ := settingByKey("codex-timeout")
 	resolved, err = resolveSettingValue(ctx, store, func(string) string { return "" }, timeout, "", false)
 	if err != nil || resolved.Value != "20m0s" || resolved.Source != "built-in" {
@@ -70,38 +65,10 @@ func TestSettingValidationIdentifiesSource(t *testing.T) {
 	}
 }
 
-func TestAPIKeyPrecedence(t *testing.T) {
-	ctx := context.Background()
-	store, err := CreateStore(ctx, filepath.Join(t.TempDir(), "air.sqlite"), strings.Repeat("0", 40))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
-	if err := store.SetConfig(ctx, "api-key", "database-secret"); err != nil {
-		t.Fatal(err)
-	}
-
-	key, source, err := configuredAPIKey(ctx, store, func(string) string { return "" }, "", false, "", false)
-	if err != nil || key != "database-secret" || source != "database" {
-		t.Fatalf("database API key = %q from %q, %v", key, source, err)
-	}
-	getenv := func(name string) string {
-		values := map[string]string{
-			"AIR_API_KEY": "environment-secret",
-			"NAMED_KEY":   "named-secret",
+func TestHTTPSettingsAreNotPublicConfiguration(t *testing.T) {
+	for _, key := range []string{"reviewer", "base-url", "api-key-env", "api-key"} {
+		if _, found := settingByKey(key); found {
+			t.Errorf("obsolete HTTP setting %q is still available", key)
 		}
-		return values[name]
-	}
-	key, source, err = configuredAPIKey(ctx, store, getenv, "", false, "", false)
-	if err != nil || key != "environment-secret" || source != "AIR_API_KEY" {
-		t.Fatalf("environment API key = %q from %q, %v", key, source, err)
-	}
-	key, source, err = configuredAPIKey(ctx, store, getenv, "", false, "NAMED_KEY", true)
-	if err != nil || key != "named-secret" || source != "NAMED_KEY" {
-		t.Fatalf("named API key = %q from %q, %v", key, source, err)
-	}
-	key, source, err = configuredAPIKey(ctx, store, getenv, "command-secret", true, "NAMED_KEY", true)
-	if err != nil || key != "command-secret" || source != "command line" {
-		t.Fatalf("command-line API key = %q from %q, %v", key, source, err)
 	}
 }

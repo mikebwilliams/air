@@ -5,119 +5,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
-	"time"
 )
-
-func (r *HTTPReviewer) Recheck(ctx context.Context, input RecheckInput) (RecheckResult, error) {
-	if r.Repository == nil {
-		return RecheckResult{}, errors.New("reviewer has no Git repository")
-	}
-	if strings.TrimSpace(r.Model) == "" {
-		return RecheckResult{}, errors.New("model is required")
-	}
-	if strings.TrimSpace(r.BaseURL) == "" {
-		return RecheckResult{}, errors.New("base URL is required")
-	}
-	if strings.TrimSpace(r.APIKey) == "" {
-		return RecheckResult{}, errors.New("API key is required")
-	}
-	if err := validateRecheckInput(input); err != nil {
-		return RecheckResult{}, err
-	}
-	prompt, err := buildRecheckPrompt(input, false)
-	if err != nil {
-		return RecheckResult{}, err
-	}
-	systemPrompt := r.Prompt
-	if systemPrompt == "" {
-		systemPrompt = recheckSystemPrompt
-	}
-	messages := []chatMessage{
-		{Role: "system", Content: systemPrompt},
-		{Role: "user", Content: prompt},
-	}
-	allowed := recheckFindingIDs(input.Findings)
-	maxRounds := r.MaxRounds
-	if maxRounds <= 0 {
-		maxRounds = 8
-	}
-	client := r.Client
-	if client == nil {
-		client = &http.Client{Timeout: 2 * time.Minute}
-	}
-	var rawResponses []json.RawMessage
-	zeroCacheWrites := int64(0)
-	totalUsage := TokenUsage{CacheWriteTokens: &zeroCacheWrites}
-	repairAttempted := false
-
-	for round := 0; round < maxRounds; round++ {
-		response, raw, err := r.complete(ctx, client, messages, recheckReviewerTools())
-		if err != nil {
-			return RecheckResult{}, err
-		}
-		rawResponses = append(rawResponses, append(json.RawMessage(nil), raw...))
-		if response.Usage == nil {
-			return RecheckResult{}, errors.New("model response omitted token usage")
-		}
-		responseUsage := TokenUsage{
-			InputTokens:           response.Usage.PromptTokens,
-			CachedInputTokens:     response.Usage.PromptDetails.CachedTokens,
-			CacheWriteTokens:      response.Usage.PromptDetails.CacheWriteTokens,
-			OutputTokens:          response.Usage.CompletionTokens,
-			ReasoningOutputTokens: response.Usage.CompletionDetails.ReasoningTokens,
-		}
-		totalUsage, err = addTokenUsage(totalUsage, responseUsage)
-		if err != nil {
-			return RecheckResult{}, fmt.Errorf("invalid model token usage: %w", err)
-		}
-		if len(response.Choices) == 0 {
-			return RecheckResult{}, errors.New("model response contained no choices")
-		}
-		choice := response.Choices[0]
-		content, err := extractMessageContent(choice.Message.Content)
-		if err != nil {
-			return RecheckResult{}, fmt.Errorf("decode model message: %w", err)
-		}
-		messages = append(messages, chatMessage{
-			Role: "assistant", Content: content, ToolCalls: choice.Message.ToolCalls,
-		})
-		if len(choice.Message.ToolCalls) > 0 {
-			for _, call := range choice.Message.ToolCalls {
-				messages = append(messages, chatMessage{
-					Role: "tool", Content: r.executeRecheckTool(ctx, input.HeadSHA, call), ToolCallID: call.ID,
-				})
-			}
-			continue
-		}
-
-		output, err := parseRecheckOutput(content)
-		if err == nil {
-			err = validateRecheckOutput(output, allowed)
-		}
-		if err == nil {
-			rawTranscript, marshalErr := json.Marshal(rawResponses)
-			if marshalErr != nil {
-				return RecheckResult{}, fmt.Errorf("encode raw model responses: %w", marshalErr)
-			}
-			return RecheckResult{Output: output, RawResponse: string(rawTranscript), Usage: &totalUsage}, nil
-		}
-		if repairAttempted {
-			return RecheckResult{}, fmt.Errorf("invalid model output after repair: %w", err)
-		}
-		repairAttempted = true
-		messages = append(messages, chatMessage{
-			Role: "user",
-			Content: "Your final response was invalid: " + err.Error() +
-				". Return one corrected JSON object only, without commentary.",
-		})
-	}
-	return RecheckResult{}, fmt.Errorf("model exceeded the limit of %d recheck rounds", maxRounds)
-}
 
 func (r *CodexReviewer) Recheck(ctx context.Context, input RecheckInput) (RecheckResult, error) {
 	if r.Repository == nil {
@@ -144,7 +36,7 @@ func (r *CodexReviewer) Recheck(ctx context.Context, input RecheckInput) (Rechec
 	}
 	recheckContext, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	prompt, err := buildRecheckPromptWithStatic(input, true, r.Prompt)
+	prompt, err := buildRecheckPromptWithStatic(input, r.Prompt)
 	if err != nil {
 		return RecheckResult{}, err
 	}
@@ -306,78 +198,6 @@ func validateRecheckOutput(output RecheckOutput, allowed map[int64]struct{}) err
 		}
 	}
 	return nil
-}
-
-func recheckReviewerTools() []chatTool {
-	object := func(properties map[string]any, required ...string) map[string]any {
-		return map[string]any{
-			"type": "object", "properties": properties, "required": required,
-			"additionalProperties": false,
-		}
-	}
-	stringProperty := func(description string) map[string]any {
-		return map[string]any{"type": "string", "description": description}
-	}
-	return []chatTool{
-		{Type: "function", Function: chatToolDefinition{
-			Name: "git_read_file", Description: "Read a repository file at the target HEAD. Output is capped.",
-			Parameters: object(map[string]any{"path": stringProperty("Clean repository-relative file path.")}, "path"),
-		}},
-		{Type: "function", Function: chatToolDefinition{
-			Name: "git_grep", Description: "Search for a fixed string at the target HEAD. Output is capped.",
-			Parameters: object(map[string]any{
-				"pattern": stringProperty("Literal fixed-string pattern, at most 256 bytes."),
-				"path":    stringProperty("Optional clean repository-relative path to restrict the search."),
-			}, "pattern"),
-		}},
-		{Type: "function", Function: chatToolDefinition{
-			Name: "git_log", Description: "Show recent commit metadata at or before the target HEAD, optionally for one path.",
-			Parameters: object(map[string]any{
-				"path":      stringProperty("Optional clean repository-relative path."),
-				"max_count": map[string]any{"type": "integer", "minimum": 1, "maximum": 20},
-			}, "max_count"),
-		}},
-	}
-}
-
-func (r *HTTPReviewer) executeRecheckTool(ctx context.Context, headSHA string, call toolCall) string {
-	if call.Type != "function" {
-		return toolError(fmt.Errorf("unsupported tool call type %q", call.Type))
-	}
-	var output string
-	var err error
-	switch call.Function.Name {
-	case "git_read_file":
-		var args struct {
-			Path string `json:"path"`
-		}
-		if err = decodeToolArguments(call.Function.Arguments, &args); err == nil {
-			output, err = r.Repository.ReadFile(ctx, headSHA, args.Path)
-		}
-	case "git_grep":
-		var args struct {
-			Pattern string `json:"pattern"`
-			Path    string `json:"path"`
-		}
-		if err = decodeToolArguments(call.Function.Arguments, &args); err == nil {
-			output, err = r.Repository.Grep(ctx, headSHA, args.Pattern, args.Path)
-		}
-	case "git_log":
-		var args struct {
-			Path     string `json:"path"`
-			MaxCount int    `json:"max_count"`
-		}
-		if err = decodeToolArguments(call.Function.Arguments, &args); err == nil {
-			output, err = r.Repository.Log(ctx, headSHA, args.Path, args.MaxCount)
-		}
-	default:
-		err = fmt.Errorf("unknown tool %q", call.Function.Name)
-	}
-	if err != nil {
-		return toolError(err)
-	}
-	encoded, _ := json.Marshal(map[string]any{"ok": true, "output": output})
-	return string(encoded)
 }
 
 const codexRecheckOutputSchema = `{

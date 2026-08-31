@@ -5,6 +5,8 @@ import (
 	"time"
 )
 
+const codexReviewerName = "codex"
+
 const (
 	promptVersion           = "4"
 	recheckPromptVersion    = "1"
@@ -234,9 +236,4 @@ type Reviewer interface {
 
 type RecheckReviewer interface {
 	Recheck(ctx context.Context, input RecheckInput) (RecheckResult, error)
-}
-
-type ReviewerBackend interface {
-	Reviewer
-	RecheckReviewer
 }

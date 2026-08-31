@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"net/url"
 	"strings"
 	"time"
 )
@@ -14,7 +13,6 @@ type settingSpec struct {
 	Environment []string
 	Default     string
 	AllowEmpty  bool
-	Sensitive   bool
 	Validate    func(string) error
 }
 
@@ -23,18 +21,7 @@ type resolvedSetting struct {
 	Source string
 }
 
-var reviewerSettings = []settingSpec{
-	{
-		Key:         "reviewer",
-		Environment: []string{"AIR_REVIEWER"},
-		Default:     "codex",
-		Validate: func(value string) error {
-			if value != "codex" && value != "http" {
-				return errors.New("must be codex or http")
-			}
-			return nil
-		},
-	},
+var codexSettings = []settingSpec{
 	{Key: "model", Environment: []string{"AIR_MODEL"}, Validate: requireSettingValue},
 	{Key: "effort", Environment: []string{"AIR_REASONING_EFFORT"}, Validate: requireSettingValue},
 	{Key: "codex-bin", Environment: []string{"AIR_CODEX_BIN"}, Default: "codex", Validate: requireSettingValue},
@@ -51,34 +38,6 @@ var reviewerSettings = []settingSpec{
 			return nil
 		},
 	},
-	{
-		Key:         "base-url",
-		Environment: []string{"AIR_BASE_URL"},
-		Default:     "https://api.openai.com/v1",
-		Validate: func(value string) error {
-			parsed, err := url.Parse(value)
-			if err != nil || parsed.Scheme == "" || parsed.Host == "" {
-				return errors.New("must be an absolute URL")
-			}
-			return nil
-		},
-	},
-	{
-		Key:         "api-key-env",
-		Environment: []string{"AIR_API_KEY_ENV"},
-		Validate: func(value string) error {
-			if value == "" || strings.ContainsRune(value, '=') {
-				return errors.New("must be an environment variable name")
-			}
-			return nil
-		},
-	},
-	{
-		Key:         "api-key",
-		Environment: []string{"AIR_API_KEY", "OPENAI_API_KEY"},
-		Sensitive:   true,
-		Validate:    requireSettingValue,
-	},
 }
 
 func requireSettingValue(value string) error {
@@ -89,7 +48,7 @@ func requireSettingValue(value string) error {
 }
 
 func settingByKey(key string) (settingSpec, bool) {
-	for _, setting := range reviewerSettings {
+	for _, setting := range codexSettings {
 		if setting.Key == key {
 			return setting, true
 		}
@@ -97,19 +56,12 @@ func settingByKey(key string) (settingSpec, bool) {
 	return settingSpec{}, false
 }
 
-func normalizeSettingValue(setting settingSpec, value string) string {
-	if setting.Sensitive {
-		return value
-	}
-	value = strings.TrimSpace(value)
-	if setting.Key == "reviewer" {
-		return strings.ToLower(value)
-	}
-	return value
+func normalizeSettingValue(value string) string {
+	return strings.TrimSpace(value)
 }
 
 func validateSettingValue(setting settingSpec, value string) (string, error) {
-	value = normalizeSettingValue(setting, value)
+	value = normalizeSettingValue(value)
 	if value == "" {
 		if setting.AllowEmpty {
 			return value, nil
@@ -163,75 +115,9 @@ func checkedSetting(setting settingSpec, value, source string) (resolvedSetting,
 	return resolvedSetting{Value: normalized, Source: source}, nil
 }
 
-func displaySettingValue(setting settingSpec, value string) string {
-	if setting.Sensitive && value != "" {
-		return "<redacted>"
-	}
+func displaySettingValue(value string) string {
 	if value == "" {
 		return "<unset>"
 	}
 	return value
-}
-
-func configuredAPIKey(
-	ctx context.Context,
-	store *Store,
-	getenv func(string) string,
-	apiKey string,
-	apiKeySet bool,
-	apiKeyEnv string,
-	apiKeyEnvSet bool,
-) (string, string, error) {
-	if apiKeySet {
-		setting, _ := settingByKey("api-key")
-		resolved, err := checkedSetting(setting, apiKey, "command line")
-		return resolved.Value, resolved.Source, err
-	}
-	if apiKeyEnvSet && apiKeyEnv != "" {
-		return keyFromEnvironment(getenv, apiKeyEnv, "command line")
-	}
-	if getenv != nil {
-		if name := getenv("AIR_API_KEY_ENV"); name != "" {
-			return keyFromEnvironment(getenv, name, "AIR_API_KEY_ENV")
-		}
-		if value := getenv("AIR_API_KEY"); value != "" {
-			return value, "AIR_API_KEY", nil
-		}
-		if value := getenv("OPENAI_API_KEY"); value != "" {
-			return value, "OPENAI_API_KEY", nil
-		}
-	}
-	databaseEnvironment, found, err := store.ConfigValue(ctx, "api-key-env")
-	if err != nil {
-		return "", "", err
-	}
-	if found && databaseEnvironment != "" {
-		return keyFromEnvironment(getenv, databaseEnvironment, "database api-key-env")
-	}
-	databaseKey, found, err := store.ConfigValue(ctx, "api-key")
-	if err != nil {
-		return "", "", err
-	}
-	if found {
-		setting, _ := settingByKey("api-key")
-		resolved, err := checkedSetting(setting, databaseKey, "database")
-		return resolved.Value, resolved.Source, err
-	}
-	return "", "unset", nil
-}
-
-func keyFromEnvironment(getenv func(string) string, name, source string) (string, string, error) {
-	setting, _ := settingByKey("api-key-env")
-	validatedName, err := validateSettingValue(setting, name)
-	if err != nil || validatedName == "" {
-		if err == nil {
-			err = errors.New("must not be empty")
-		}
-		return "", name, fmt.Errorf("invalid %s api-key-env: %w", source, err)
-	}
-	name = validatedName
-	if getenv == nil || getenv(name) == "" {
-		return "", name, fmt.Errorf("API key environment variable %s selected by %s is empty", name, source)
-	}
-	return getenv(name), name, nil
 }

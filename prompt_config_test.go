@@ -9,23 +9,20 @@ import (
 
 func TestReviewerPromptSpecsPreserveBuiltinPrompts(t *testing.T) {
 	tests := []struct {
-		kind     string
-		reviewer string
-		static   string
-		version  string
+		kind    string
+		static  string
+		version string
 	}{
-		{"review", "codex", codexReviewerPrompt, promptVersion},
-		{"review", "http", reviewerSystemPrompt, promptVersion},
-		{"recheck", "codex", codexRecheckPrompt, recheckPromptVersion},
-		{"recheck", "http", recheckSystemPrompt, recheckPromptVersion},
+		{"review", codexReviewerPrompt, promptVersion},
+		{"recheck", codexRecheckPrompt, recheckPromptVersion},
 	}
 	for _, test := range tests {
-		prompt, err := reviewerPromptSpec(test.kind, test.reviewer)
+		prompt, err := reviewerPromptSpec(test.kind)
 		if err != nil {
 			t.Fatal(err)
 		}
 		if prompt.Static != test.static || prompt.PromptVersion != test.version || prompt.Source != "built-in" {
-			t.Errorf("%s/%s prompt = %+v", test.kind, test.reviewer, prompt)
+			t.Errorf("%s prompt = %+v", test.kind, prompt)
 		}
 	}
 }
@@ -42,11 +39,11 @@ func TestResolveReviewerPromptUsesStableCustomIdentity(t *testing.T) {
 	if err := store.SetConfig(ctx, "prompt.review.codex", instructions+"\n"); err != nil {
 		t.Fatal(err)
 	}
-	first, err := resolveReviewerPrompt(ctx, store, "review", "codex")
+	first, err := resolveReviewerPrompt(ctx, store, "review")
 	if err != nil {
 		t.Fatal(err)
 	}
-	second, err := resolveReviewerPrompt(ctx, store, "review", "codex")
+	second, err := resolveReviewerPrompt(ctx, store, "review")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -62,12 +59,6 @@ func TestResolveReviewerPromptUsesStableCustomIdentity(t *testing.T) {
 		!strings.Contains(first.Static, "Return only the JSON object required") ||
 		strings.Contains(first.Static, "Changes limited to comments") {
 		t.Fatalf("custom static prompt:\n%s", first.Static)
-	}
-
-	http := first
-	http.Reviewer = "http"
-	if first.withCustomInstructions(instructions).PromptVersion == http.withCustomInstructions(instructions).PromptVersion {
-		t.Fatal("custom identity does not account for reviewer backend")
 	}
 }
 

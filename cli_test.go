@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"net/http"
 	"os"
 	"os/exec"
 	"strconv"
@@ -21,39 +20,31 @@ func TestCLIInitScanAndQueries(t *testing.T) {
 	base := testCommitFile(t, directory, "app.txt", []byte("base\n"), "base")
 	head := testCommitFile(t, directory, "app.txt", []byte("changed\n"), "change")
 	var stdout, stderr bytes.Buffer
-	client := &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
-		output := ReviewOutput{
-			NewFindings: []NewFinding{{
-				Severity:    "warning",
-				Title:       "test finding",
-				Description: "The changed value violates the test contract.",
-				File:        stringPointer("app.txt"),
-			}},
-			ResolvedFindings: []ResolvedFinding{},
-			Summary:          "Reviewed app.txt.",
-		}
-		content, _ := json.Marshal(output)
-		return JSONResponse(t, map[string]any{
-			"usage": chatUsage(100, 25, 10, 20, 5),
-			"choices": []any{map[string]any{
-				"message":       map[string]any{"role": "assistant", "content": string(content)},
-				"finish_reason": "stop",
-			}},
-		}), nil
-	})}
+	command, _ := newCodexTestCommand(t, ReviewOutput{
+		NewFindings: []NewFinding{{
+			Severity:    "warning",
+			Title:       "test finding",
+			Description: "The changed value violates the test contract.",
+			File:        stringPointer("app.txt"),
+		}},
+		ResolvedFindings: []ResolvedFinding{},
+		Summary:          "Reviewed app.txt.",
+	}, "")
 	values := map[string]string{
-		"AIR_MODEL":    "gpt-5.6-luna",
-		"AIR_BASE_URL": "https://model.example/v1",
-		"AIR_API_KEY":  "secret",
+		"AIR_MODEL":            "gpt-5.6-luna",
+		"AIR_REASONING_EFFORT": "xhigh",
+		"AIR_REVIEWER":         "http",
+		"AIR_BASE_URL":         "https://obsolete.invalid/v1",
+		"AIR_API_KEY":          "obsolete-key",
 	}
 	elapsedNow := time.Date(2026, 8, 14, 11, 0, 0, 0, time.UTC)
 	environment := cliEnvironment{
-		Cwd:        directory,
-		Stdout:     &stdout,
-		Stderr:     &stderr,
-		Getenv:     func(key string) string { return values[key] },
-		HTTPClient: client,
-		Now:        func() time.Time { return time.Date(2026, 8, 14, 12, 0, 0, 0, time.UTC) },
+		Cwd:          directory,
+		Stdout:       &stdout,
+		Stderr:       &stderr,
+		Getenv:       func(key string) string { return values[key] },
+		CodexCommand: command,
+		Now:          func() time.Time { return time.Date(2026, 8, 14, 12, 0, 0, 0, time.UTC) },
 		ElapsedNow: func() time.Time {
 			elapsedNow = elapsedNow.Add(45 * time.Second)
 			return elapsedNow
@@ -66,7 +57,7 @@ func TestCLIInitScanAndQueries(t *testing.T) {
 		t.Fatalf("init output:\n%s", stdout.String())
 	}
 	stdout.Reset()
-	if err := runCLI(ctx, []string{"scan", "--reviewer", "http"}, environment); err != nil {
+	if err := runCLI(ctx, []string{"scan"}, environment); err != nil {
 		t.Fatalf("scan: %v", err)
 	}
 	if !strings.Contains(stdout.String(), shortSHA(head)+"  1 new, 0 resolved") {
@@ -104,9 +95,9 @@ func TestCLIInitScanAndQueries(t *testing.T) {
 		t.Fatalf("show: %v", err)
 	}
 	if !strings.Contains(stdout.String(), "Model: gpt-5.6-luna") ||
-		!strings.Contains(stdout.String(), "Tokens: 120 total (100 input, 25 cached input, 10 cache writes, 20 output, 5 reasoning output)") ||
+		!strings.Contains(stdout.String(), "Tokens: 15 total (10 input, 4 cached input, 2 cache writes, 5 output, 2 reasoning output)") ||
 		!strings.Contains(stdout.String(), "Scan time: 45s") ||
-		!strings.Contains(stdout.String(), "Estimated cost: $0.000040 USD (short context)") ||
+		!strings.Contains(stdout.String(), "Estimated cost: $0.000007 USD (short context)") ||
 		!strings.Contains(stdout.String(), "Reviewed app.txt.") ||
 		!strings.Contains(stdout.String(), "#1 warning") {
 		t.Fatalf("show output:\n%s", stdout.String())
@@ -119,7 +110,7 @@ func TestCLIInitScanAndQueries(t *testing.T) {
 	if err := json.Unmarshal(stdout.Bytes(), &showJSON); err != nil || showJSON.Commit.SHA != head ||
 		showJSON.Record.Model != "gpt-5.6-luna" || len(showJSON.IntroducedFindings) != 1 ||
 		showJSON.Record.DurationMilliseconds == nil || *showJSON.Record.DurationMilliseconds != 45_000 ||
-		len(showJSON.Reviews) != 1 || showJSON.Reviews[0].Usage.InputTokens != 100 ||
+		len(showJSON.Reviews) != 1 || showJSON.Reviews[0].Usage.InputTokens != 10 ||
 		showJSON.Reviews[0].DurationMilliseconds == nil || *showJSON.Reviews[0].DurationMilliseconds != 45_000 {
 		t.Fatalf("show JSON = %+v, %v; output=%s", showJSON, err, stdout.String())
 	}
@@ -150,9 +141,9 @@ func TestCLIInitScanAndQueries(t *testing.T) {
 	}
 	if !strings.Contains(stdout.String(), "Reviews: 1 attempts across 1 commits") ||
 		!strings.Contains(stdout.String(), "Average scan time per commit: 45s (1 timed, 0 without timing)") ||
-		!strings.Contains(stdout.String(), "Tokens: 100 input (25 cached), 10 cache writes, 20 output (5 reasoning)") ||
-		!strings.Contains(stdout.String(), "Estimated cost: $0.000040 USD") ||
-		!strings.Contains(stdout.String(), "gpt-5.6-luna: 1 attempts") {
+		!strings.Contains(stdout.String(), "Tokens: 10 input (4 cached), 2 cache writes, 5 output (2 reasoning)") ||
+		!strings.Contains(stdout.String(), "Estimated cost: $0.000007 USD") ||
+		!strings.Contains(stdout.String(), "gpt-5.6-luna/xhigh: 1 attempts") {
 		t.Fatalf("stats output:\n%s", stdout.String())
 	}
 
@@ -160,7 +151,7 @@ func TestCLIInitScanAndQueries(t *testing.T) {
 	if err := runCLI(ctx, []string{"cost", "--model", "gpt-5.6-luna", "--since", "2026-08-14"}, environment); err != nil {
 		t.Fatalf("cost: %v", err)
 	}
-	if !strings.Contains(stdout.String(), "Estimated cost: $0.000040 USD") ||
+	if !strings.Contains(stdout.String(), "Estimated cost: $0.000007 USD") ||
 		!strings.Contains(stdout.String(), "Reviews: 1 attempts across 1 commits") {
 		t.Fatalf("cost output:\n%s", stdout.String())
 	}
@@ -317,38 +308,33 @@ func TestCLIScanFailureBehavior(t *testing.T) {
 			first := testCommitFile(t, directory, "app.txt", []byte("first\n"), "first")
 			second := testCommitFile(t, directory, "app.txt", []byte("second\n"), "second")
 			calls := 0
-			client := &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+			failedCommand, _ := newCodexTestCommand(t, ReviewOutput{}, "temporary reviewer outage")
+			successCommand, _ := newCodexTestCommand(t, ReviewOutput{
+				NewFindings:      []NewFinding{},
+				ResolvedFindings: []ResolvedFinding{},
+				Summary:          "Reviewed the later commit.",
+			}, "")
+			command := func(commandContext context.Context, name string, args ...string) *exec.Cmd {
 				calls++
 				if calls == 1 {
-					return nil, errors.New("temporary reviewer outage")
+					return failedCommand(commandContext, name, args...)
 				}
-				output, _ := json.Marshal(ReviewOutput{
-					NewFindings:      []NewFinding{},
-					ResolvedFindings: []ResolvedFinding{},
-					Summary:          "Reviewed the later commit.",
-				})
-				return JSONResponse(t, map[string]any{
-					"usage": chatUsage(10, 0, 0, 2, 0),
-					"choices": []any{map[string]any{
-						"message":       map[string]any{"role": "assistant", "content": string(output)},
-						"finish_reason": "stop",
-					}},
-				}), nil
-			})}
+				return successCommand(commandContext, name, args...)
+			}
 			var stdout bytes.Buffer
 			environment := cliEnvironment{
-				Cwd:        directory,
-				Stdout:     &stdout,
-				Stderr:     &bytes.Buffer{},
-				Getenv:     func(string) string { return "" },
-				HTTPClient: client,
-				Now:        func() time.Time { return time.Date(2026, 8, 20, 12, 0, 0, 0, time.UTC) },
+				Cwd:          directory,
+				Stdout:       &stdout,
+				Stderr:       &bytes.Buffer{},
+				Getenv:       func(string) string { return "" },
+				CodexCommand: command,
+				Now:          func() time.Time { return time.Date(2026, 8, 20, 12, 0, 0, 0, time.UTC) },
 			}
 			if err := runCLI(ctx, []string{"init", base}, environment); err != nil {
 				t.Fatalf("init: %v", err)
 			}
 			stdout.Reset()
-			args := []string{"scan", "--reviewer", "http", "--model", "test-model", "--api-key", "secret"}
+			args := []string{"scan", "--model", "test-model", "--effort", "high"}
 			args = append(args, test.args...)
 			err := runCLI(ctx, args, environment)
 			if err == nil {
@@ -383,7 +369,7 @@ func TestCLIScanFailureBehavior(t *testing.T) {
 	}
 }
 
-func TestCLIStoredConfigurationDrivesScanAndRedactsSecrets(t *testing.T) {
+func TestCLIStoredConfigurationDrivesScan(t *testing.T) {
 	ctx := context.Background()
 	repository, directory := newTestGitRepository(t)
 	base := testCommitFile(t, directory, "app.txt", []byte("base\n"), "base")
@@ -406,6 +392,24 @@ func TestCLIStoredConfigurationDrivesScanAndRedactsSecrets(t *testing.T) {
 	if err := runCLI(ctx, []string{"init", base}, environment); err != nil {
 		t.Fatalf("init: %v", err)
 	}
+	legacyStore, err := OpenStore(ctx, repository.DatabasePath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, setting := range [][2]string{
+		{"reviewer", "http"},
+		{"base-url", "https://obsolete.invalid/v1"},
+		{"api-key-env", "OLD_API_KEY"},
+		{"api-key", "obsolete-key"},
+	} {
+		if err := legacyStore.SetConfig(ctx, setting[0], setting[1]); err != nil {
+			legacyStore.Close()
+			t.Fatalf("seed obsolete %s setting: %v", setting[0], err)
+		}
+	}
+	if err := legacyStore.Close(); err != nil {
+		t.Fatal(err)
+	}
 	for _, setting := range [][2]string{
 		{"model", "stored-model"},
 		{"effort", "xhigh"},
@@ -417,20 +421,15 @@ func TestCLIStoredConfigurationDrivesScanAndRedactsSecrets(t *testing.T) {
 			t.Fatalf("set %s: %v", setting[0], err)
 		}
 	}
-	environment.Stdin = strings.NewReader("database-secret\n")
-	if err := runCLI(ctx, []string{"config", "set", "--stdin", "api-key"}, environment); err != nil {
-		t.Fatalf("set api-key: %v", err)
-	}
-
 	stdout.Reset()
 	if err := runCLI(ctx, []string{"config", "list", "--effective"}, environment); err != nil {
 		t.Fatalf("config list: %v", err)
 	}
 	configOutput := stdout.String()
 	if !strings.Contains(configOutput, "model") || !strings.Contains(configOutput, "stored-model") ||
-		!strings.Contains(configOutput, "database") || !strings.Contains(configOutput, "reviewer") ||
-		!strings.Contains(configOutput, "built-in") || !strings.Contains(configOutput, "<redacted>") ||
-		strings.Contains(configOutput, "database-secret") {
+		!strings.Contains(configOutput, "database") || !strings.Contains(configOutput, "codex-bin") ||
+		strings.Contains(configOutput, "base-url") || strings.Contains(configOutput, "api-key") ||
+		strings.Contains(configOutput, "reviewer") {
 		t.Fatalf("effective configuration output:\n%s", configOutput)
 	}
 
@@ -482,62 +481,6 @@ func TestCLIStoredConfigurationDrivesScanAndRedactsSecrets(t *testing.T) {
 	}
 }
 
-func TestCLIStoredHTTPConfiguration(t *testing.T) {
-	ctx := context.Background()
-	_, directory := newTestGitRepository(t)
-	base := testCommitFile(t, directory, "app.txt", []byte("base\n"), "base")
-	testCommitFile(t, directory, "app.txt", []byte("changed\n"), "change")
-	client := &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
-		if request.URL.String() != "https://stored.example/v1/chat/completions" {
-			t.Fatalf("request URL = %s", request.URL)
-		}
-		if authorization := request.Header.Get("Authorization"); authorization != "Bearer stored-secret" {
-			t.Fatalf("Authorization = %q", authorization)
-		}
-		output, _ := json.Marshal(ReviewOutput{
-			NewFindings:      []NewFinding{},
-			ResolvedFindings: []ResolvedFinding{},
-			Summary:          "Reviewed with stored HTTP configuration.",
-		})
-		return JSONResponse(t, map[string]any{
-			"usage": chatUsage(10, 0, 0, 2, 0),
-			"choices": []any{map[string]any{
-				"message":       map[string]any{"role": "assistant", "content": string(output)},
-				"finish_reason": "stop",
-			}},
-		}), nil
-	})}
-	var stdout bytes.Buffer
-	environment := cliEnvironment{
-		Cwd:        directory,
-		Stdout:     &stdout,
-		Stderr:     &bytes.Buffer{},
-		Getenv:     func(string) string { return "" },
-		HTTPClient: client,
-		Now:        func() time.Time { return time.Date(2026, 8, 15, 14, 0, 0, 0, time.UTC) },
-	}
-	if err := runCLI(ctx, []string{"init", base}, environment); err != nil {
-		t.Fatalf("init: %v", err)
-	}
-	for _, setting := range [][2]string{
-		{"reviewer", "http"},
-		{"model", "stored-http-model"},
-		{"base-url", "https://stored.example/v1"},
-		{"api-key", "stored-secret"},
-	} {
-		if err := runCLI(ctx, []string{"config", "set", setting[0], setting[1]}, environment); err != nil {
-			t.Fatalf("set %s: %v", setting[0], err)
-		}
-	}
-	stdout.Reset()
-	if err := runCLI(ctx, []string{"scan"}, environment); err != nil {
-		t.Fatalf("scan: %v", err)
-	}
-	if !strings.Contains(stdout.String(), "0 new, 0 resolved") {
-		t.Fatalf("scan output:\n%s", stdout.String())
-	}
-}
-
 func TestCLIConfigGetUnsetAndValidation(t *testing.T) {
 	ctx := context.Background()
 	_, directory := newTestGitRepository(t)
@@ -556,7 +499,7 @@ func TestCLIConfigGetUnsetAndValidation(t *testing.T) {
 	if err := runCLI(ctx, []string{"config", "list"}, environment); err != nil {
 		t.Fatalf("empty list: %v", err)
 	}
-	if !strings.Contains(stdout.String(), "No reviewer configuration stored") {
+	if !strings.Contains(stdout.String(), "No Codex configuration stored") {
 		t.Fatalf("empty list output = %q", stdout.String())
 	}
 	if err := runCLI(ctx, []string{"config", "set", "model", "test-model"}, environment); err != nil {

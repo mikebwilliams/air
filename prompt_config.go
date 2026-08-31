@@ -13,9 +13,9 @@ const maximumPromptBytes = 256 * 1024
 func resolveReviewerPrompt(
 	ctx context.Context,
 	store *Store,
-	kind, reviewer string,
+	kind string,
 ) (reviewerPrompt, error) {
-	prompt, err := reviewerPromptSpec(kind, reviewer)
+	prompt, err := reviewerPromptSpec(kind)
 	if err != nil {
 		return reviewerPrompt{}, err
 	}
@@ -28,7 +28,7 @@ func resolveReviewerPrompt(
 	}
 	instructions, err = validatePromptInstructions(instructions)
 	if err != nil {
-		return reviewerPrompt{}, fmt.Errorf("invalid database %s prompt for %s: %w", kind, reviewer, err)
+		return reviewerPrompt{}, fmt.Errorf("invalid database %s prompt: %w", kind, err)
 	}
 	return prompt.withCustomInstructions(instructions), nil
 }

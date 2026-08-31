@@ -50,8 +50,8 @@ var cliCommands = []cliCommandSpec{
 	},
 	{
 		Name: "doctor", Category: commandCategoryGettingStarted,
-		Summary:     "Check repository, database, and reviewer setup.",
-		Description: "Inspect AIR's repository state, database integrity, effective reviewer configuration, pricing, and backend prerequisites.",
+		Summary:     "Check repository, database, and Codex setup.",
+		Description: "Inspect AIR's repository state, database integrity, effective Codex configuration, pricing, and Codex CLI prerequisites.",
 		Usage:       []string{"air doctor [OPTIONS]"},
 		Options:     []cliHelpOption{{"--json", "Write the report as JSON."}}, Run: runDoctor,
 	},
@@ -83,7 +83,7 @@ var cliCommands = []cliCommandSpec{
 	{
 		Name: "retry", Category: commandCategoryCommitReview,
 		Summary:     "Retry commits in the durable failure queue.",
-		Description: "Review failed commits that still occur on master, oldest first, using the current reviewer configuration.",
+		Description: "Review failed commits that still occur on master, oldest first, using the current Codex configuration.",
 		Usage:       []string{"air retry [OPTIONS]"},
 		Options: append([]cliHelpOption{
 			{"--limit N", "Process at most N failed commits; zero means unlimited."},
@@ -128,12 +128,12 @@ var cliCommands = []cliCommandSpec{
 	{
 		Name: "recheck", Category: commandCategoryFindingReview,
 		Summary:     "Reconcile open findings against the current HEAD.",
-		Description: "Ask a reviewer whether selected open findings are resolved in the exact HEAD snapshot. With no IDs, recheck every eligible open finding.",
+		Description: "Ask Codex whether selected open findings are resolved in the exact HEAD snapshot. With no IDs, recheck every eligible open finding.",
 		Usage:       []string{"air recheck [OPTIONS] [FINDING_ID ...]"},
 		Options: append([]cliHelpOption{
 			{"--limit N", "Recheck at most N findings; zero means unlimited."},
 			{"--batch-size N", fmt.Sprintf("Send N findings per model call (default: %d; maximum: %d).", defaultRecheckBatchSize, maxRecheckBatchSize)},
-			{"--force", "Repeat checks already completed with this reviewer at HEAD."},
+			{"--force", "Repeat checks already completed with this Codex configuration at HEAD."},
 			{"--dry-run", "Show pending work without reviewing or writing."},
 			{"--continue-on-error", "Continue after a failed model batch."},
 		}, reviewerHelpOptions("per-batch")...), Run: runRecheck,
@@ -203,42 +203,37 @@ var cliCommands = []cliCommandSpec{
 	},
 	{
 		Name: "prompt", Category: commandCategoryMaintenance,
-		Summary:     "Inspect and customize reviewer prompts.",
-		Description: "List repository prompt identities, inspect editable reviewer instructions or the full static prompt, and store or reset repository-specific overrides. AIR keeps its protocol and response contract fixed.",
+		Summary:     "Inspect and customize Codex prompts.",
+		Description: "List repository prompt identities, inspect editable Codex instructions or the full static prompt, and store or reset repository-specific overrides. AIR keeps its protocol and response contract fixed.",
 		Usage:       []string{"air prompt COMMAND [ARGUMENTS]"},
 		Children: []cliCommandSpec{
 			{Name: "list", Summary: "List prompt sources and identities.", Usage: []string{"air prompt list"}},
 			{
 				Name: "show", Summary: "Show editable or full effective prompt text.",
-				Usage: []string{"air prompt show --reviewer BACKEND [--full] KIND"},
-				Options: []cliHelpOption{
-					{"--reviewer BACKEND", "Required review backend: codex or http."},
-					{"--full", "Include AIR's fixed protocol and response contract."},
-				},
+				Usage:   []string{"air prompt show [--full] KIND"},
+				Options: []cliHelpOption{{"--full", "Include AIR's fixed protocol and response contract."}},
 			},
 			{
-				Name: "set", Summary: "Store repository-specific reviewer instructions.",
+				Name: "set", Summary: "Store repository-specific Codex instructions.",
 				Usage: []string{
-					"air prompt set --reviewer BACKEND --file PATH KIND",
-					"air prompt set --reviewer BACKEND --stdin KIND",
+					"air prompt set --file PATH KIND",
+					"air prompt set --stdin KIND",
 				},
 				Options: []cliHelpOption{
-					{"--reviewer BACKEND", "Required review backend: codex or http."},
 					{"--file PATH", "Read editable instructions from a UTF-8 text file."},
 					{"--stdin", "Read editable instructions from standard input."},
 				},
 			},
 			{
 				Name: "reset", Summary: "Remove an override and restore built-in instructions.",
-				Usage:   []string{"air prompt reset --reviewer BACKEND KIND"},
-				Options: []cliHelpOption{{"--reviewer BACKEND", "Required review backend: codex or http."}},
+				Usage: []string{"air prompt reset KIND"},
 			},
 		}, Run: runPrompt,
 	},
 	{
 		Name: "config", Category: commandCategoryMaintenance,
-		Summary:     "Manage repository reviewer configuration.",
-		Description: "Read and write reviewer settings stored in AIR's repository database. Effective values use command-line flags, environment variables, database settings, and built-in defaults in that order.",
+		Summary:     "Manage repository Codex configuration.",
+		Description: "Read and write Codex settings stored in AIR's repository database. Effective values use command-line flags, environment variables, database settings, and built-in defaults in that order.",
 		Usage:       []string{"air config COMMAND [ARGUMENTS]"},
 		Children: []cliCommandSpec{
 			{
@@ -296,15 +291,11 @@ var cliCommands = []cliCommandSpec{
 
 func reviewerHelpOptions(timeoutScope string) []cliHelpOption {
 	return []cliHelpOption{
-		{"--reviewer BACKEND", "Override the review backend: codex or http."},
 		{"--model MODEL", "Override the configured model identifier."},
 		{"--effort EFFORT", "Override the Codex reasoning effort."},
 		{"--codex-bin PATH", "Override the Codex CLI executable."},
 		{"--codex-profile PROFILE", "Override the Codex configuration profile."},
 		{"--codex-timeout DURATION", "Override the " + timeoutScope + " Codex timeout."},
-		{"--base-url URL", "Override the OpenAI-compatible HTTP API base URL."},
-		{"--api-key-env NAME", "Read the HTTP API key from this environment variable."},
-		{"--api-key KEY", "Override the HTTP API key; prefer an environment variable."},
 	}
 }
 
@@ -419,7 +410,7 @@ func printUsage(output io.Writer) {
 		}
 	}
 	fmt.Fprintln(output, "\nHelp:\n  help       Show global or command-specific help.")
-	fmt.Fprintln(output, "\nReviewer configuration precedence:\n  command-line flag > environment variable > database > built-in default")
+	fmt.Fprintln(output, "\nCodex configuration precedence:\n  command-line flag > environment variable > database > built-in default")
 	fmt.Fprintln(output, "\nRun \"air help COMMAND\" for command details.")
 }
 

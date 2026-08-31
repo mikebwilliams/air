@@ -11,7 +11,7 @@ import (
 
 func (s *Store) PreviouslyRecheckedFindingIDs(
 	ctx context.Context,
-	headSHA, reviewer, model, effort, version string,
+	headSHA, model, effort, version string,
 ) (map[int64]struct{}, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT rr.finding_id
@@ -19,7 +19,7 @@ func (s *Store) PreviouslyRecheckedFindingIDs(
 		JOIN recheck_attempts a ON a.id = rr.recheck_id
 		WHERE a.head_sha = ? AND a.reviewer = ? AND a.model = ?
 		  AND COALESCE(a.reasoning_effort, '') = ? AND a.prompt_version = ?`,
-		headSHA, reviewer, model, effort, version)
+		headSHA, codexReviewerName, model, effort, version)
 	if err != nil {
 		return nil, fmt.Errorf("read prior HEAD rechecks: %w", err)
 	}
@@ -40,7 +40,7 @@ func (s *Store) PreviouslyRecheckedFindingIDs(
 
 func (s *Store) ApplyRecheck(
 	ctx context.Context,
-	headSHA, reviewer string,
+	headSHA string,
 	identity ReviewIdentity,
 	findings []Finding,
 	result RecheckResult,
@@ -48,9 +48,6 @@ func (s *Store) ApplyRecheck(
 ) (int64, error) {
 	if !isHexObjectID(headSHA) {
 		return 0, errors.New("recheck HEAD must be a full Git object ID")
-	}
-	if reviewer != "codex" && reviewer != "http" {
-		return 0, fmt.Errorf("invalid recheck reviewer %q", reviewer)
 	}
 	if strings.TrimSpace(identity.Model.Name) == "" {
 		return 0, errors.New("recheck model must not be empty")
@@ -122,7 +119,7 @@ func (s *Store) ApplyRecheck(
 			cost_context, cost_complete, duration_ms, finding_count,
 			resolved_count, still_present_count, uncertain_count
 		) VALUES(?, ?, ?, ?, NULLIF(?, ''), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		headSHA, timestamp, reviewer, identity.Model.Name, identity.ReasoningEffort,
+		headSHA, timestamp, codexReviewerName, identity.Model.Name, identity.ReasoningEffort,
 		attemptPromptVersion, result.Output.Summary, result.RawResponse,
 		result.Usage.InputTokens, result.Usage.CachedInputTokens,
 		nullableInt64(result.Usage.CacheWriteTokens), result.Usage.OutputTokens,

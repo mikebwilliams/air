@@ -309,7 +309,7 @@ func TestStoreAppliesAndAccountsForHEADRechecks(t *testing.T) {
 			CacheWriteTokens: &cacheWrites, OutputTokens: 20, ReasoningOutputTokens: 5},
 		Duration: 3 * time.Second,
 	}
-	attemptID, err := store.ApplyRecheck(ctx, headSHA, "codex",
+	attemptID, err := store.ApplyRecheck(ctx, headSHA,
 		ReviewIdentity{Model: modelByName("gpt-5.6-luna"), ReasoningEffort: "xhigh"},
 		findings, recheck, checkedAt)
 	if err != nil {
@@ -332,7 +332,7 @@ func TestStoreAppliesAndAccountsForHEADRechecks(t *testing.T) {
 		events[1].SHA == nil || *events[1].SHA != headSHA {
 		t.Fatalf("finding events = %+v, %v", events, err)
 	}
-	prior, err := store.PreviouslyRecheckedFindingIDs(ctx, headSHA, "codex",
+	prior, err := store.PreviouslyRecheckedFindingIDs(ctx, headSHA,
 		"gpt-5.6-luna", "xhigh", recheckPromptVersion)
 	if err != nil || len(prior) != 2 {
 		t.Fatalf("prior rechecks = %v, %v", prior, err)
