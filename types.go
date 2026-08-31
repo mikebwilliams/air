@@ -9,6 +9,7 @@ import (
 const (
 	codexReviewerName  = "codex"
 	claudeReviewerName = "claude"
+	geminiReviewerName = "gemini"
 )
 
 func normalizedHarness(name string) string {
