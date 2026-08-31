@@ -1716,18 +1716,21 @@ func printReviewResult(output io.Writer, introduced, resolved []Finding, summary
 
 func runExport(ctx context.Context, args []string, environment cliEnvironment) error {
 	flags := newFlagSet("export", environment.Stderr)
-	format := flags.String("format", "", "output format: json or sarif")
+	format := flags.String("format", "", "output format: json, sarif, or html")
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
-	if flags.NArg() != 0 || (*format != "json" && *format != "sarif") {
-		return errors.New("usage: air export --format <json|sarif>")
+	if flags.NArg() != 0 || (*format != "json" && *format != "sarif" && *format != "html") {
+		return errors.New("usage: air export --format <json|sarif|html>")
 	}
-	_, store, closeStore, err := openRepositoryStore(ctx, environment.Cwd)
+	repository, store, closeStore, err := openRepositoryStore(ctx, environment.Cwd)
 	if err != nil {
 		return err
 	}
 	defer closeStore()
+	if *format == "html" {
+		return writeHTMLExport(ctx, environment.Stdout, repository, store, environmentNow(environment))
+	}
 	findings, err := store.OpenFindings(ctx)
 	if err != nil {
 		return err
@@ -2068,7 +2071,7 @@ Usage:
   air status [--json]
   air log
   air show <commit-ish> [--reviews | --review N] [--json]
-  air export --format <json|sarif>
+  air export --format <json|sarif|html>
   air findings [--all]
   air finding <id>
   air finding dismiss <id> --reason <text>

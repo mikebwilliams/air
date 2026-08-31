@@ -365,7 +365,9 @@ air stats
 air cost --model gpt-5.6-luna --since 2026-08-01
 air status --json
 air show HEAD --json
+air export --format json
 air export --format sarif
+air export --format html > air-findings.html
 ```
 
 `air show` includes the model, reasoning effort, token usage, elapsed scan time,
@@ -396,7 +398,17 @@ estimate. If no timing samples exist, the estimate is reported as unknown.
 Status JSON contains the same aggregate counts as text output.
 `air export --format json` emits current open findings, while `--format sarif`
 emits SARIF 2.1.0 with file and line locations when the reviewer supplied them.
-Dismissed and resolved findings are excluded from both exports.
+Dismissed and resolved findings are excluded from those machine-readable
+exports.
+
+`air export --format html` emits one self-contained, offline HTML file for
+sharing with people who do not have AIR or its database. The viewer includes
+all open, dismissed, and resolved findings; search, status and severity
+filters; newest, file, and severity sorts; finding details; review attribution;
+event history; and bounded excerpts from introducing diffs. It starts on open
+findings. The report is read-only: lifecycle controls and actions that invoke
+an editor or Git difftool are intentionally absent. No repository configuration,
+API keys, raw model responses, or external assets are included.
 
 `air findings` opens a full-screen terminal browser. It starts with open
 findings; `--all` starts with every disposition. Use the arrow keys or `j`/`k`

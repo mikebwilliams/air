@@ -1214,12 +1214,14 @@ air status --json
 air show <commit-ish> --json
 air export --format json
 air export --format sarif
+air export --format html > air-findings.html
 ```
 
 JSON uses documented snake-case field names rather than mirroring Go field
 names. Status JSON contains `findings` and `commits` objects with the same
 aggregate counts, timing-sample count, and nullable millisecond estimate as
-text output; it contains no finding log. Export contains current open findings.
+text output; it contains no finding log. JSON and SARIF export contain current
+open findings.
 Show JSON includes commit metadata, the current commit record, findings
 introduced or resolved by the selected review, and retained attempts when
 `--reviews` is given. Current and retained review records include `duration_ms`
@@ -1229,6 +1231,15 @@ SARIF export uses version 2.1.0. Each open finding becomes one result with AIR's
 severity mapped to SARIF `error`, `warning`, or `note`, a stable finding-ID
 fingerprint, introducing commit metadata, and an artifact URI/start line when
 available. Resolved and dismissed findings are not exported.
+
+HTML export writes one self-contained, offline viewer. It includes every
+finding disposition, review attribution, finding event history, and a bounded
+excerpt of the finding's introducing diff when a textual hunk is available.
+The viewer starts with open findings and supports search; status and severity
+filters; newest, file, and severity sorts; keyboard selection; and a responsive
+list/detail layout. It is a static snapshot and therefore cannot mutate the AIR
+database or invoke editors and Git difftools. It contains no repository
+configuration, API keys, raw model responses, or external assets.
 
 ## 19. Reviewer Configuration
 
