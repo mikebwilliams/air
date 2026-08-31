@@ -908,6 +908,23 @@ and inspect `refs/heads/master` directly.
 
 ## 18. CLI
 
+### Help
+
+```bash
+air help
+air help <command>
+air help <command> <subcommand>
+air <command> --help
+air <command> <subcommand> --help
+```
+
+The command registry is the source for dispatch, grouped global help, command
+summaries, usage forms, documented options, and nested help topics. Help is
+handled before repository discovery or database access, writes to standard
+output, and succeeds. An unknown help topic is an error. Global help groups
+commands by workflow and directs the user to command-specific details rather
+than presenting every option at once.
+
 ### Initialize
 
 ```bash

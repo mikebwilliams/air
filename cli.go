@@ -37,59 +37,21 @@ func runCLI(ctx context.Context, args []string, environment cliEnvironment) erro
 		printUsage(environment.Stdout)
 		return nil
 	}
-	switch args[0] {
-	case "help", "-h", "--help":
+	if args[0] == "-h" || args[0] == "--help" {
 		printUsage(environment.Stdout)
 		return nil
-	case "init":
-		return runInit(ctx, args[1:], environment)
-	case "scan":
-		return runScan(ctx, args[1:], environment)
-	case "retry":
-		return runRetry(ctx, args[1:], environment)
-	case "failures":
-		return runFailures(ctx, args[1:], environment)
-	case "pending":
-		return runPending(ctx, args[1:], environment)
-	case "skip":
-		return runSkip(ctx, args[1:], environment)
-	case "clean":
-		return runClean(ctx, args[1:], environment)
-	case "reset":
-		return runReset(ctx, args[1:], environment)
-	case "config":
-		return runConfig(ctx, args[1:], environment)
-	case "model":
-		return runModel(ctx, args[1:], environment)
-	case "doctor":
-		return runDoctor(ctx, args[1:], environment)
-	case "db":
-		return runDB(ctx, args[1:], environment)
-	case "backup":
-		return runBackup(ctx, args[1:], environment)
-	case "stats":
-		return runStats(ctx, args[1:], environment)
-	case "cost":
-		return runCost(ctx, args[1:], environment)
-	case "export":
-		return runExport(ctx, args[1:], environment)
-	case "status":
-		return runStatus(ctx, args[1:], environment)
-	case "log":
-		return runLog(ctx, args[1:], environment)
-	case "show":
-		return runShow(ctx, args[1:], environment)
-	case "finding":
-		return runFinding(ctx, args[1:], environment)
-	case "findings":
-		return runFindings(ctx, args[1:], environment)
-	case "rescan":
-		return runRescan(ctx, args[1:], environment)
-	case "recheck":
-		return runRecheck(ctx, args[1:], environment)
-	default:
-		return fmt.Errorf("unknown command %q; run air help", args[0])
 	}
+	if args[0] == "help" {
+		return runHelpCommand(ctx, args[1:], environment)
+	}
+	if command, found := findCLICommand(args[0]); found {
+		if containsHelpFlag(args[1:]) {
+			printCommandHelp(environment.Stdout, commandHelpTarget(command, args[1:]))
+			return nil
+		}
+		return command.Run(ctx, args[1:], environment)
+	}
+	return fmt.Errorf("unknown command %q; run air help", args[0])
 }
 
 func runStats(ctx context.Context, args []string, environment cliEnvironment) error {
@@ -2044,57 +2006,4 @@ func visitedFlagNames(flags *flag.FlagSet) map[string]bool {
 		visited[value.Name] = true
 	})
 	return visited
-}
-
-func printUsage(output io.Writer) {
-	fmt.Fprintln(output, `AIR reviews commits and rechecks findings on master.
-
-Usage:
-  air init <commit-ish>
-  air scan [flags] [<from>..<to>]
-  air retry [flags]
-  air failures [--json]
-  air pending [--limit N] [<from>..<to>]
-  air skip <commit-ish> [--dry-run] [--reason TEXT]
-  air skip --filter TEXT [--dry-run] [--reason TEXT]
-  air rescan <commit-ish> [flags]
-  air recheck [flags] [<finding-id> ...]
-  air clean [--dry-run]
-  air reset [--force]
-  air config <get|set|unset|list> ...
-  air model <list|show|set-pricing|mark-pricing-unknown> ...
-  air doctor [--json]
-  air db path
-  air backup [PATH]
-  air stats [--model MODEL] [--since DATE]
-  air cost [--model MODEL] [--since DATE]
-  air status [--json]
-  air log
-  air show <commit-ish> [--reviews | --review N] [--json]
-  air export --format <json|sarif|html>
-  air findings [--all]
-  air finding <id>
-  air finding dismiss <id> --reason <text>
-  air finding reopen <id>
-  air finding note <id> <text>
-  air finding diff <id>
-  air finding open <id>
-
-Reviewer configuration precedence:
-  command-line flag > environment variable > database > built-in default
-
-Reviewer environment variables:
-  AIR_REVIEWER       Review backend (default: codex)
-  AIR_MODEL          Model identifier (required)
-  AIR_REASONING_EFFORT
-                     Codex reasoning effort (required for Codex)
-  AIR_CODEX_BIN      Codex CLI executable (default: codex)
-  AIR_CODEX_PROFILE  Optional Codex configuration profile
-  AIR_CODEX_TIMEOUT  Per-review or recheck-batch timeout (default: 20m)
-  AIR_BASE_URL       HTTP reviewer base URL (default: https://api.openai.com/v1)
-  AIR_API_KEY        HTTP reviewer API key
-  AIR_API_KEY_ENV    Name of another environment variable containing the API key
-  OPENAI_API_KEY     Fallback HTTP reviewer API key
-
-Run "air config list --effective" to show effective values and their sources.`)
 }

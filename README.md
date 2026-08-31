@@ -450,7 +450,15 @@ the current working-tree file at the recorded line for common editors; it
 reports a clear error when the finding has no location or the file no longer
 exists.
 
-Run `air help` for the concise command reference.
+Run `air help` for the grouped command reference, or request help for a command
+or nested action without requiring an initialized repository:
+
+```bash
+air help scan
+air scan --help
+air help finding dismiss
+air finding dismiss --help
+```
 
 Before an unattended or expensive run, inspect the complete local setup:
 
