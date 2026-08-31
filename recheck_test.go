@@ -61,9 +61,15 @@ func TestRecheckContinuesAndResumesSuccessfulBatches(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "1 recheck batches failed") || len(first.calls) != 2 {
 		t.Fatalf("first run calls=%d err=%v output=%s", len(first.calls), err, output.String())
 	}
-	prior, err := store.PreviouslyRecheckedFindingIDs(ctx, head, "check-model", "high", recheckPromptVersion)
+	prior, err := store.PreviouslyRecheckedFindingIDs(ctx, head, codexReviewerName,
+		"check-model", "high", recheckPromptVersion)
 	if err != nil || len(prior) != 2 {
 		t.Fatalf("successful first batch = %v, %v", prior, err)
+	}
+	otherHarness, err := store.PreviouslyRecheckedFindingIDs(ctx, head, claudeReviewerName,
+		"check-model", "high", recheckPromptVersion)
+	if err != nil || len(otherHarness) != 0 {
+		t.Fatalf("other-harness rechecks = %v, %v", otherHarness, err)
 	}
 
 	second := &fakeRecheckReviewer{check: func(input RecheckInput) (RecheckResult, error) {
@@ -109,7 +115,8 @@ func TestRecheckContinuesAndResumesSuccessfulBatches(t *testing.T) {
 	if len(third.calls) != 1 || strings.Contains(output.String(), "already checked") {
 		t.Fatalf("custom prompt calls=%d output=%s", len(third.calls), output.String())
 	}
-	prior, err = store.PreviouslyRecheckedFindingIDs(ctx, head, "check-model", "high", customPromptIdentity)
+	prior, err = store.PreviouslyRecheckedFindingIDs(ctx, head, codexReviewerName,
+		"check-model", "high", customPromptIdentity)
 	if err != nil || len(prior) != 3 {
 		t.Fatalf("custom-prompt results = %v, %v", prior, err)
 	}

@@ -893,6 +893,9 @@ func (m findingsModel) detailLines(width int) []string {
 	lines = append(lines, "Introduced: "+shortSHA(finding.IntroducedSHA))
 	if m.review.ID != 0 {
 		identity := m.review.Model
+		if m.review.Harness != "" && m.review.Harness != codexReviewerName {
+			identity = m.review.Harness + ":" + identity
+		}
 		if m.review.ReasoningEffort != "" {
 			identity += "/" + m.review.ReasoningEffort
 		}

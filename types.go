@@ -2,10 +2,22 @@ package main
 
 import (
 	"context"
+	"strings"
 	"time"
 )
 
-const codexReviewerName = "codex"
+const (
+	codexReviewerName  = "codex"
+	claudeReviewerName = "claude"
+)
+
+func normalizedHarness(name string) string {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return codexReviewerName
+	}
+	return name
+}
 
 const (
 	promptVersion           = "4"
@@ -32,6 +44,7 @@ type CommitRecord struct {
 	ProcessedAt              time.Time   `json:"processed_at"`
 	Status                   string      `json:"status"`
 	SkipReason               string      `json:"skip_reason,omitempty"`
+	Harness                  string      `json:"harness,omitempty"`
 	Model                    string      `json:"model,omitempty"`
 	ReasoningEffort          string      `json:"reasoning_effort,omitempty"`
 	PromptVersion            string      `json:"prompt_version,omitempty"`
@@ -52,6 +65,7 @@ type ReviewAttempt struct {
 	Number                   int        `json:"number"`
 	CommitSHA                string     `json:"commit_sha"`
 	ReviewedAt               time.Time  `json:"reviewed_at"`
+	Harness                  string     `json:"harness"`
 	Model                    string     `json:"model"`
 	ReasoningEffort          string     `json:"reasoning_effort,omitempty"`
 	PromptVersion            string     `json:"prompt_version"`
@@ -89,6 +103,7 @@ type ReviewStats struct {
 }
 
 type ReviewStatsGroup struct {
+	Harness               string
 	Model                 string
 	ReasoningEffort       string
 	Attempts              int
@@ -122,12 +137,14 @@ type ScanFailure struct {
 	FailedAt        time.Time `json:"failed_at"`
 	AttemptCount    int       `json:"attempt_count"`
 	Error           string    `json:"error"`
+	Harness         string    `json:"harness,omitempty"`
 	Model           string    `json:"model,omitempty"`
 	ReasoningEffort string    `json:"reasoning_effort,omitempty"`
 	Force           bool      `json:"force"`
 }
 
 type ReviewIdentity struct {
+	Harness         string
 	Model           Model
 	ReasoningEffort string
 	PromptVersion   string
@@ -162,6 +179,7 @@ type FindingReview struct {
 	Number          int
 	CommitSHA       string
 	ReviewedAt      time.Time
+	Harness         string
 	Model           string
 	ReasoningEffort string
 }

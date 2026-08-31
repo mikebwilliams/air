@@ -11,7 +11,7 @@ import (
 
 func (s *Store) PreviouslyRecheckedFindingIDs(
 	ctx context.Context,
-	headSHA, model, effort, version string,
+	headSHA, harness, model, effort, version string,
 ) (map[int64]struct{}, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT rr.finding_id
@@ -19,7 +19,7 @@ func (s *Store) PreviouslyRecheckedFindingIDs(
 		JOIN recheck_attempts a ON a.id = rr.recheck_id
 		WHERE a.head_sha = ? AND a.reviewer = ? AND a.model = ?
 		  AND COALESCE(a.reasoning_effort, '') = ? AND a.prompt_version = ?`,
-		headSHA, codexReviewerName, model, effort, version)
+		headSHA, normalizedHarness(harness), model, effort, version)
 	if err != nil {
 		return nil, fmt.Errorf("read prior HEAD rechecks: %w", err)
 	}
@@ -82,6 +82,7 @@ func (s *Store) ApplyRecheck(
 		return 0, fmt.Errorf("estimate recheck cost: %w", err)
 	}
 	attemptPromptVersion := promptVersionOrDefault(identity.PromptVersion, recheckPromptVersion)
+	harness := normalizedHarness(identity.Harness)
 
 	resolved, stillPresent, uncertain := countRecheckOutcomes(result.Output)
 	tx, err := s.db.BeginTx(ctx, nil)
@@ -119,7 +120,7 @@ func (s *Store) ApplyRecheck(
 			cost_context, cost_complete, duration_ms, finding_count,
 			resolved_count, still_present_count, uncertain_count
 		) VALUES(?, ?, ?, ?, NULLIF(?, ''), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		headSHA, timestamp, codexReviewerName, identity.Model.Name, identity.ReasoningEffort,
+		headSHA, timestamp, harness, identity.Model.Name, identity.ReasoningEffort,
 		attemptPromptVersion, result.Output.Summary, result.RawResponse,
 		result.Usage.InputTokens, result.Usage.CachedInputTokens,
 		nullableInt64(result.Usage.CacheWriteTokens), result.Usage.OutputTokens,

@@ -23,7 +23,9 @@ func TestStoreFindingLifecycleAndCleanupForeignKeys(t *testing.T) {
 	commitA := testMetadata("a", "0")
 	now := time.Date(2026, 8, 14, 12, 0, 0, 0, time.UTC)
 	cacheWrites := int64(10)
-	newIDs, err := store.ApplyReview(ctx, commitA, ReviewIdentity{Model: modelByName("gpt-5.6-luna"), ReasoningEffort: "low"}, ReviewResult{
+	newIDs, err := store.ApplyReview(ctx, commitA, ReviewIdentity{
+		Harness: claudeReviewerName, Model: modelByName("gpt-5.6-luna"), ReasoningEffort: "low",
+	}, ReviewResult{
 		Output: ReviewOutput{
 			NewFindings: []NewFinding{{
 				Severity:    "warning",
@@ -52,8 +54,13 @@ func TestStoreFindingLifecycleAndCleanupForeignKeys(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if record.Model != "gpt-5.6-luna" || record.ReasoningEffort != "low" {
-		t.Fatalf("review identity = model %q, effort %q", record.Model, record.ReasoningEffort)
+	if record.Harness != claudeReviewerName || record.Model != "gpt-5.6-luna" || record.ReasoningEffort != "low" {
+		t.Fatalf("review identity = harness %q, model %q, effort %q",
+			record.Harness, record.Model, record.ReasoningEffort)
+	}
+	attempts, err := store.ReviewAttempts(ctx, commitA.SHA)
+	if err != nil || len(attempts) != 1 || attempts[0].Harness != claudeReviewerName {
+		t.Fatalf("review attempt harness = %+v, %v", attempts, err)
 	}
 	if record.Usage == nil || record.Usage.InputTokens != 100 || record.Usage.CachedInputTokens != 40 ||
 		record.Usage.CacheWriteTokens == nil || *record.Usage.CacheWriteTokens != 10 ||
@@ -221,6 +228,9 @@ func TestOpenStoreMigratesSchema5ForRechecks(t *testing.T) {
 	}
 	if _, err := store.db.ExecContext(ctx, `
 		CREATE TABLE models(name TEXT PRIMARY KEY);
+		CREATE TABLE commits(sha TEXT PRIMARY KEY, status TEXT NOT NULL, model TEXT);
+		CREATE TABLE review_attempts(id INTEGER PRIMARY KEY);
+		CREATE TABLE scan_failures(sha TEXT PRIMARY KEY, model TEXT);
 		CREATE TABLE findings(id INTEGER PRIMARY KEY, title TEXT NOT NULL);
 		INSERT INTO findings(id, title) VALUES(7, 'preserved finding');
 		PRAGMA user_version = 5`); err != nil {
@@ -235,7 +245,7 @@ func TestOpenStoreMigratesSchema5ForRechecks(t *testing.T) {
 	}
 	defer store.Close()
 	var version int
-	if err := store.db.QueryRowContext(ctx, `PRAGMA user_version`).Scan(&version); err != nil || version != 6 {
+	if err := store.db.QueryRowContext(ctx, `PRAGMA user_version`).Scan(&version); err != nil || version != schemaVersion {
 		t.Fatalf("schema version = %d, %v", version, err)
 	}
 	hasColumn, err := transactionlessTableHasColumn(ctx, store, "resolved_recheck_id")
@@ -252,6 +262,69 @@ func TestOpenStoreMigratesSchema5ForRechecks(t *testing.T) {
 			`SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?`, table).Scan(&name); err != nil {
 			t.Fatalf("missing migrated table %s: %v", table, err)
 		}
+	}
+}
+
+func TestOpenStoreMigratesSchema6HarnessProvenance(t *testing.T) {
+	ctx := context.Background()
+	databasePath := filepath.Join(t.TempDir(), "air.sqlite")
+	store, err := openStoreFile(ctx, databasePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.db.ExecContext(ctx, `
+		CREATE TABLE models(name TEXT PRIMARY KEY);
+		INSERT INTO models(name) VALUES('historical-model');
+		CREATE TABLE commits(sha TEXT PRIMARY KEY, status TEXT NOT NULL, model TEXT);
+		CREATE TABLE review_attempts(id INTEGER PRIMARY KEY);
+		CREATE TABLE scan_failures(sha TEXT PRIMARY KEY, model TEXT);
+		CREATE TABLE findings(id INTEGER PRIMARY KEY, title TEXT NOT NULL);
+		PRAGMA user_version = 5`); err != nil {
+		t.Fatal(err)
+	}
+	if err := migrateSchema5To6(ctx, store); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.db.ExecContext(ctx, `
+		INSERT INTO commits(sha, status, model) VALUES('reviewed', 'reviewed', 'historical-model');
+		INSERT INTO review_attempts(id) VALUES(1);
+		INSERT INTO scan_failures(sha, model) VALUES('failed', 'historical-model');
+		INSERT INTO recheck_attempts(
+			id, head_sha, checked_at, reviewer, model, prompt_version, summary, raw_response,
+			input_tokens, cached_input_tokens, output_tokens, reasoning_output_tokens,
+			duration_ms, finding_count, resolved_count, still_present_count, uncertain_count
+		) VALUES(1, 'head', '2026-08-31T00:00:00Z', 'codex', 'historical-model', '1',
+			'historical', 'raw', 1, 0, 1, 0, 1, 1, 0, 1, 0)`); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	store, err = OpenStore(ctx, databasePath)
+	if err != nil {
+		t.Fatalf("OpenStore migration: %v", err)
+	}
+	defer store.Close()
+	for _, query := range []string{
+		`SELECT reviewer FROM commits WHERE sha = 'reviewed'`,
+		`SELECT reviewer FROM review_attempts WHERE id = 1`,
+		`SELECT reviewer FROM scan_failures WHERE sha = 'failed'`,
+		`SELECT reviewer FROM recheck_attempts WHERE id = 1`,
+	} {
+		var harness string
+		if err := store.db.QueryRowContext(ctx, query).Scan(&harness); err != nil || harness != codexReviewerName {
+			t.Fatalf("migrated harness = %q, %v for %s", harness, err, query)
+		}
+	}
+	if _, err := store.db.ExecContext(ctx, `
+		INSERT INTO recheck_attempts(
+			head_sha, checked_at, reviewer, model, prompt_version, summary, raw_response,
+			input_tokens, cached_input_tokens, output_tokens, reasoning_output_tokens,
+			duration_ms, finding_count, resolved_count, still_present_count, uncertain_count
+		) VALUES('head-2', '2026-08-31T00:00:01Z', 'claude', 'historical-model', '1',
+			'claude', 'raw', 1, 0, 1, 0, 1, 1, 0, 1, 0)`); err != nil {
+		t.Fatalf("insert Claude recheck after migration: %v", err)
 	}
 }
 
@@ -333,7 +406,7 @@ func TestStoreAppliesAndAccountsForHEADRechecks(t *testing.T) {
 		t.Fatalf("finding events = %+v, %v", events, err)
 	}
 	prior, err := store.PreviouslyRecheckedFindingIDs(ctx, headSHA,
-		"gpt-5.6-luna", "xhigh", recheckPromptVersion)
+		codexReviewerName, "gpt-5.6-luna", "xhigh", recheckPromptVersion)
 	if err != nil || len(prior) != 2 {
 		t.Fatalf("prior rechecks = %v, %v", prior, err)
 	}

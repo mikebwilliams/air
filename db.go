@@ -20,7 +20,7 @@ type Store struct {
 	db *sql.DB
 }
 
-const schemaVersion = 6
+const schemaVersion = 7
 
 const schemaSQL = `
 CREATE TABLE config (
@@ -75,6 +75,7 @@ CREATE TABLE commits (
     processed_at    TEXT NOT NULL,
     status          TEXT NOT NULL CHECK(status IN ('reviewed', 'skipped')),
     skip_reason     TEXT,
+	reviewer         TEXT CHECK(reviewer IS NULL OR length(trim(reviewer)) > 0),
     model           TEXT,
     reasoning_effort TEXT,
     prompt_version  TEXT,
@@ -118,6 +119,7 @@ CREATE TABLE review_attempts (
 	id                          INTEGER PRIMARY KEY,
 	commit_sha                  TEXT NOT NULL,
 	reviewed_at                 TEXT NOT NULL,
+	reviewer                    TEXT NOT NULL CHECK(length(trim(reviewer)) > 0),
 	model                       TEXT NOT NULL,
 	reasoning_effort            TEXT,
 	prompt_version              TEXT NOT NULL,
@@ -154,7 +156,7 @@ CREATE TABLE recheck_attempts (
 	id                          INTEGER PRIMARY KEY,
 	head_sha                    TEXT NOT NULL,
 	checked_at                  TEXT NOT NULL,
-	reviewer                    TEXT NOT NULL CHECK(reviewer IN ('codex', 'http')),
+	reviewer                    TEXT NOT NULL CHECK(length(trim(reviewer)) > 0),
 	model                       TEXT NOT NULL,
 	reasoning_effort            TEXT,
 	prompt_version              TEXT NOT NULL,
@@ -245,6 +247,7 @@ CREATE TABLE scan_failures (
 	failed_at        TEXT NOT NULL,
 	attempt_count    INTEGER NOT NULL CHECK(attempt_count > 0),
 	error            TEXT NOT NULL,
+	reviewer         TEXT CHECK(reviewer IS NULL OR length(trim(reviewer)) > 0),
 	model            TEXT,
 	reasoning_effort TEXT,
 	force            INTEGER NOT NULL CHECK(force IN (0, 1))
@@ -257,7 +260,7 @@ CREATE INDEX recheck_attempts_identity_idx ON recheck_attempts(head_sha, reviewe
 CREATE INDEX recheck_results_finding_idx ON recheck_results(finding_id, recheck_id);
 CREATE INDEX finding_events_review_idx ON finding_events(review_id, id);
 CREATE INDEX scan_failures_failed_at_idx ON scan_failures(failed_at, sha);
-PRAGMA user_version = 6;
+PRAGMA user_version = 7;
 `
 
 func CreateStore(ctx context.Context, databasePath, startSHA string) (*Store, error) {
@@ -344,11 +347,133 @@ func OpenStore(ctx context.Context, databasePath string) (*Store, error) {
 		}
 		version = 6
 	}
+	if version == 6 {
+		if err := migrateSchema6To7(ctx, store); err != nil {
+			_ = store.Close()
+			return nil, err
+		}
+		version = 7
+	}
 	if version != schemaVersion {
 		_ = store.Close()
 		return nil, fmt.Errorf("unsupported AIR schema version %d", version)
 	}
 	return store, nil
+}
+
+func migrateSchema6To7(ctx context.Context, store *Store) (returnErr error) {
+	if _, err := store.db.ExecContext(ctx, `PRAGMA foreign_keys = OFF`); err != nil {
+		return fmt.Errorf("upgrade AIR schema from 6 to 7: disable foreign keys: %w", err)
+	}
+	defer func() {
+		if _, err := store.db.ExecContext(ctx, `PRAGMA foreign_keys = ON`); err != nil && returnErr == nil {
+			returnErr = fmt.Errorf("upgrade AIR schema from 6 to 7: restore foreign keys: %w", err)
+		}
+	}()
+
+	tx, err := store.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("upgrade AIR schema from 6 to 7: %w", err)
+	}
+	defer tx.Rollback()
+	for _, addition := range []struct {
+		table  string
+		column string
+		sql    string
+	}{
+		{"commits", "reviewer", `ALTER TABLE commits ADD COLUMN reviewer TEXT
+			CHECK(reviewer IS NULL OR length(trim(reviewer)) > 0)`},
+		{"review_attempts", "reviewer", `ALTER TABLE review_attempts ADD COLUMN reviewer TEXT
+			NOT NULL DEFAULT 'codex' CHECK(length(trim(reviewer)) > 0)`},
+		{"scan_failures", "reviewer", `ALTER TABLE scan_failures ADD COLUMN reviewer TEXT
+			CHECK(reviewer IS NULL OR length(trim(reviewer)) > 0)`},
+	} {
+		hasColumn, err := transactionTableHasColumn(ctx, tx, addition.table, addition.column)
+		if err != nil {
+			return fmt.Errorf("upgrade AIR schema from 6 to 7: inspect %s: %w", addition.table, err)
+		}
+		if !hasColumn {
+			if _, err := tx.ExecContext(ctx, addition.sql); err != nil {
+				return fmt.Errorf("upgrade AIR schema from 6 to 7: add %s.%s: %w",
+					addition.table, addition.column, err)
+			}
+		}
+	}
+	if _, err := tx.ExecContext(ctx, `
+		UPDATE commits SET reviewer = 'codex' WHERE status = 'reviewed' AND reviewer IS NULL;
+		UPDATE scan_failures SET reviewer = 'codex' WHERE model IS NOT NULL AND reviewer IS NULL;
+		DROP INDEX IF EXISTS recheck_attempts_identity_idx;
+		CREATE TABLE recheck_attempts_v7 (
+			id INTEGER PRIMARY KEY,
+			head_sha TEXT NOT NULL,
+			checked_at TEXT NOT NULL,
+			reviewer TEXT NOT NULL CHECK(length(trim(reviewer)) > 0),
+			model TEXT NOT NULL,
+			reasoning_effort TEXT,
+			prompt_version TEXT NOT NULL,
+			summary TEXT NOT NULL,
+			raw_response TEXT NOT NULL,
+			input_tokens INTEGER NOT NULL CHECK(input_tokens >= 0),
+			cached_input_tokens INTEGER NOT NULL CHECK(cached_input_tokens >= 0),
+			cache_write_tokens INTEGER CHECK(cache_write_tokens IS NULL OR cache_write_tokens >= 0),
+			output_tokens INTEGER NOT NULL CHECK(output_tokens >= 0),
+			reasoning_output_tokens INTEGER NOT NULL CHECK(reasoning_output_tokens >= 0),
+			estimated_cost_microusd INTEGER CHECK(estimated_cost_microusd IS NULL OR estimated_cost_microusd >= 0),
+			estimated_cost_max_microusd INTEGER CHECK(estimated_cost_max_microusd IS NULL OR estimated_cost_max_microusd >= 0),
+			cost_context TEXT CHECK(cost_context IS NULL OR cost_context IN ('short', 'long')),
+			cost_complete INTEGER CHECK(cost_complete IS NULL OR cost_complete IN (0, 1)),
+			duration_ms INTEGER NOT NULL CHECK(duration_ms >= 0),
+			finding_count INTEGER NOT NULL CHECK(finding_count > 0),
+			resolved_count INTEGER NOT NULL CHECK(resolved_count >= 0),
+			still_present_count INTEGER NOT NULL CHECK(still_present_count >= 0),
+			uncertain_count INTEGER NOT NULL CHECK(uncertain_count >= 0),
+			FOREIGN KEY(model) REFERENCES models(name),
+			CHECK(cached_input_tokens <= input_tokens),
+			CHECK(cache_write_tokens IS NULL OR cached_input_tokens + cache_write_tokens <= input_tokens),
+			CHECK(reasoning_output_tokens <= output_tokens),
+			CHECK(resolved_count + still_present_count + uncertain_count = finding_count),
+			CHECK(
+				(estimated_cost_microusd IS NULL AND estimated_cost_max_microusd IS NULL AND
+				 cost_context IS NULL AND cost_complete IS NULL) OR
+				(estimated_cost_microusd IS NOT NULL AND estimated_cost_max_microusd IS NOT NULL AND
+				 estimated_cost_microusd <= estimated_cost_max_microusd AND
+				 cost_context IS NOT NULL AND cost_complete IS NOT NULL)
+			)
+		);
+		INSERT INTO recheck_attempts_v7 SELECT * FROM recheck_attempts;
+		DROP TABLE recheck_attempts;
+		ALTER TABLE recheck_attempts_v7 RENAME TO recheck_attempts;
+		CREATE INDEX recheck_attempts_identity_idx
+			ON recheck_attempts(head_sha, reviewer, model, reasoning_effort, prompt_version);
+		PRAGMA user_version = 7`); err != nil {
+		return fmt.Errorf("upgrade AIR schema from 6 to 7: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("upgrade AIR schema from 6 to 7: %w", err)
+	}
+	if err := foreignKeyCheck(ctx, store.db); err != nil {
+		return fmt.Errorf("upgrade AIR schema from 6 to 7: %w", err)
+	}
+	return nil
+}
+
+func foreignKeyCheck(ctx context.Context, database *sql.DB) error {
+	rows, err := database.QueryContext(ctx, `PRAGMA foreign_key_check`)
+	if err != nil {
+		return fmt.Errorf("check foreign keys: %w", err)
+	}
+	defer rows.Close()
+	if rows.Next() {
+		var table string
+		var rowID int64
+		var parent string
+		var constraint int
+		if err := rows.Scan(&table, &rowID, &parent, &constraint); err != nil {
+			return fmt.Errorf("check foreign keys: %w", err)
+		}
+		return fmt.Errorf("foreign key violation in %s row %d referencing %s", table, rowID, parent)
+	}
+	return rows.Err()
 }
 
 func migrateSchema5To6(ctx context.Context, store *Store) error {
@@ -432,10 +557,13 @@ func migrateSchema5To6(ctx context.Context, store *Store) error {
 }
 
 func transactionTableHasColumn(ctx context.Context, tx *sql.Tx, table, column string) (bool, error) {
-	if table != "findings" {
+	allowed := map[string]bool{
+		"commits": true, "findings": true, "review_attempts": true, "scan_failures": true,
+	}
+	if !allowed[table] {
 		return false, fmt.Errorf("unsupported migration table %q", table)
 	}
-	rows, err := tx.QueryContext(ctx, `PRAGMA table_info(findings)`)
+	rows, err := tx.QueryContext(ctx, `PRAGMA table_info(`+table+`)`)
 	if err != nil {
 		return false, err
 	}
@@ -636,7 +764,7 @@ func (s *Store) ScanFailureSHAs(ctx context.Context) ([]string, error) {
 
 func (s *Store) ScanFailures(ctx context.Context) ([]ScanFailure, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT sha, parent_sha, failed_at, attempt_count, error, model, reasoning_effort, force
+		SELECT sha, parent_sha, failed_at, attempt_count, error, reviewer, model, reasoning_effort, force
 		FROM scan_failures ORDER BY failed_at, sha`)
 	if err != nil {
 		return nil, fmt.Errorf("list scan failures: %w", err)
@@ -645,13 +773,14 @@ func (s *Store) ScanFailures(ctx context.Context) ([]ScanFailure, error) {
 	failures := make([]ScanFailure, 0)
 	for rows.Next() {
 		var failure ScanFailure
-		var parent, model, effort sql.NullString
+		var parent, harness, model, effort sql.NullString
 		var failedAt string
 		if err := rows.Scan(&failure.SHA, &parent, &failedAt, &failure.AttemptCount,
-			&failure.Error, &model, &effort, &failure.Force); err != nil {
+			&failure.Error, &harness, &model, &effort, &failure.Force); err != nil {
 			return nil, fmt.Errorf("list scan failures: %w", err)
 		}
 		failure.ParentSHA = parent.String
+		failure.Harness = harness.String
 		failure.Model = model.String
 		failure.ReasoningEffort = effort.String
 		parsed, err := time.Parse(time.RFC3339Nano, failedAt)
@@ -678,17 +807,19 @@ func (s *Store) RecordScanFailure(ctx context.Context, sha, parentSHA string,
 	}
 	_, err := s.db.ExecContext(ctx, `
 		INSERT INTO scan_failures(
-			sha, parent_sha, failed_at, attempt_count, error, model, reasoning_effort, force
-		) VALUES(?, NULLIF(?, ''), ?, 1, ?, NULLIF(?, ''), NULLIF(?, ''), ?)
+			sha, parent_sha, failed_at, attempt_count, error, reviewer, model, reasoning_effort, force
+		) VALUES(?, NULLIF(?, ''), ?, 1, ?, NULLIF(?, ''), NULLIF(?, ''), NULLIF(?, ''), ?)
 		ON CONFLICT(sha) DO UPDATE SET
 			parent_sha = excluded.parent_sha,
 			failed_at = excluded.failed_at,
 			attempt_count = scan_failures.attempt_count + 1,
 			error = excluded.error,
+			reviewer = excluded.reviewer,
 			model = excluded.model,
 			reasoning_effort = excluded.reasoning_effort,
 			force = excluded.force`,
-		sha, parentSHA, formatTime(now), failure.Error(), identity.Model.Name, identity.ReasoningEffort, force)
+		sha, parentSHA, formatTime(now), failure.Error(), normalizedHarness(identity.Harness),
+		identity.Model.Name, identity.ReasoningEffort, force)
 	if err != nil {
 		return fmt.Errorf("record scan failure for %s: %w", shortSHA(sha), err)
 	}
@@ -1018,7 +1149,8 @@ func (s *Store) FindingEvents(ctx context.Context, id int64) ([]FindingEvent, er
 			FROM finding_events e WHERE e.finding_id = ?
 			UNION ALL
 			SELECT -rr.id, rr.finding_id, NULL, a.head_sha,
-			       'recheck ' || REPLACE(rr.outcome, '_', ' ') || ' (' || a.model ||
+			       'recheck ' || REPLACE(rr.outcome, '_', ' ') || ' (' ||
+			       CASE WHEN a.reviewer = 'codex' THEN '' ELSE a.reviewer || ':' END || a.model ||
 			       CASE WHEN a.reasoning_effort IS NULL THEN '' ELSE '/' || a.reasoning_effort END || ')',
 			       rr.reason, a.checked_at
 			FROM recheck_results rr
@@ -1067,7 +1199,7 @@ func (s *Store) FindingReview(ctx context.Context, id int64) (FindingReview, err
 		SELECT a.id,
 		       (SELECT COUNT(*) FROM review_attempts previous
 		        WHERE previous.commit_sha = a.commit_sha AND previous.id <= a.id),
-		       a.commit_sha, a.reviewed_at, a.model, a.reasoning_effort
+		       a.commit_sha, a.reviewed_at, a.reviewer, a.model, a.reasoning_effort
 		FROM findings f
 		JOIN review_attempts a ON a.id = f.introduced_review_id
 		WHERE f.id = ?`, id).Scan(
@@ -1075,6 +1207,7 @@ func (s *Store) FindingReview(ctx context.Context, id int64) (FindingReview, err
 		&review.Number,
 		&review.CommitSHA,
 		&reviewedAt,
+		&review.Harness,
 		&review.Model,
 		&effort,
 	)
@@ -1363,6 +1496,7 @@ func (s *Store) ApplyReview(
 		return nil, err
 	}
 	reviewPromptVersion := promptVersionOrDefault(identity.PromptVersion, promptVersion)
+	harness := normalizedHarness(identity.Harness)
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, fmt.Errorf("record review: %w", err)
@@ -1375,17 +1509,18 @@ func (s *Store) ApplyReview(
 	processedAt := formatTime(now)
 	_, err = tx.ExecContext(ctx, `
         INSERT INTO commits(
-            sha, parent_sha, processed_at, status, model, reasoning_effort,
+			sha, parent_sha, processed_at, status, reviewer, model, reasoning_effort,
             prompt_version, summary, raw_response, input_tokens,
 			cached_input_tokens, cache_write_tokens, output_tokens, reasoning_output_tokens,
 			estimated_cost_microusd, estimated_cost_max_microusd,
 			cost_context, cost_complete
-		) VALUES(?, ?, ?, 'reviewed', ?, NULLIF(?, ''), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		) VALUES(?, ?, ?, 'reviewed', ?, ?, NULLIF(?, ''), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(sha) DO UPDATE SET
 			parent_sha = excluded.parent_sha,
 			processed_at = excluded.processed_at,
 			status = 'reviewed',
 			skip_reason = NULL,
+			reviewer = excluded.reviewer,
 			model = excluded.model,
 			reasoning_effort = excluded.reasoning_effort,
 			prompt_version = excluded.prompt_version,
@@ -1403,6 +1538,7 @@ func (s *Store) ApplyReview(
 		metadata.SHA,
 		metadata.ParentSHA,
 		processedAt,
+		harness,
 		identity.Model.Name,
 		identity.ReasoningEffort,
 		reviewPromptVersion,
@@ -1423,14 +1559,15 @@ func (s *Store) ApplyReview(
 	}
 	attemptRow, err := tx.ExecContext(ctx, `
 		INSERT INTO review_attempts(
-			commit_sha, reviewed_at, model, reasoning_effort, prompt_version,
+			commit_sha, reviewed_at, reviewer, model, reasoning_effort, prompt_version,
 			summary, raw_response, input_tokens, cached_input_tokens,
 			cache_write_tokens, output_tokens, reasoning_output_tokens,
 			estimated_cost_microusd, estimated_cost_max_microusd,
 			cost_context, cost_complete, duration_ms
-		) VALUES(?, ?, ?, NULLIF(?, ''), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		) VALUES(?, ?, ?, ?, NULLIF(?, ''), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		metadata.SHA,
 		processedAt,
+		harness,
 		identity.Model.Name,
 		identity.ReasoningEffort,
 		reviewPromptVersion,
@@ -1531,7 +1668,7 @@ func (s *Store) Commit(ctx context.Context, sha string) (CommitRecord, error) {
 	row := s.db.QueryRowContext(ctx, `
         SELECT
             c.sha, c.parent_sha, c.processed_at, c.status, c.skip_reason,
-            c.model, c.reasoning_effort, c.prompt_version, c.summary, c.raw_response,
+			c.reviewer, c.model, c.reasoning_effort, c.prompt_version, c.summary, c.raw_response,
 			c.input_tokens, c.cached_input_tokens, c.cache_write_tokens, c.output_tokens,
 			c.reasoning_output_tokens, c.estimated_cost_microusd,
 			c.estimated_cost_max_microusd, c.cost_context, c.cost_complete,
@@ -1556,7 +1693,7 @@ func (s *Store) Log(ctx context.Context) ([]CommitRecord, error) {
 	rows, err := s.db.QueryContext(ctx, `
         SELECT
             c.sha, c.parent_sha, c.processed_at, c.status, c.skip_reason,
-            c.model, c.reasoning_effort, c.prompt_version, c.summary, c.raw_response,
+			c.reviewer, c.model, c.reasoning_effort, c.prompt_version, c.summary, c.raw_response,
 			c.input_tokens, c.cached_input_tokens, c.cache_write_tokens, c.output_tokens,
 			c.reasoning_output_tokens, c.estimated_cost_microusd,
 			c.estimated_cost_max_microusd, c.cost_context, c.cost_complete,
@@ -1592,7 +1729,7 @@ type rowScanner interface {
 func scanCommitRecord(row rowScanner) (CommitRecord, error) {
 	var record CommitRecord
 	var processedAt string
-	var parent, skipReason, model, effort, version, summary, raw sql.NullString
+	var parent, skipReason, harness, model, effort, version, summary, raw sql.NullString
 	var inputTokens, cachedInputTokens, cacheWriteTokens, outputTokens, reasoningOutputTokens sql.NullInt64
 	var estimatedCost, estimatedCostMaximum, durationMilliseconds sql.NullInt64
 	var costContextValue sql.NullString
@@ -1603,6 +1740,7 @@ func scanCommitRecord(row rowScanner) (CommitRecord, error) {
 		&processedAt,
 		&record.Status,
 		&skipReason,
+		&harness,
 		&model,
 		&effort,
 		&version,
@@ -1626,6 +1764,7 @@ func scanCommitRecord(row rowScanner) (CommitRecord, error) {
 	}
 	record.ParentSHA = parent.String
 	record.SkipReason = skipReason.String
+	record.Harness = harness.String
 	record.Model = model.String
 	record.ReasoningEffort = effort.String
 	record.PromptVersion = version.String
@@ -1662,7 +1801,7 @@ func scanCommitRecord(row rowScanner) (CommitRecord, error) {
 
 func (s *Store) ReviewAttempts(ctx context.Context, sha string) ([]ReviewAttempt, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT id, commit_sha, reviewed_at, model, reasoning_effort, prompt_version,
+		SELECT id, commit_sha, reviewed_at, reviewer, model, reasoning_effort, prompt_version,
 		       summary, raw_response, input_tokens, cached_input_tokens,
 		       cache_write_tokens, output_tokens, reasoning_output_tokens,
 		       estimated_cost_microusd, estimated_cost_max_microusd,
@@ -1715,6 +1854,7 @@ func scanReviewAttempt(row rowScanner) (ReviewAttempt, error) {
 		&attempt.ID,
 		&attempt.CommitSHA,
 		&reviewedAt,
+		&attempt.Harness,
 		&attempt.Model,
 		&effort,
 		&attempt.PromptVersion,
@@ -1764,17 +1904,17 @@ func (s *Store) ReviewStats(ctx context.Context, modelFilter string, since *time
 		sinceValue = formatTime(*since)
 	}
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT kind, subject_sha, model, reasoning_effort, input_tokens, cached_input_tokens,
+		SELECT kind, subject_sha, reviewer, model, reasoning_effort, input_tokens, cached_input_tokens,
 		       cache_write_tokens, output_tokens, reasoning_output_tokens,
 		       estimated_cost_microusd, estimated_cost_max_microusd, duration_ms
 		FROM (
-			SELECT 'commit' AS kind, commit_sha AS subject_sha, model, reasoning_effort,
+			SELECT 'commit' AS kind, commit_sha AS subject_sha, reviewer, model, reasoning_effort,
 			       input_tokens, cached_input_tokens, cache_write_tokens, output_tokens,
 			       reasoning_output_tokens, estimated_cost_microusd,
 			       estimated_cost_max_microusd, duration_ms, reviewed_at AS occurred_at, id
 			FROM review_attempts
 			UNION ALL
-			SELECT 'recheck', head_sha, model, reasoning_effort,
+			SELECT 'recheck', head_sha, reviewer, model, reasoning_effort,
 			       input_tokens, cached_input_tokens, cache_write_tokens, output_tokens,
 			       reasoning_output_tokens, estimated_cost_microusd,
 			       estimated_cost_max_microusd, duration_ms, checked_at, id
@@ -1787,18 +1927,19 @@ func (s *Store) ReviewStats(ctx context.Context, modelFilter string, since *time
 	}
 	defer rows.Close()
 	type groupKey struct {
-		model  string
-		effort string
+		harness string
+		model   string
+		effort  string
 	}
 	groups := make(map[groupKey]*ReviewStatsGroup)
 	commits := make(map[string]struct{})
 	var stats ReviewStats
 	for rows.Next() {
-		var kind, sha, model string
+		var kind, sha, harness, model string
 		var effort sql.NullString
 		var input, cached, output, reasoning int64
 		var cacheWrite, minimumCost, maximumCost, durationMilliseconds sql.NullInt64
-		if err := rows.Scan(&kind, &sha, &model, &effort, &input, &cached, &cacheWrite,
+		if err := rows.Scan(&kind, &sha, &harness, &model, &effort, &input, &cached, &cacheWrite,
 			&output, &reasoning, &minimumCost, &maximumCost, &durationMilliseconds); err != nil {
 			return ReviewStats{}, fmt.Errorf("read review statistics: %w", err)
 		}
@@ -1808,10 +1949,10 @@ func (s *Store) ReviewStats(ctx context.Context, modelFilter string, since *time
 		} else {
 			stats.RecheckAttempts++
 		}
-		key := groupKey{model: model, effort: effort.String}
+		key := groupKey{harness: harness, model: model, effort: effort.String}
 		group := groups[key]
 		if group == nil {
-			group = &ReviewStatsGroup{Model: model, ReasoningEffort: effort.String}
+			group = &ReviewStatsGroup{Harness: harness, Model: model, ReasoningEffort: effort.String}
 			groups[key] = group
 		}
 		group.Attempts++
@@ -1858,6 +1999,9 @@ func (s *Store) ReviewStats(ctx context.Context, modelFilter string, since *time
 		stats.Groups = append(stats.Groups, *group)
 	}
 	sort.Slice(stats.Groups, func(i, j int) bool {
+		if stats.Groups[i].Harness != stats.Groups[j].Harness {
+			return stats.Groups[i].Harness < stats.Groups[j].Harness
+		}
 		if stats.Groups[i].Model == stats.Groups[j].Model {
 			return stats.Groups[i].ReasoningEffort < stats.Groups[j].ReasoningEffort
 		}

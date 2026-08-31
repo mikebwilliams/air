@@ -17,6 +17,7 @@ type findingListReview struct {
 	Number          int       `json:"number"`
 	CommitSHA       string    `json:"commit_sha"`
 	ReviewedAt      time.Time `json:"reviewed_at"`
+	Harness         string    `json:"harness"`
 	Model           string    `json:"model"`
 	ReasoningEffort string    `json:"reasoning_effort,omitempty"`
 }
@@ -160,7 +161,7 @@ func buildFindingListItems(ctx context.Context, store *Store, findings []Finding
 			Status:  findingDisposition(finding),
 			Review: findingListReview{
 				ID: review.ID, Number: review.Number, CommitSHA: review.CommitSHA,
-				ReviewedAt: review.ReviewedAt, Model: review.Model,
+				ReviewedAt: review.ReviewedAt, Harness: review.Harness, Model: review.Model,
 				ReasoningEffort: review.ReasoningEffort,
 			},
 		})

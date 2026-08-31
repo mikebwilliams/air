@@ -174,6 +174,9 @@ func printReviewGroups(output io.Writer, groups []ReviewStatsGroup) {
 	fmt.Fprintln(output, "By model and effort:")
 	for _, group := range groups {
 		name := group.Model
+		if group.Harness != "" && group.Harness != codexReviewerName {
+			name = group.Harness + ":" + name
+		}
 		if group.ReasoningEffort != "" {
 			name += "/" + group.ReasoningEffort
 		}
@@ -832,7 +835,8 @@ func newCodexReviewer(
 			Effort: configuredEffort, Profile: codexProfile, Prompt: prompt.Static, Timeout: codexTimeout,
 			CommandContext: environment.CodexCommand,
 		}, ReviewIdentity{
-			Model: reviewModel, ReasoningEffort: configuredEffort, PromptVersion: prompt.PromptVersion,
+			Harness: codexReviewerName, Model: reviewModel,
+			ReasoningEffort: configuredEffort, PromptVersion: prompt.PromptVersion,
 		}, nil
 }
 
@@ -928,7 +932,7 @@ func runRecheck(ctx context.Context, args []string, environment cliEnvironment) 
 		return backend, identity, err
 	}
 	return recheckRepository(ctx, repository, store, recheckOptions{
-		FindingIDs: ids, Model: configuredModel,
+		FindingIDs: ids, Harness: codexReviewerName, Model: configuredModel,
 		ReasoningEffort: configuredEffort, PromptVersion: recheckPrompt.PromptVersion,
 		Limit: *limit, BatchSize: *batchSize,
 		Force: *force, DryRun: *dryRun, ContinueOnError: *continueOnError,
@@ -964,7 +968,11 @@ func runFailures(ctx context.Context, args []string, environment cliEnvironment)
 	for _, failure := range failures {
 		identity := ""
 		if failure.Model != "" {
-			identity = " " + failure.Model
+			identity = " "
+			if failure.Harness != "" && failure.Harness != codexReviewerName {
+				identity += failure.Harness + ":"
+			}
+			identity += failure.Model
 			if failure.ReasoningEffort != "" {
 				identity += "/" + failure.ReasoningEffort
 			}
@@ -1493,7 +1501,7 @@ func runShow(ctx context.Context, args []string, environment cliEnvironment) err
 			current = " (current)"
 		}
 		fmt.Fprintf(environment.Stdout, "\nReview attempt #%d%s\n", attempt.Number, current)
-		printReviewAccounting(environment.Stdout, attempt.Model, attempt.ReasoningEffort,
+		printReviewAccounting(environment.Stdout, attempt.Harness, attempt.Model, attempt.ReasoningEffort,
 			&attempt.Usage, attempt.EstimatedCostMicrousd, attempt.EstimatedCostMaxMicrousd,
 			attempt.CostContext, attempt.CostComplete, attempt.DurationMilliseconds)
 		printReviewResult(environment.Stdout, introduced, resolved, attempt.Summary)
@@ -1525,7 +1533,7 @@ func runShow(ctx context.Context, args []string, environment cliEnvironment) err
 		})
 	}
 	fmt.Fprintf(environment.Stdout, "%s %s\n\n", shortSHA(sha), subject)
-	printReviewAccounting(environment.Stdout, record.Model, record.ReasoningEffort,
+	printReviewAccounting(environment.Stdout, record.Harness, record.Model, record.ReasoningEffort,
 		record.Usage, record.EstimatedCostMicrousd, record.EstimatedCostMaxMicrousd,
 		record.CostContext, record.CostComplete, record.DurationMilliseconds)
 	printReviewResult(environment.Stdout, introduced, resolved, record.Summary)
@@ -1540,8 +1548,12 @@ func runShow(ctx context.Context, args []string, environment cliEnvironment) err
 			if attempt.ReasoningEffort != "" {
 				effort = "/" + attempt.ReasoningEffort
 			}
-			fmt.Fprintf(environment.Stdout, "  #%d  %s  %s%s  %s  %d new, %d resolved%s\n",
-				attempt.Number, attempt.ReviewedAt.Format(time.RFC3339), attempt.Model, effort,
+			harness := ""
+			if attempt.Harness != "" && attempt.Harness != codexReviewerName {
+				harness = attempt.Harness + ":"
+			}
+			fmt.Fprintf(environment.Stdout, "  #%d  %s  %s%s%s  %s  %d new, %d resolved%s\n",
+				attempt.Number, attempt.ReviewedAt.Format(time.RFC3339), harness, attempt.Model, effort,
 				formatOptionalMilliseconds(attempt.DurationMilliseconds),
 				attempt.NewCount, attempt.ResolvedCount, current)
 		}
@@ -1570,13 +1582,16 @@ func writeJSON(output io.Writer, value any) error {
 
 func printReviewAccounting(
 	output io.Writer,
-	model, reasoningEffort string,
+	harness, model, reasoningEffort string,
 	usage *TokenUsage,
 	minimumCost, maximumCost *int64,
 	costContext string,
 	costComplete bool,
 	durationMilliseconds *int64,
 ) {
+	if harness != "" {
+		fmt.Fprintf(output, "Harness: %s\n", harness)
+	}
 	fmt.Fprintf(output, "Model: %s\n", model)
 	if reasoningEffort != "" {
 		fmt.Fprintf(output, "Reasoning effort: %s\n", reasoningEffort)

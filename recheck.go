@@ -13,6 +13,7 @@ type recheckReviewerFactory func() (RecheckReviewer, ReviewIdentity, error)
 
 type recheckOptions struct {
 	FindingIDs      []int64
+	Harness         string
 	Model           string
 	ReasoningEffort string
 	PromptVersion   string
@@ -73,7 +74,7 @@ func recheckRepository(
 	promptIdentity := promptVersionOrDefault(options.PromptVersion, recheckPromptVersion)
 	if !options.Force {
 		previous, err = store.PreviouslyRecheckedFindingIDs(ctx, headSHA,
-			options.Model, options.ReasoningEffort, promptIdentity)
+			options.Harness, options.Model, options.ReasoningEffort, promptIdentity)
 		if err != nil {
 			return err
 		}
