@@ -15,8 +15,8 @@ func TestReviewerPromptsEnforceReviewScope(t *testing.T) {
 		"inspect AIR's",
 		"database or return any finding ID",
 	} {
-		if !strings.Contains(codexReviewerPrompt, phrase) {
-			t.Fatalf("prompt does not contain %q:\n%s", phrase, codexReviewerPrompt)
+		if !strings.Contains(builtInReviewPrompt, phrase) {
+			t.Fatalf("prompt does not contain %q:\n%s", phrase, builtInReviewPrompt)
 		}
 	}
 	if promptVersion != "4" {
@@ -32,8 +32,8 @@ func TestRecheckPromptsRequireExactCompleteOutcomes(t *testing.T) {
 		"Do not search for or report new defects",
 		"every supplied finding",
 	} {
-		if !strings.Contains(codexRecheckPrompt, phrase) {
-			t.Fatalf("recheck prompt does not contain %q:\n%s", phrase, codexRecheckPrompt)
+		if !strings.Contains(builtInRecheckPrompt, phrase) {
+			t.Fatalf("recheck prompt does not contain %q:\n%s", phrase, builtInRecheckPrompt)
 		}
 	}
 	if recheckPromptVersion != "1" {

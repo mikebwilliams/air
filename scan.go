@@ -195,7 +195,6 @@ func scanRepository(
 		openFindings, deferredFindings := selectResolutionCandidates(eligibleFindings, diff.TextFiles)
 		result, err := reviewer.Review(ctx, ReviewInput{
 			Commit:       metadata,
-			Diff:         diff.Text,
 			OpenFindings: openFindings,
 		})
 		if err != nil {

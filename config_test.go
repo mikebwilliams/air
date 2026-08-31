@@ -91,7 +91,7 @@ func TestSettingValidationIdentifiesSource(t *testing.T) {
 
 func TestHarnessSettingRejectsUnknownValue(t *testing.T) {
 	harness, _ := settingByKey("harness")
-	if _, err := validateSettingValue(harness, "http"); err == nil || !strings.Contains(err.Error(), "codex, claude, or gemini") {
+	if _, err := validateSettingValue(harness, "invalid"); err == nil || !strings.Contains(err.Error(), "codex, claude, or gemini") {
 		t.Fatalf("invalid harness error = %v", err)
 	}
 	claudeTimeout, _ := settingByKey("claude-timeout")
@@ -101,13 +101,5 @@ func TestHarnessSettingRejectsUnknownValue(t *testing.T) {
 	geminiTimeout, _ := settingByKey("gemini-timeout")
 	if _, err := validateSettingValue(geminiTimeout, "later"); err == nil || !strings.Contains(err.Error(), "positive duration") {
 		t.Fatalf("invalid Gemini timeout error = %v", err)
-	}
-}
-
-func TestHTTPSettingsAreNotPublicConfiguration(t *testing.T) {
-	for _, key := range []string{"reviewer", "base-url", "api-key-env", "api-key"} {
-		if _, found := settingByKey(key); found {
-			t.Errorf("obsolete HTTP setting %q is still available", key)
-		}
 	}
 }

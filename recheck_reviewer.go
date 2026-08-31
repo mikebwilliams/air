@@ -47,7 +47,7 @@ func (r *CodexReviewer) Recheck(ctx context.Context, input RecheckInput) (Rechec
 	defer os.RemoveAll(temporaryDirectory)
 	schemaPath := filepath.Join(temporaryDirectory, "recheck-schema.json")
 	resultPath := filepath.Join(temporaryDirectory, "recheck-result.json")
-	if err := os.WriteFile(schemaPath, []byte(codexRecheckOutputSchema), 0o600); err != nil {
+	if err := os.WriteFile(schemaPath, []byte(recheckOutputSchema), 0o600); err != nil {
 		return RecheckResult{}, fmt.Errorf("write Codex output schema: %w", err)
 	}
 	args := []string{
@@ -200,7 +200,7 @@ func validateRecheckOutput(output RecheckOutput, allowed map[int64]struct{}) err
 	return nil
 }
 
-const codexRecheckOutputSchema = `{
+const recheckOutputSchema = `{
   "type": "object",
   "properties": {
     "findings": {

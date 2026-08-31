@@ -13,8 +13,8 @@ func TestReviewerPromptSpecsPreserveBuiltinPrompts(t *testing.T) {
 		static  string
 		version string
 	}{
-		{"review", codexReviewerPrompt, promptVersion},
-		{"recheck", codexRecheckPrompt, recheckPromptVersion},
+		{"review", builtInReviewPrompt, promptVersion},
+		{"recheck", builtInRecheckPrompt, recheckPromptVersion},
 	}
 	for _, test := range tests {
 		prompt, err := reviewerPromptSpec(test.kind)
@@ -36,7 +36,7 @@ func TestResolveReviewerPromptUsesStableCustomIdentity(t *testing.T) {
 	defer store.Close()
 
 	const instructions = "Review state-machine changes with special care."
-	if err := store.SetConfig(ctx, "prompt.review.codex", instructions+"\n"); err != nil {
+	if err := store.SetConfig(ctx, "prompt.review", instructions+"\n"); err != nil {
 		t.Fatal(err)
 	}
 	first, err := resolveReviewerPrompt(ctx, store, "review")

@@ -39,12 +39,6 @@ func testCommitFile(t *testing.T, directory, name string, contents []byte, messa
 	return strings.TrimSpace(testGit(t, directory, "rev-parse", "HEAD"))
 }
 
-func testEmptyCommit(t *testing.T, directory, message string) string {
-	t.Helper()
-	testGit(t, directory, "commit", "--allow-empty", "-m", message)
-	return strings.TrimSpace(testGit(t, directory, "rev-parse", "HEAD"))
-}
-
 func testGit(t *testing.T, directory string, args ...string) string {
 	t.Helper()
 	commandArgs := append([]string{"-C", directory}, args...)

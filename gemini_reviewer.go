@@ -95,11 +95,11 @@ type geminiInvocationResult struct {
 }
 
 func (r *GeminiReviewer) Review(ctx context.Context, input ReviewInput) (ReviewResult, error) {
-	prompt, err := buildCodexReviewPromptWithStatic(input, r.Prompt)
+	prompt, err := buildReviewPromptWithStatic(input, r.Prompt)
 	if err != nil {
 		return ReviewResult{}, err
 	}
-	prompt = appendGeminiOutputSchema(prompt, codexReviewOutputSchema)
+	prompt = appendGeminiOutputSchema(prompt, reviewOutputSchema)
 	invocation, err := r.invoke(ctx, prompt)
 	if err != nil {
 		return ReviewResult{}, err
@@ -128,7 +128,7 @@ func (r *GeminiReviewer) Recheck(ctx context.Context, input RecheckInput) (Reche
 	if err != nil {
 		return RecheckResult{}, err
 	}
-	prompt = appendGeminiOutputSchema(prompt, codexRecheckOutputSchema)
+	prompt = appendGeminiOutputSchema(prompt, recheckOutputSchema)
 	invocation, err := r.invoke(ctx, prompt)
 	if err != nil {
 		return RecheckResult{}, err

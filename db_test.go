@@ -179,180 +179,31 @@ func TestStoreConfigurationValues(t *testing.T) {
 	}
 }
 
-func TestOpenStoreMigratesSchema4WithoutLosingReviewAttempts(t *testing.T) {
+func TestOpenStoreRequiresCurrentSchema(t *testing.T) {
 	ctx := context.Background()
 	databasePath := filepath.Join(t.TempDir(), "air.sqlite")
 	store, err := CreateStore(ctx, databasePath, strings.Repeat("0", 40))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.ApplyReview(ctx, testMetadata("a", "0"),
-		ReviewIdentity{Model: modelByName("test-model")}, cleanReview("Historical review."), time.Now()); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := store.db.ExecContext(ctx, `ALTER TABLE review_attempts DROP COLUMN duration_ms`); err != nil {
-		t.Fatalf("recreate schema 4: %v", err)
-	}
-	if _, err := store.db.ExecContext(ctx, `PRAGMA user_version = 4`); err != nil {
-		t.Fatalf("set schema version 4: %v", err)
-	}
-	if err := store.Close(); err != nil {
-		t.Fatal(err)
-	}
-
-	store, err = OpenStore(ctx, databasePath)
-	if err != nil {
-		t.Fatalf("OpenStore migration: %v", err)
-	}
-	defer store.Close()
 	var version int
-	if err := store.db.QueryRowContext(ctx, `PRAGMA user_version`).Scan(&version); err != nil || version != schemaVersion {
-		t.Fatalf("schema version = %d, %v", version, err)
-	}
-	attempts, err := store.ReviewAttempts(ctx, strings.Repeat("a", 40))
-	if err != nil || len(attempts) != 1 || attempts[0].DurationMilliseconds != nil {
-		t.Fatalf("migrated historical attempts = %+v, %v", attempts, err)
-	}
-	newReview := cleanReview("Timed review.")
-	newReview.Duration = 2500 * time.Millisecond
-	if _, err := store.ApplyReview(ctx, testMetadata("b", "a"),
-		ReviewIdentity{Model: modelByName("test-model")}, newReview, time.Now()); err != nil {
+	if err := store.db.QueryRowContext(ctx, `PRAGMA user_version`).Scan(&version); err != nil {
 		t.Fatal(err)
 	}
-	attempts, err = store.ReviewAttempts(ctx, strings.Repeat("b", 40))
-	if err != nil || len(attempts) != 1 || attempts[0].DurationMilliseconds == nil ||
-		*attempts[0].DurationMilliseconds != 2500 {
-		t.Fatalf("new timed attempts = %+v, %v", attempts, err)
+	if version != schemaVersion {
+		t.Fatalf("created schema version = %d, want %d", version, schemaVersion)
 	}
-}
-
-func TestOpenStoreMigratesSchema5ForRechecks(t *testing.T) {
-	ctx := context.Background()
-	databasePath := filepath.Join(t.TempDir(), "air.sqlite")
-	store, err := openStoreFile(ctx, databasePath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := store.db.ExecContext(ctx, `
-		CREATE TABLE models(name TEXT PRIMARY KEY);
-		CREATE TABLE commits(sha TEXT PRIMARY KEY, status TEXT NOT NULL, model TEXT);
-		CREATE TABLE review_attempts(id INTEGER PRIMARY KEY);
-		CREATE TABLE scan_failures(sha TEXT PRIMARY KEY, model TEXT);
-		CREATE TABLE findings(id INTEGER PRIMARY KEY, title TEXT NOT NULL);
-		INSERT INTO findings(id, title) VALUES(7, 'preserved finding');
-		PRAGMA user_version = 5`); err != nil {
-		t.Fatal(err)
-	}
-	if err := store.Close(); err != nil {
-		t.Fatal(err)
-	}
-	store, err = OpenStore(ctx, databasePath)
-	if err != nil {
-		t.Fatalf("OpenStore migration: %v", err)
-	}
-	defer store.Close()
-	var version int
-	if err := store.db.QueryRowContext(ctx, `PRAGMA user_version`).Scan(&version); err != nil || version != schemaVersion {
-		t.Fatalf("schema version = %d, %v", version, err)
-	}
-	hasColumn, err := transactionlessTableHasColumn(ctx, store, "resolved_recheck_id")
-	if err != nil || !hasColumn {
-		t.Fatalf("resolved_recheck_id exists = %t, %v", hasColumn, err)
-	}
-	var title string
-	if err := store.db.QueryRowContext(ctx, `SELECT title FROM findings WHERE id = 7`).Scan(&title); err != nil || title != "preserved finding" {
-		t.Fatalf("migrated finding title = %q, %v", title, err)
-	}
-	for _, table := range []string{"recheck_attempts", "recheck_results"} {
-		var name string
-		if err := store.db.QueryRowContext(ctx,
-			`SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?`, table).Scan(&name); err != nil {
-			t.Fatalf("missing migrated table %s: %v", table, err)
-		}
-	}
-}
-
-func TestOpenStoreMigratesSchema6HarnessProvenance(t *testing.T) {
-	ctx := context.Background()
-	databasePath := filepath.Join(t.TempDir(), "air.sqlite")
-	store, err := openStoreFile(ctx, databasePath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := store.db.ExecContext(ctx, `
-		CREATE TABLE models(name TEXT PRIMARY KEY);
-		INSERT INTO models(name) VALUES('historical-model');
-		CREATE TABLE commits(sha TEXT PRIMARY KEY, status TEXT NOT NULL, model TEXT);
-		CREATE TABLE review_attempts(id INTEGER PRIMARY KEY);
-		CREATE TABLE scan_failures(sha TEXT PRIMARY KEY, model TEXT);
-		CREATE TABLE findings(id INTEGER PRIMARY KEY, title TEXT NOT NULL);
-		PRAGMA user_version = 5`); err != nil {
-		t.Fatal(err)
-	}
-	if err := migrateSchema5To6(ctx, store); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := store.db.ExecContext(ctx, `
-		INSERT INTO commits(sha, status, model) VALUES('reviewed', 'reviewed', 'historical-model');
-		INSERT INTO review_attempts(id) VALUES(1);
-		INSERT INTO scan_failures(sha, model) VALUES('failed', 'historical-model');
-		INSERT INTO recheck_attempts(
-			id, head_sha, checked_at, reviewer, model, prompt_version, summary, raw_response,
-			input_tokens, cached_input_tokens, output_tokens, reasoning_output_tokens,
-			duration_ms, finding_count, resolved_count, still_present_count, uncertain_count
-		) VALUES(1, 'head', '2026-08-31T00:00:00Z', 'codex', 'historical-model', '1',
-			'historical', 'raw', 1, 0, 1, 0, 1, 1, 0, 1, 0)`); err != nil {
+	if _, err := store.db.ExecContext(ctx, `PRAGMA user_version = 7`); err != nil {
 		t.Fatal(err)
 	}
 	if err := store.Close(); err != nil {
 		t.Fatal(err)
 	}
 
-	store, err = OpenStore(ctx, databasePath)
-	if err != nil {
-		t.Fatalf("OpenStore migration: %v", err)
+	if _, err := OpenStore(ctx, databasePath); err == nil ||
+		!strings.Contains(err.Error(), "unsupported AIR schema version 7") {
+		t.Fatalf("OpenStore error = %v", err)
 	}
-	defer store.Close()
-	for _, query := range []string{
-		`SELECT reviewer FROM commits WHERE sha = 'reviewed'`,
-		`SELECT reviewer FROM review_attempts WHERE id = 1`,
-		`SELECT reviewer FROM scan_failures WHERE sha = 'failed'`,
-		`SELECT reviewer FROM recheck_attempts WHERE id = 1`,
-	} {
-		var harness string
-		if err := store.db.QueryRowContext(ctx, query).Scan(&harness); err != nil || harness != codexReviewerName {
-			t.Fatalf("migrated harness = %q, %v for %s", harness, err, query)
-		}
-	}
-	if _, err := store.db.ExecContext(ctx, `
-		INSERT INTO recheck_attempts(
-			head_sha, checked_at, reviewer, model, prompt_version, summary, raw_response,
-			input_tokens, cached_input_tokens, output_tokens, reasoning_output_tokens,
-			duration_ms, finding_count, resolved_count, still_present_count, uncertain_count
-		) VALUES('head-2', '2026-08-31T00:00:01Z', 'claude', 'historical-model', '1',
-			'claude', 'raw', 1, 0, 1, 0, 1, 1, 0, 1, 0)`); err != nil {
-		t.Fatalf("insert Claude recheck after migration: %v", err)
-	}
-}
-
-func transactionlessTableHasColumn(ctx context.Context, store *Store, column string) (bool, error) {
-	rows, err := store.db.QueryContext(ctx, `PRAGMA table_info(findings)`)
-	if err != nil {
-		return false, err
-	}
-	defer rows.Close()
-	for rows.Next() {
-		var cid, notNull, primaryKey int
-		var name, dataType string
-		var defaultValue any
-		if err := rows.Scan(&cid, &name, &dataType, &notNull, &defaultValue, &primaryKey); err != nil {
-			return false, err
-		}
-		if name == column {
-			return true, nil
-		}
-	}
-	return false, rows.Err()
 }
 
 func TestStoreAppliesAndAccountsForHEADRechecks(t *testing.T) {

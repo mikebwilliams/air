@@ -145,7 +145,6 @@ func TestCodexReviewerRunsReadOnlyEphemeralCommitReview(t *testing.T) {
 	}
 	result, err := reviewer.Review(context.Background(), ReviewInput{
 		Commit: metadata,
-		Diff:   "THIS DIFF MUST NOT BE EMBEDDED",
 		OpenFindings: []Finding{{
 			ID:            7,
 			IntroducedSHA: base,
@@ -185,9 +184,6 @@ func TestCodexReviewerRunsReadOnlyEphemeralCommitReview(t *testing.T) {
 	}
 	if !strings.Contains(string(prompt), head) || !strings.Contains(string(prompt), "old failure") {
 		t.Fatalf("prompt lacks commit context:\n%s", prompt)
-	}
-	if strings.Contains(string(prompt), "THIS DIFF MUST NOT BE EMBEDDED") {
-		t.Fatalf("Codex prompt redundantly embedded the diff:\n%s", prompt)
 	}
 	schema, err := os.ReadFile(invocation.SchemaPath)
 	if err != nil {

@@ -33,9 +33,6 @@ func TestCLIInitScanAndQueries(t *testing.T) {
 	values := map[string]string{
 		"AIR_MODEL":            "gpt-5.6-luna",
 		"AIR_REASONING_EFFORT": "xhigh",
-		"AIR_REVIEWER":         "http",
-		"AIR_BASE_URL":         "https://obsolete.invalid/v1",
-		"AIR_API_KEY":          "obsolete-key",
 	}
 	elapsedNow := time.Date(2026, 8, 14, 11, 0, 0, 0, time.UTC)
 	environment := cliEnvironment{
@@ -605,24 +602,6 @@ func TestCLIStoredConfigurationDrivesScan(t *testing.T) {
 	if err := runCLI(ctx, []string{"init", base}, environment); err != nil {
 		t.Fatalf("init: %v", err)
 	}
-	legacyStore, err := OpenStore(ctx, repository.DatabasePath())
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, setting := range [][2]string{
-		{"reviewer", "http"},
-		{"base-url", "https://obsolete.invalid/v1"},
-		{"api-key-env", "OLD_API_KEY"},
-		{"api-key", "obsolete-key"},
-	} {
-		if err := legacyStore.SetConfig(ctx, setting[0], setting[1]); err != nil {
-			legacyStore.Close()
-			t.Fatalf("seed obsolete %s setting: %v", setting[0], err)
-		}
-	}
-	if err := legacyStore.Close(); err != nil {
-		t.Fatal(err)
-	}
 	for _, setting := range [][2]string{
 		{"model", "stored-model"},
 		{"effort", "xhigh"},
@@ -642,9 +621,7 @@ func TestCLIStoredConfigurationDrivesScan(t *testing.T) {
 	if !strings.Contains(configOutput, "harness") || !strings.Contains(configOutput, "codex") ||
 		!strings.Contains(configOutput, "claude-bin") || !strings.Contains(configOutput, "claude") ||
 		!strings.Contains(configOutput, "model") || !strings.Contains(configOutput, "stored-model") ||
-		!strings.Contains(configOutput, "database") || !strings.Contains(configOutput, "codex-bin") ||
-		strings.Contains(configOutput, "base-url") || strings.Contains(configOutput, "api-key") ||
-		strings.Contains(configOutput, "reviewer") {
+		!strings.Contains(configOutput, "database") || !strings.Contains(configOutput, "codex-bin") {
 		t.Fatalf("effective configuration output:\n%s", configOutput)
 	}
 

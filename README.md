@@ -70,11 +70,6 @@ air version
 # air 0.1
 ```
 
-The first AIR command after this upgrade automatically advances older supported
-databases through schema v8. The additive migrations preserve reviews and
-findings while adding harness provenance, harness-reported cost, and explicit
-accounting for token categories a harness does not report.
-
 The install prefix is configurable. For example, a user-local or packaging
 install can use:
 
@@ -182,7 +177,7 @@ remains parseable and repository inspection remains read-only. The override is
 stored in the repository database and is included by `air backup`.
 
 Each custom prompt receives a stable `custom:sha256:...` identity derived from
-its complete static prompt, kind, compatibility domain tag, and built-in protocol
+its complete static prompt, kind, AIR domain tag, and built-in protocol
 version. AIR records that identity on every commit-review or recheck attempt.
 Resetting an
 override restores the numeric built-in version. Changing a recheck prompt makes

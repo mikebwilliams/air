@@ -127,13 +127,8 @@ The database must not modify or require files in the tracked working tree.
 
 ## 5. SQLite Schema
 
-The schema should remain intentionally small. Schema version 5 adds successful
-review timing, and version 6 adds separate HEAD-recheck attempts and results.
-Version 7 records the local harness (such as `codex`, `claude`, or `gemini`) on
-reviews, failures,
-rechecks, and finding attribution. Version 8 adds optional harness-reported
-cost and an explicit flag for unreported reasoning-token detail. Supported
-older databases upgrade transactionally without deleting reviews or findings.
+The schema should remain intentionally small. The current schema version is 8,
+and AIR requires an exact version match when opening a database.
 
 ### 5.1 `config`
 
@@ -148,7 +143,6 @@ Required initial keys:
 
 ```text
 start_sha
-prompt_version
 ```
 
 Optional public review-setting keys are:
@@ -167,7 +161,7 @@ gemini-timeout
 ```
 
 The CLI owns validation for these values and does not expose the internal
-`start_sha` or `prompt_version` keys through `air config`.
+`start_sha` key through `air config`.
 
 Optional multiline prompt overrides use these internal keys:
 
@@ -176,10 +170,8 @@ prompt.review
 prompt.recheck
 ```
 
-They are managed by `air prompt`, not exposed as ordinary scalar values through
-`air config`, and require no additional tables or schema migration. AIR reads
-the former `prompt.review.codex` and `prompt.recheck.codex` keys as legacy
-aliases so existing repository overrides continue to work.
+They are managed by `air prompt` and are not exposed as ordinary scalar values
+through `air config`.
 
 ### 5.2 `models`
 
@@ -325,10 +317,9 @@ simple without losing historical accounting.
 `review_attempts` contains one immutable row for every successful model call.
 It stores the commit SHA, review timestamp, harness, model, effort, prompt version, raw
 response, summary, all token and cost fields, and the attempt's new/resolved
-finding counts. `duration_ms` records elapsed wall time for new successful
-attempts and is null for attempts created before schema version 5. Rows are
-ordered by their integer ID within a commit; the last row is current and must
-match the denormalized review fields on `commits`.
+finding counts. `duration_ms` records elapsed wall time for the successful
+attempt. Rows are ordered by their integer ID within a commit; the last row is
+current and must match the denormalized review fields on `commits`.
 
 ### 5.5 `findings`
 
@@ -1455,14 +1446,12 @@ uses this form:
 custom:sha256:<64 lowercase hexadecimal digits>
 ```
 
-For compatibility with existing custom prompt identities, the digest retains a
-fixed historical Codex domain tag. It also covers the prompt kind, compiled
-protocol version, and complete effective static prompt. It therefore changes when the
-stored instructions change or when AIR changes the fixed protocol. The custom
-identity is stored in the existing
-`prompt_version` columns on commit-review and recheck attempts. No schema
-migration is required. Recheck resumability includes this identity, so changing
-recheck instructions makes otherwise identical findings eligible again.
+The digest covers an AIR domain tag, prompt kind, compiled protocol version,
+and complete effective static prompt. It therefore changes when the stored
+instructions change or when AIR changes the fixed protocol. The custom identity
+is stored in the `prompt_version` columns on commit-review and recheck attempts.
+Recheck resumability includes this identity, so changing recheck instructions
+makes otherwise identical findings eligible again.
 
 This allows later analysis of behavior differences between review generations.
 The database stores custom instruction text in `config`; built-in text remains

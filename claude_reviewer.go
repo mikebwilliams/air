@@ -62,11 +62,11 @@ type claudeInvocationResult struct {
 }
 
 func (r *ClaudeReviewer) Review(ctx context.Context, input ReviewInput) (ReviewResult, error) {
-	prompt, err := buildCodexReviewPromptWithStatic(input, r.Prompt)
+	prompt, err := buildReviewPromptWithStatic(input, r.Prompt)
 	if err != nil {
 		return ReviewResult{}, err
 	}
-	invocation, err := r.invoke(ctx, prompt, codexReviewOutputSchema)
+	invocation, err := r.invoke(ctx, prompt, reviewOutputSchema)
 	if err != nil {
 		return ReviewResult{}, err
 	}
@@ -95,7 +95,7 @@ func (r *ClaudeReviewer) Recheck(ctx context.Context, input RecheckInput) (Reche
 	if err != nil {
 		return RecheckResult{}, err
 	}
-	invocation, err := r.invoke(ctx, prompt, codexRecheckOutputSchema)
+	invocation, err := r.invoke(ctx, prompt, recheckOutputSchema)
 	if err != nil {
 		return RecheckResult{}, err
 	}

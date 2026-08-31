@@ -58,7 +58,7 @@ func (r *CodexReviewer) Review(ctx context.Context, input ReviewInput) (ReviewRe
 	}
 	reviewContext, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	prompt, err := buildCodexReviewPromptWithStatic(input, r.Prompt)
+	prompt, err := buildReviewPromptWithStatic(input, r.Prompt)
 	if err != nil {
 		return ReviewResult{}, err
 	}
@@ -71,7 +71,7 @@ func (r *CodexReviewer) Review(ctx context.Context, input ReviewInput) (ReviewRe
 
 	schemaPath := filepath.Join(temporaryDirectory, "review-schema.json")
 	resultPath := filepath.Join(temporaryDirectory, "review-result.json")
-	if err := os.WriteFile(schemaPath, []byte(codexReviewOutputSchema), 0o600); err != nil {
+	if err := os.WriteFile(schemaPath, []byte(reviewOutputSchema), 0o600); err != nil {
 		return ReviewResult{}, fmt.Errorf("write Codex output schema: %w", err)
 	}
 
@@ -236,40 +236,3 @@ func readLimitedFile(filename string, maximum int64) ([]byte, error) {
 	}
 	return contents.Bytes(), nil
 }
-
-const codexReviewOutputSchema = `{
-  "type": "object",
-  "properties": {
-    "new_findings": {
-      "type": "array",
-      "items": {
-        "type": "object",
-        "properties": {
-          "severity": {"type": "string", "enum": ["info", "warning", "error"]},
-          "title": {"type": "string", "minLength": 1},
-          "description": {"type": "string", "minLength": 1},
-          "file": {"type": ["string", "null"]},
-          "line": {"type": ["integer", "null"], "minimum": 1},
-          "symbol": {"type": ["string", "null"]}
-        },
-        "required": ["severity", "title", "description", "file", "line", "symbol"],
-        "additionalProperties": false
-      }
-    },
-    "resolved_findings": {
-      "type": "array",
-      "items": {
-        "type": "object",
-        "properties": {
-          "id": {"type": "integer", "minimum": 1},
-          "reason": {"type": "string", "minLength": 1}
-        },
-        "required": ["id", "reason"],
-        "additionalProperties": false
-      }
-    },
-    "summary": {"type": "string", "minLength": 1}
-  },
-  "required": ["new_findings", "resolved_findings", "summary"],
-  "additionalProperties": false
-}`

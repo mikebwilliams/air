@@ -211,7 +211,6 @@ type ReviewOutput struct {
 
 type ReviewInput struct {
 	Commit       CommitMetadata
-	Diff         string
 	OpenFindings []Finding
 }
 
