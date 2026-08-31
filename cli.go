@@ -1779,6 +1779,8 @@ func sarifLevel(severity string) string {
 func runFinding(ctx context.Context, args []string, environment cliEnvironment) error {
 	if len(args) > 0 {
 		switch args[0] {
+		case "list":
+			return runFindingList(ctx, args[1:], environment)
 		case "dismiss":
 			return runFindingDismiss(ctx, args[1:], environment)
 		case "reopen":
@@ -1796,7 +1798,7 @@ func runFinding(ctx context.Context, args []string, environment cliEnvironment) 
 		return err
 	}
 	if len(positionals) != 1 {
-		return errors.New("usage: air finding <id> | air finding <dismiss|reopen|note|diff|open> ...")
+		return errors.New("usage: air finding <id> | air finding <list|dismiss|reopen|note|diff|open> ...")
 	}
 	id, err := parseFindingID(positionals[0])
 	if err != nil {

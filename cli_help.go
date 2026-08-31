@@ -155,6 +155,18 @@ var cliCommands = []cliCommandSpec{
 		},
 		Children: []cliCommandSpec{
 			{
+				Name: "list", Summary: "List findings without opening the interactive browser.",
+				Usage: []string{"air finding list [OPTIONS]"},
+				Options: []cliHelpOption{
+					{"--all", "Include findings of every disposition."},
+					{"--status STATUS", "Filter by open, dismissed, resolved, or all (default: open)."},
+					{"--severity SEVERITY", "Filter by error, warning, info, or all (default: all)."},
+					{"--sort SORT", "Sort by newest, file, or severity (default: newest)."},
+					{"--limit N", "Return at most N findings; zero means unlimited."},
+					{"--json", "Write the selected findings and review attribution as JSON."},
+				},
+			},
+			{
 				Name: "dismiss", Summary: "Dismiss an open finding with a recorded reason.",
 				Usage:   []string{"air finding dismiss --reason TEXT FINDING_ID"},
 				Options: []cliHelpOption{{"--reason TEXT", "Required reason stored in the finding history."}},

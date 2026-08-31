@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -95,18 +94,6 @@ const (
 	findingsNote
 	findingsConfirmReopen
 )
-
-type findingSortMode string
-
-const (
-	findingsSortNewest findingSortMode = "newest"
-	findingsSortFile   findingSortMode = "file"
-)
-
-var findingSortModes = []findingSortMode{
-	findingsSortNewest,
-	findingsSortFile,
-}
 
 type findingPreviewLoadedMsg struct {
 	findingID int64
@@ -544,40 +531,6 @@ func (m *findingsModel) changeSort(delta int) tea.Cmd {
 	m.sortMode = findingSortModes[current]
 	m.applyFilters(selectedID)
 	return m.refreshSelection()
-}
-
-func sortFindings(findings []Finding, mode findingSortMode) {
-	sort.SliceStable(findings, func(leftIndex, rightIndex int) bool {
-		left := findings[leftIndex]
-		right := findings[rightIndex]
-		if mode != findingsSortFile {
-			return left.ID > right.ID
-		}
-		if left.File == nil || right.File == nil {
-			if left.File == nil && right.File == nil {
-				return left.ID > right.ID
-			}
-			return left.File != nil
-		}
-		leftFolded := strings.ToLower(*left.File)
-		rightFolded := strings.ToLower(*right.File)
-		if leftFolded != rightFolded {
-			return leftFolded < rightFolded
-		}
-		if *left.File != *right.File {
-			return *left.File < *right.File
-		}
-		if left.Line == nil || right.Line == nil {
-			if left.Line == nil && right.Line == nil {
-				return left.ID > right.ID
-			}
-			return left.Line != nil
-		}
-		if *left.Line != *right.Line {
-			return *left.Line < *right.Line
-		}
-		return left.ID > right.ID
-	})
 }
 
 func (m *findingsModel) loadDetail() {

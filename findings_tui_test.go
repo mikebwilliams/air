@@ -117,11 +117,11 @@ func TestFindingsModelChangesSortWithLeftAndRight(t *testing.T) {
 	line20 := 20
 	model := findingsModel{
 		all: []Finding{
-			{ID: 5, Severity: "warning", Title: "no location"},
-			{ID: 4, Severity: "warning", Title: "beta", File: &fileB, Line: &line10},
+			{ID: 5, Severity: "info", Title: "no location"},
+			{ID: 4, Severity: "error", Title: "beta", File: &fileB, Line: &line10},
 			{ID: 3, Severity: "warning", Title: "alpha later", File: &fileA, Line: &line20},
-			{ID: 2, Severity: "warning", Title: "alpha earlier", File: &fileA, Line: &line10},
-			{ID: 1, Severity: "warning", Title: "alpha unknown line", File: &fileA},
+			{ID: 2, Severity: "error", Title: "alpha earlier", File: &fileA, Line: &line10},
+			{ID: 1, Severity: "info", Title: "alpha unknown line", File: &fileA},
 		},
 		statusFilter:   "open",
 		severityFilter: "all",
@@ -147,13 +147,22 @@ func TestFindingsModelChangesSortWithLeftAndRight(t *testing.T) {
 
 	updatedValue, _ = model.handleKey("right")
 	model = updatedValue.(findingsModel)
+	if model.sortMode != findingsSortSeverity || findingIDs(model.visible) != "4,2,3,5,1" {
+		t.Fatalf("severity sort: mode=%q order=%s", model.sortMode, findingIDs(model.visible))
+	}
+	if model.selectedID() != 3 {
+		t.Fatalf("selected finding after severity sort = %d", model.selectedID())
+	}
+
+	updatedValue, _ = model.handleKey("right")
+	model = updatedValue.(findingsModel)
 	if model.sortMode != findingsSortNewest || findingIDs(model.visible) != "5,4,3,2,1" {
 		t.Fatalf("wrapped right sort: mode=%q order=%s", model.sortMode, findingIDs(model.visible))
 	}
 
 	updatedValue, _ = model.handleKey("left")
 	model = updatedValue.(findingsModel)
-	if model.sortMode != findingsSortFile || findingIDs(model.visible) != "2,3,1,4,5" {
+	if model.sortMode != findingsSortSeverity || findingIDs(model.visible) != "4,2,3,5,1" {
 		t.Fatalf("wrapped left sort: mode=%q order=%s", model.sortMode, findingIDs(model.visible))
 	}
 }

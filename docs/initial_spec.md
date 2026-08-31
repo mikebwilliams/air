@@ -1039,8 +1039,8 @@ Status is intentionally aggregate-only. `unscanned` counts commits ready for
 an ordinary scan. `failed` counts the complete durable failure queue, including
 failed rescans and stale failures. `deferred` counts the live, unprocessed
 failed commits omitted by ordinary scans, and is therefore a subset of
-`failed`. Use `air findings`, `air finding <id>`, or `air export` for finding
-details. The remaining-time estimate multiplies the unscanned count by the
+`failed`. Use `air finding list`, `air findings`, `air finding <id>`, or `air
+export` for finding details. The remaining-time estimate multiplies the unscanned count by the
 average duration of all successful timed attempts. It excludes deferred
 failures and is unknown when no timing samples exist.
 
@@ -1100,6 +1100,28 @@ Resolved:
     916cc21 Initialize backing object before validation
 ```
 
+### List findings noninteractively
+
+```bash
+air finding list
+air finding list --all --sort file
+air finding list --status dismissed --severity error
+air finding list --all --sort severity --limit 50 --json
+```
+
+The default is every open finding in descending finding-ID order. The text
+table always includes fixed ID, severity, and status columns followed by an
+untruncated location and title. `--status` accepts `open`, `dismissed`,
+`resolved`, or `all`; `--severity` accepts `error`, `warning`, `info`, or `all`;
+and `--sort` accepts `newest`, `file`, or `severity`. Severity order is error,
+warning, then info, with newest first inside a severity. `--all` is shorthand
+for `--status all`, and `--limit 0` is unlimited.
+
+`--json` returns the selected full finding records, their dispositions, and
+their introducing-review attribution. Its `total` is the number matching the
+filters before `--limit` is applied. The command does not invoke a pager or
+depend on terminal width.
+
 ### Browse findings interactively
 
 ```bash
@@ -1109,8 +1131,8 @@ air findings [--all]
 `air findings` is a full-screen terminal browser that initially contains open
 findings only. `--all` initially includes open, dismissed, and resolved
 findings. The list shows ID, severity, disposition, location, and title. Left
-and right cycle through an ordered set of sort modes, initially newest-first and
-file/line order; the selected finding remains selected when the order changes.
+and right cycle through newest-first, file/line, and severity order; the
+selected finding remains selected when the order changes.
 The detail view shows the description, commit references, introducing review's
 model and reasoning effort, and event history. The browser supports keyboard
 navigation, text search, status and severity filters, and independent detail
@@ -1130,8 +1152,8 @@ highlight severity, disposition, selection, headings, and messages. Text labels
 and the selection marker remain sufficient when color is unavailable.
 
 The browser requires both input and output to be interactive terminals. Scripts
-should use `air status --json` for aggregate counts or `air export` for detailed
-open findings.
+should use `air status --json` for aggregate counts, `air finding list --json`
+for filtered findings, or `air export` for interchange formats.
 
 ### Manual lifecycle overrides
 

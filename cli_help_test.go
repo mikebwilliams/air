@@ -52,6 +52,10 @@ func TestCLIHelpWorksWithoutRepositoryState(t *testing.T) {
 			contains: []string{"air finding dismiss --reason TEXT FINDING_ID", "Dismiss an open finding", "--reason TEXT"},
 		},
 		{
+			name: "finding list topic", args: []string{"finding", "list", "--help"},
+			contains: []string{"air finding list [OPTIONS]", "--status STATUS", "--severity SEVERITY", "--sort SORT", "--json"},
+		},
+		{
 			name: "nested flag", args: []string{"finding", "dismiss", "--help"},
 			contains: []string{"air finding dismiss --reason TEXT FINDING_ID", "Dismiss an open finding"},
 		},

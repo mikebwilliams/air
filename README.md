@@ -368,6 +368,10 @@ Inspect results:
 
 ```bash
 air status
+air finding list
+air finding list --all --sort file
+air finding list --status dismissed --severity error
+air finding list --all --sort severity --limit 50 --json
 air findings
 air findings --all
 air log
@@ -403,7 +407,8 @@ attempts without timing remain explicit and do not count as zero.
 unscanned/failed/deferred commits. Unscanned commits are ready for an ordinary
 scan. Failed commits include the complete durable failure queue; deferred
 commits are the live unprocessed subset omitted by ordinary scans. Use
-`air findings`, `air finding`, or `air export` for finding details.
+`air finding list`, `air findings`, `air finding`, or `air export` for finding
+details.
 Status also estimates the time needed for unscanned commits from the average of
 all successful timed attempts. Deferred failures are excluded from that
 estimate. If no timing samples exist, the estimate is reported as unknown.
@@ -414,6 +419,14 @@ Status JSON contains the same aggregate counts as text output.
 emits SARIF 2.1.0 with file and line locations when the reviewer supplied them.
 Dismissed and resolved findings are excluded from those machine-readable
 exports.
+
+`air finding list` is the noninteractive human-readable finding index. It shows
+the ID, severity, status, location, and title; defaults to open findings sorted
+newest first; and supports `--status`, `--severity`, `--sort
+newest|file|severity`, and `--limit`. `--all` is shorthand for `--status all`.
+`--json` emits the selected full finding records with their status and
+introducing-review attribution, plus the total number matching before the
+limit.
 
 `air export --format html` emits one self-contained, offline HTML file for
 sharing with people who do not have AIR or its database. The viewer includes
@@ -426,8 +439,8 @@ API keys, raw model responses, or external assets are included.
 
 `air findings` opens a full-screen terminal browser. It starts with open
 findings; `--all` starts with every disposition. Use the arrow keys or `j`/`k`
-to move, left/right to change the sort between newest-first and file/line order,
-`/` to search, `s` and `v` to cycle status and severity filters, and
+to move, left/right to cycle newest-first, file/line, and severity order, `/` to
+search, `s` and `v` to cycle status and severity filters, and
 `Ctrl+U`/`Ctrl+D` to scroll long details. The detail pane includes the finding's
 description, location, introducing review and model/effort, and complete event
 history. On sufficiently wide and tall terminals, its lower section loads the
@@ -438,9 +451,9 @@ place. Press `d` to open the introducing commit in the user's configured
 editor. Press `D` to dismiss with a required reason, `r` to reopen after
 confirmation, or `n` to add a note. Lifecycle actions use the same audit trail
 as `air finding`; `?` shows the complete key reference. The command requires an
-interactive terminal, while `air status --json` remains the non-interactive
-summary interface and `air export --format json` provides detailed open
-findings. On color-capable terminals, the browser highlights severity,
+interactive terminal, while `air finding list` provides a noninteractive index
+and `air finding list --json` provides detailed filtered records. On
+color-capable terminals, the browser highlights severity,
 disposition, selection, headings, and messages; plain terminals retain the same
 labels and selection marker.
 
