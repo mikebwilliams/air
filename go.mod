@@ -1,4 +1,4 @@
-module air
+module github.com/mikebwilliams/air
 
 go 1.26
 
