@@ -1147,17 +1147,21 @@ air finding list --all --sort severity --limit 50 --json
 ```
 
 The default is every open finding in descending finding-ID order. The text
-table always includes fixed ID, severity, and status columns followed by an
-untruncated location and title. `--status` accepts `open`, `dismissed`,
-`resolved`, or `all`; `--severity` accepts `error`, `warning`, `info`, or `all`;
-and `--sort` accepts `newest`, `file`, or `severity`. Severity order is error,
-warning, then info, with newest first inside a severity. `--all` is shorthand
-for `--status all`, and `--limit 0` is unlimited.
+table includes fixed ID, severity, status, age, and author columns followed by
+an untruncated location and title. Age is measured from the introducing
+commit's Git timestamp. `--status` accepts `open`, `dismissed`, `resolved`, or
+`all`; `--severity` accepts `error`, `warning`, `info`, or `all`; and `--sort`
+accepts `id`, `age`, `file`, `author`, `severity`, `status`, or `title`.
+ID order is descending; age puts the oldest commits first; file, author, and
+title are alphabetical; severity puts errors before warnings and info; and
+status puts open findings before dismissed and resolved findings. Ties use
+descending finding ID. `--all` is shorthand for `--status all`, and a zero
+`--limit` is unlimited.
 
-`--json` returns the selected full finding records, their dispositions, and
-their introducing-review attribution. Its `total` is the number matching the
-filters before `--limit` is applied. The command does not invoke a pager or
-depend on terminal width.
+`--json` returns the selected full finding records, their dispositions,
+introducing commit date and author, and introducing-review attribution. Its
+`total` is the number matching the filters before `--limit` is applied. The
+command does not invoke a pager or depend on terminal width.
 
 ### Browse findings interactively
 
@@ -1167,9 +1171,10 @@ air findings [--all]
 
 `air findings` is a full-screen terminal browser that initially contains open
 findings only. `--all` initially includes open, dismissed, and resolved
-findings. The list shows ID, severity, disposition, location, and title. Left
-and right cycle through newest-first, file/line, and severity order; the
-selected finding remains selected when the order changes.
+findings. The list shows ID, severity, disposition, commit age, author,
+location, and title. Left and right cycle through ID, age, file/line, author,
+severity, status, and title order; the selected finding remains selected when
+the order changes.
 The detail view shows the description, commit references, introducing review's
 model and reasoning effort, and event history. The browser supports keyboard
 navigation, text search, status and severity filters, and independent detail
@@ -1351,10 +1356,11 @@ HTML export writes one self-contained, offline viewer. It includes every
 finding disposition, review attribution, finding event history, and a bounded
 excerpt of the finding's introducing diff when a textual hunk is available.
 The viewer starts with open findings and supports search; status and severity
-filters; newest, file, and severity sorts; keyboard selection; and a responsive
-list/detail layout. It is a static snapshot and therefore cannot mutate the AIR
-database or invoke editors and Git difftools. It contains no repository
-configuration, API keys, raw model responses, or external assets.
+filters; ID, age, file, author, severity, status, and title sorts; keyboard
+selection; and a responsive list/detail layout. It is a static snapshot and
+therefore cannot mutate the AIR database or invoke editors and Git difftools.
+It contains no repository configuration, API keys, raw model responses, or
+external assets.
 
 ## 19. Review Harness Configuration
 

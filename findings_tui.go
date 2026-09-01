@@ -167,7 +167,7 @@ func newFindingsModel(
 		height:         30,
 		statusFilter:   status,
 		severityFilter: "all",
-		sortMode:       findingsSortNewest,
+		sortMode:       findingsSortID,
 		previewCache:   make(map[int64]findingPreviewCacheEntry),
 	}
 	model.applyFilters(0)
@@ -481,7 +481,7 @@ func (m *findingsModel) reload(preferredID int64) tea.Cmd {
 
 func (m *findingsModel) applyFilters(preferredID int64) {
 	if m.sortMode == "" {
-		m.sortMode = findingsSortNewest
+		m.sortMode = findingsSortID
 	}
 	query := strings.ToLower(strings.TrimSpace(m.query))
 	m.visible = m.visible[:0]
@@ -498,7 +498,7 @@ func (m *findingsModel) applyFilters(preferredID int64) {
 		}
 		m.visible = append(m.visible, finding)
 	}
-	sortFindings(m.visible, m.sortMode)
+	sortFindings(m.visible, m.sortMode, m.display)
 	if len(m.visible) == 0 {
 		m.cursor = 0
 		m.events = nil
@@ -983,7 +983,7 @@ func (m findingsModel) helpLines(width int) []string {
 	lines := wrapText(`Keyboard
 
 ↑/↓ or j/k    select finding
-←/→           change sort: newest, file
+←/→           change sort: id, age, file, author, severity, status, title
 PgUp/PgDn     move one page
 g/G           first/last finding
 Ctrl+U/Ctrl+D scroll detail

@@ -121,54 +121,60 @@ func TestFindingsModelChangesSortWithLeftAndRight(t *testing.T) {
 	fileB := "pkg/beta.go"
 	line10 := 10
 	line20 := 20
+	dismissedAt := time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)
+	resolvedSHA := strings.Repeat("f", 40)
+	baseDate := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	model := findingsModel{
 		all: []Finding{
 			{ID: 5, Severity: "info", Title: "no location"},
-			{ID: 4, Severity: "error", Title: "beta", File: &fileB, Line: &line10},
-			{ID: 3, Severity: "warning", Title: "alpha later", File: &fileA, Line: &line20},
-			{ID: 2, Severity: "error", Title: "alpha earlier", File: &fileA, Line: &line10},
+			{ID: 4, Severity: "error", Title: "beta", File: &fileB, Line: &line10, DismissedAt: &dismissedAt},
+			{ID: 3, Severity: "warning", Title: "alpha later", File: &fileA, Line: &line20, ResolvedSHA: &resolvedSHA},
+			{ID: 2, Severity: "error", Title: "alpha earlier", File: &fileA, Line: &line10, DismissedAt: &dismissedAt},
 			{ID: 1, Severity: "info", Title: "alpha unknown line", File: &fileA},
 		},
-		statusFilter:   "open",
+		display: map[int64]findingDisplayMetadata{
+			5: {CommitDate: baseDate.Add(5 * 24 * time.Hour), Blame: "Zoe"},
+			4: {CommitDate: baseDate.Add(4 * 24 * time.Hour), Blame: "Amy"},
+			3: {CommitDate: baseDate.Add(1 * 24 * time.Hour), Blame: "Zoe"},
+			2: {CommitDate: baseDate.Add(2 * 24 * time.Hour), Blame: "Bob"},
+		},
+		statusFilter:   "all",
 		severityFilter: "all",
-		sortMode:       findingsSortNewest,
+		sortMode:       findingsSortID,
 	}
 	model.applyFilters(0)
 	if got := findingIDs(model.visible); got != "5,4,3,2,1" {
-		t.Fatalf("newest order = %s", got)
+		t.Fatalf("id order = %s", got)
 	}
 
 	model.cursor = 2
-	updatedValue, _ := model.handleKey("right")
-	model = updatedValue.(findingsModel)
-	if model.sortMode != findingsSortFile {
-		t.Fatalf("right sort mode = %q", model.sortMode)
+	tests := []struct {
+		mode  findingSortMode
+		order string
+	}{
+		{findingsSortAge, "3,2,4,5,1"},
+		{findingsSortFile, "2,3,1,4,5"},
+		{findingsSortAuthor, "4,2,5,3,1"},
+		{findingsSortSeverity, "4,2,3,5,1"},
+		{findingsSortStatus, "5,1,4,2,3"},
+		{findingsSortTitle, "2,3,1,4,5"},
+		{findingsSortID, "5,4,3,2,1"},
 	}
-	if got := findingIDs(model.visible); got != "2,3,1,4,5" {
-		t.Fatalf("file order = %s", got)
-	}
-	if model.selectedID() != 3 {
-		t.Fatalf("selected finding after sort = %d", model.selectedID())
-	}
-
-	updatedValue, _ = model.handleKey("right")
-	model = updatedValue.(findingsModel)
-	if model.sortMode != findingsSortSeverity || findingIDs(model.visible) != "4,2,3,5,1" {
-		t.Fatalf("severity sort: mode=%q order=%s", model.sortMode, findingIDs(model.visible))
-	}
-	if model.selectedID() != 3 {
-		t.Fatalf("selected finding after severity sort = %d", model.selectedID())
-	}
-
-	updatedValue, _ = model.handleKey("right")
-	model = updatedValue.(findingsModel)
-	if model.sortMode != findingsSortNewest || findingIDs(model.visible) != "5,4,3,2,1" {
-		t.Fatalf("wrapped right sort: mode=%q order=%s", model.sortMode, findingIDs(model.visible))
+	for _, test := range tests {
+		updatedValue, _ := model.handleKey("right")
+		model = updatedValue.(findingsModel)
+		if model.sortMode != test.mode || findingIDs(model.visible) != test.order {
+			t.Fatalf("sort: mode=%q order=%s, want mode=%q order=%s",
+				model.sortMode, findingIDs(model.visible), test.mode, test.order)
+		}
+		if model.selectedID() != 3 {
+			t.Fatalf("selected finding after %s sort = %d", test.mode, model.selectedID())
+		}
 	}
 
-	updatedValue, _ = model.handleKey("left")
+	updatedValue, _ := model.handleKey("left")
 	model = updatedValue.(findingsModel)
-	if model.sortMode != findingsSortSeverity || findingIDs(model.visible) != "4,2,3,5,1" {
+	if model.sortMode != findingsSortTitle || findingIDs(model.visible) != "2,3,1,4,5" {
 		t.Fatalf("wrapped left sort: mode=%q order=%s", model.sortMode, findingIDs(model.visible))
 	}
 }

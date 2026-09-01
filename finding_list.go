@@ -47,7 +47,7 @@ func runFindingList(ctx context.Context, args []string, environment cliEnvironme
 	includeAll := flags.Bool("all", false, "include findings of every disposition")
 	status := flags.String("status", "open", "filter by status: open, dismissed, resolved, or all")
 	severity := flags.String("severity", "all", "filter by severity: error, warning, info, or all")
-	sortName := flags.String("sort", string(findingsSortNewest), "sort by newest, file, or severity")
+	sortName := flags.String("sort", string(findingsSortID), "sort by id, age, file, author, severity, status, or title")
 	limit := flags.Int("limit", 0, "maximum findings to return; zero means unlimited")
 	jsonOutput := flags.Bool("json", false, "write machine-readable JSON")
 	if err := flags.Parse(args); err != nil {
@@ -74,7 +74,7 @@ func runFindingList(ctx context.Context, args []string, environment cliEnvironme
 	}
 	sortMode := findingSortMode(*sortName)
 	if !validFindingSortMode(sortMode) {
-		return fmt.Errorf("invalid --sort %q; expected newest, file, or severity", *sortName)
+		return fmt.Errorf("invalid --sort %q; expected id, age, file, author, severity, status, or title", *sortName)
 	}
 	if *limit < 0 {
 		return errors.New("--limit must not be negative")
@@ -89,11 +89,11 @@ func runFindingList(ctx context.Context, args []string, environment cliEnvironme
 	if err != nil {
 		return err
 	}
-	findings, total := selectFindingList(allFindings, *status, *severity, sortMode, *limit)
-	display, err := loadFindingDisplayMetadata(ctx, repository, findings)
+	display, err := loadFindingDisplayMetadata(ctx, repository, allFindings)
 	if err != nil {
 		return err
 	}
+	findings, total := selectFindingList(allFindings, *status, *severity, sortMode, *limit, display)
 	if *jsonOutput {
 		items, err := buildFindingListItems(ctx, store, findings, display)
 		if err != nil {
@@ -141,6 +141,7 @@ func selectFindingList(
 	status, severity string,
 	sortMode findingSortMode,
 	limit int,
+	display map[int64]findingDisplayMetadata,
 ) ([]Finding, int) {
 	selected := make([]Finding, 0, len(all))
 	for _, finding := range all {
@@ -152,7 +153,7 @@ func selectFindingList(
 		}
 		selected = append(selected, finding)
 	}
-	sortFindings(selected, sortMode)
+	sortFindings(selected, sortMode, display)
 	total := len(selected)
 	if limit > 0 && len(selected) > limit {
 		selected = selected[:limit]

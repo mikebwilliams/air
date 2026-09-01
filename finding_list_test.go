@@ -89,7 +89,7 @@ func TestCLIFindingListRejectsInvalidOptions(t *testing.T) {
 		{[]string{"--all", "--status", "all"}, "cannot be used together"},
 		{[]string{"--status", "closed"}, "invalid --status"},
 		{[]string{"--severity", "critical"}, "invalid --severity"},
-		{[]string{"--sort", "title"}, "invalid --sort"},
+		{[]string{"--sort", "priority"}, "invalid --sort"},
 		{[]string{"--limit", "-1"}, "must not be negative"},
 		{[]string{"unexpected"}, "usage: air finding list"},
 	}

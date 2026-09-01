@@ -58,7 +58,8 @@ func TestCLIHTMLExportIsSelfContainedAndIncludesFindingHistory(t *testing.T) {
 	output := stdout.String()
 	for _, expected := range []string{
 		"<!doctype html>", "AIR Findings Report", `id="search"`, `id="status"`,
-		`id="severity"`, `id="sort"`, "Introducing diff", "</html>",
+		`id="severity"`, `id="sort"`, `value="age"`, `value="author"`, `value="title"`,
+		"Introducing diff", "</html>",
 	} {
 		if !strings.Contains(output, expected) {
 			t.Errorf("HTML export does not contain %q", expected)
@@ -98,6 +99,7 @@ func TestCLIHTMLExportIsSelfContainedAndIncludesFindingHistory(t *testing.T) {
 	open := findingsByID[ids[0]]
 	if open.Disposition != "open" || open.Review == nil ||
 		open.Review.Model != "gpt-5.6-luna" || open.Review.ReasoningEffort != "xhigh" ||
+		open.Author != "AIR Test" || open.CommitDate == "" ||
 		len(open.Events) == 0 || len(open.Diff.Lines) == 0 || open.Diff.HunkHeader == "" {
 		t.Fatalf("open exported finding = %+v", open)
 	}

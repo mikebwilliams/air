@@ -167,7 +167,7 @@ var cliCommands = []cliCommandSpec{
 					{"--all", "Include findings of every disposition."},
 					{"--status STATUS", "Filter by open, dismissed, resolved, or all (default: open)."},
 					{"--severity SEVERITY", "Filter by error, warning, info, or all (default: all)."},
-					{"--sort SORT", "Sort by newest, file, or severity (default: newest)."},
+					{"--sort SORT", "Sort by id, age, file, author, severity, status, or title (default: id)."},
 					{"--limit N", "Return at most N findings; zero means unlimited."},
 					{"--json", "Write the selected findings and review attribution as JSON."},
 				},

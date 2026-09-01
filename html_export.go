@@ -28,6 +28,8 @@ type htmlExportFinding struct {
 	Line          *int              `json:"line,omitempty"`
 	Symbol        string            `json:"symbol,omitempty"`
 	IntroducedSHA string            `json:"introduced_sha"`
+	Author        string            `json:"author,omitempty"`
+	CommitDate    string            `json:"commit_date,omitempty"`
 	ResolvedSHA   string            `json:"resolved_sha,omitempty"`
 	DismissedAt   string            `json:"dismissed_at,omitempty"`
 	DismissReason string            `json:"dismiss_reason,omitempty"`
@@ -98,6 +100,10 @@ func buildHTMLExport(
 	if err != nil {
 		return htmlExportReport{}, err
 	}
+	display, err := loadFindingDisplayMetadata(ctx, repository, findings)
+	if err != nil {
+		return htmlExportReport{}, err
+	}
 	report := htmlExportReport{
 		Version:     1,
 		Repository:  filepath.Base(repository.WorkTree),
@@ -114,13 +120,15 @@ func buildHTMLExport(
 			return htmlExportReport{}, err
 		}
 		preview, previewErr := loadFindingDiffPreview(ctx, repository, finding)
-		report.Findings = append(report.Findings, makeHTMLExportFinding(finding, review, events, preview, previewErr))
+		report.Findings = append(report.Findings,
+			makeHTMLExportFinding(finding, display[finding.ID], review, events, preview, previewErr))
 	}
 	return report, nil
 }
 
 func makeHTMLExportFinding(
 	finding Finding,
+	display findingDisplayMetadata,
 	review FindingReview,
 	events []FindingEvent,
 	preview findingDiffPreview,
@@ -129,9 +137,12 @@ func makeHTMLExportFinding(
 	exported := htmlExportFinding{
 		ID: finding.ID, Severity: finding.Severity, Disposition: findingDisposition(finding),
 		Title: finding.Title, Description: finding.Description, IntroducedSHA: finding.IntroducedSHA,
-		DismissReason: finding.DismissReason, Line: finding.Line,
+		Author: display.Blame, DismissReason: finding.DismissReason, Line: finding.Line,
 		Events: make([]htmlExportEvent, 0, len(events)),
 		Diff:   makeHTMLExportDiff(preview, previewErr),
+	}
+	if !display.CommitDate.IsZero() {
+		exported.CommitDate = display.CommitDate.Format(time.RFC3339)
 	}
 	if finding.File != nil {
 		exported.File = *finding.File
@@ -214,7 +225,7 @@ const htmlExportPrefix = `<!doctype html>
 <input id="search" class="search" type="search" placeholder="Search findings (/)">
 <select id="status" aria-label="Status"><option value="open">Open</option><option value="all">All statuses</option><option value="dismissed">Dismissed</option><option value="resolved">Resolved</option></select>
 <select id="severity" aria-label="Severity"><option value="all">All severities</option><option value="error">Errors</option><option value="warning">Warnings</option><option value="info">Info</option></select>
-<select id="sort" aria-label="Sort"><option value="newest">Newest first</option><option value="file">File and line</option><option value="severity">Severity</option></select>
+<select id="sort" aria-label="Sort"><option value="id">ID (newest first)</option><option value="age">Age (oldest first)</option><option value="file">File and line</option><option value="author">Author</option><option value="severity">Severity</option><option value="status">Status</option><option value="title">Title</option></select>
 </section>
 <section class="workspace"><aside class="finding-list"><div id="list-status" class="list-status"></div><div id="finding-rows"></div></aside><article id="detail" class="detail"></article></section>
 <div class="keyboard"><kbd>↑</kbd>/<kbd>↓</kbd> or <kbd>j</kbd>/<kbd>k</kbd> select &nbsp; <kbd>←</kbd>/<kbd>→</kbd> sort &nbsp; <kbd>/</kbd> search</div>
@@ -226,7 +237,7 @@ const htmlExportSuffix = `</script>
 (function(){
 'use strict';
 var report=JSON.parse(document.getElementById('air-data').textContent);
-var state={query:'',status:'open',severity:'all',sort:'newest',selected:null};
+var state={query:'',status:'open',severity:'all',sort:'id',selected:null};
 var rows=document.getElementById('finding-rows');
 var detail=document.getElementById('detail');
 var search=document.getElementById('search');
@@ -237,18 +248,20 @@ function node(tag,className,text){var n=document.createElement(tag);if(className
 function shortSHA(value){return value?value.slice(0,12):''}
 function location(f){if(!f.file)return 'No file location';return f.file+(f.line?':'+f.line:'')+(f.symbol?'  '+f.symbol:'')}
 function addBadge(parent,text,className){parent.appendChild(node('span','badge '+className,text))}
-function searchable(f){return [f.id,f.severity,f.disposition,f.title,f.description,f.file,f.line,f.symbol,f.introduced_sha,f.resolved_sha,f.dismiss_reason].join(' ').toLowerCase()}
+function age(f){if(!f.commit_date)return 'Unknown age';var duration=Math.max(0,new Date(report.generated_at)-new Date(f.commit_date)),minute=60000,hour=60*minute,day=24*hour;if(duration<minute)return '<1m';if(duration<hour)return Math.floor(duration/minute)+'m';if(duration<day)return Math.floor(duration/hour)+'h';if(duration<30*day)return Math.floor(duration/day)+'d';if(duration<365*day)return Math.floor(duration/(30*day))+'mo';return Math.floor(duration/(365*day))+'y'}
+function searchable(f){return [f.id,f.severity,f.disposition,f.title,f.description,f.file,f.line,f.symbol,f.author,f.commit_date,f.introduced_sha,f.resolved_sha,f.dismiss_reason].join(' ').toLowerCase()}
 function compareFile(a,b){var af=(a.file||'\uffff').toLowerCase(),bf=(b.file||'\uffff').toLowerCase();if(af!==bf)return af.localeCompare(bf);var al=a.line||Number.MAX_SAFE_INTEGER,bl=b.line||Number.MAX_SAFE_INTEGER;if(al!==bl)return al-bl;return b.id-a.id}
-function visibleFindings(){var q=state.query.trim().toLowerCase();var result=report.findings.filter(function(f){return(state.status==='all'||f.disposition===state.status)&&(state.severity==='all'||f.severity===state.severity)&&(!q||searchable(f).indexOf(q)!==-1)});result.sort(function(a,b){if(state.sort==='file')return compareFile(a,b);if(state.sort==='severity'){var rank={error:0,warning:1,info:2};var d=(rank[a.severity]||0)-(rank[b.severity]||0);return d||compareFile(a,b)}return b.id-a.id});return result}
+function compareText(a,b){var af=(a||'\uffff').toLowerCase(),bf=(b||'\uffff').toLowerCase();return af.localeCompare(bf)}
+function visibleFindings(){var q=state.query.trim().toLowerCase();var result=report.findings.filter(function(f){return(state.status==='all'||f.disposition===state.status)&&(state.severity==='all'||f.severity===state.severity)&&(!q||searchable(f).indexOf(q)!==-1)});result.sort(function(a,b){var d=0;if(state.sort==='age')d=(a.commit_date?Date.parse(a.commit_date):Number.MAX_SAFE_INTEGER)-(b.commit_date?Date.parse(b.commit_date):Number.MAX_SAFE_INTEGER);else if(state.sort==='file')return compareFile(a,b);else if(state.sort==='author')d=compareText(a.author,b.author);else if(state.sort==='severity')d=({error:0,warning:1,info:2}[a.severity]||0)-({error:0,warning:1,info:2}[b.severity]||0);else if(state.sort==='status')d=({open:0,dismissed:1,resolved:2}[a.disposition]||0)-({open:0,dismissed:1,resolved:2}[b.disposition]||0);else if(state.sort==='title')d=compareText(a.title,b.title);return d||b.id-a.id});return result}
 function renderSummary(){var counts={open:0,dismissed:0,resolved:0};report.findings.forEach(function(f){counts[f.disposition]++});var summary=document.getElementById('summary');summary.replaceChildren();[['Total',report.findings.length],['Open',counts.open],['Dismissed',counts.dismissed],['Resolved',counts.resolved]].forEach(function(item){summary.appendChild(node('span','count',item[0]+': '+item[1]))})}
-function renderList(items){rows.replaceChildren();document.getElementById('list-status').textContent=items.length+' of '+report.findings.length+' findings';items.forEach(function(f){var row=node('button','finding-row'+(f.id===state.selected?' selected':''));row.type='button';row.setAttribute('aria-label','Finding '+f.id+': '+f.title);var top=node('div','row-top');top.appendChild(node('span','finding-id','#'+f.id));addBadge(top,f.severity,'severity-'+f.severity);addBadge(top,f.disposition,'disposition disposition-'+f.disposition);row.appendChild(top);row.appendChild(node('div','row-title',f.title));row.appendChild(node('div','row-location',location(f)));row.addEventListener('click',function(){state.selected=f.id;render();if(window.innerWidth<=800)detail.scrollIntoView({behavior:'smooth',block:'start'})});rows.appendChild(row)})}
+function renderList(items){rows.replaceChildren();document.getElementById('list-status').textContent=items.length+' of '+report.findings.length+' findings';items.forEach(function(f){var row=node('button','finding-row'+(f.id===state.selected?' selected':''));row.type='button';row.setAttribute('aria-label','Finding '+f.id+': '+f.title);var top=node('div','row-top');top.appendChild(node('span','finding-id','#'+f.id));addBadge(top,f.severity,'severity-'+f.severity);addBadge(top,f.disposition,'disposition disposition-'+f.disposition);top.appendChild(node('span','muted',age(f)));if(f.author)top.appendChild(node('span','muted',f.author));row.appendChild(top);row.appendChild(node('div','row-title',f.title));row.appendChild(node('div','row-location',location(f)));row.addEventListener('click',function(){state.selected=f.id;render();if(window.innerWidth<=800)detail.scrollIntoView({behavior:'smooth',block:'start'})});rows.appendChild(row)})}
 function addMeta(container,label,value,mono){if(!value)return;var box=node('div','meta');var dt=node('dt','',label);var dd=node('dd',mono?'mono':'',value);box.append(dt,dd);container.appendChild(box)}
 function renderDiff(f){var section=node('section');section.appendChild(node('h3','',"Introducing diff"));var d=f.diff||{};if(d.error){section.appendChild(node('p','muted','Unavailable: '+d.error));return section}if(d.message){section.appendChild(node('p','muted',d.message));return section}if(!d.lines||!d.lines.length){section.appendChild(node('p','muted','No diff excerpt is available.'));return section}var box=node('div','diff');if(d.hunk_header)box.appendChild(node('div','diff-line diff-hunk','  '+d.hunk_header));if(d.omitted_before)box.appendChild(node('div','diff-line diff-omit','  … '+d.omitted_before+' earlier lines omitted …'));d.lines.forEach(function(line,index){var cls='diff-line';if(line.charAt(0)==='+')cls+=' diff-add';else if(line.charAt(0)==='-')cls+=' diff-del';if(index===d.target)cls+=' diff-target';box.appendChild(node('div',cls,(index===d.target?'› ':'  ')+line))});if(d.omitted_after)box.appendChild(node('div','diff-line diff-omit','  … '+d.omitted_after+' later lines omitted …'));section.appendChild(box);return section}
 function renderHistory(f){var section=node('section');section.appendChild(node('h3','','History'));if(!f.events.length){section.appendChild(node('p','muted','No recorded history.'));return section}var list=node('ol','timeline');f.events.forEach(function(event){var item=node('li');item.appendChild(node('div','event-title',event.action+(event.sha?'  '+shortSHA(event.sha):'')));item.appendChild(node('div','muted',new Date(event.created_at).toLocaleString()));if(event.note)item.appendChild(node('div','',event.note));list.appendChild(item)});section.appendChild(list);return section}
-function renderDetail(f){detail.replaceChildren();if(!f){detail.appendChild(node('div','empty','No findings match the current filters.'));return}detail.appendChild(node('h2','',f.title));var badges=node('div','badges');addBadge(badges,'#'+f.id,'disposition disposition-'+f.disposition);addBadge(badges,f.severity,'severity-'+f.severity);addBadge(badges,f.disposition,'disposition disposition-'+f.disposition);detail.appendChild(badges);detail.appendChild(node('h3','','Description'));detail.appendChild(node('div','description',f.description));var metadata=node('dl','metadata');addMeta(metadata,'Location',location(f),true);addMeta(metadata,'Introduced',shortSHA(f.introduced_sha),true);addMeta(metadata,'Resolved',shortSHA(f.resolved_sha),true);addMeta(metadata,'Dismissed',f.dismissed_at?new Date(f.dismissed_at).toLocaleString():'');addMeta(metadata,'Dismissal reason',f.dismiss_reason);if(f.review){addMeta(metadata,'Review','#'+f.review.number+'  '+(f.review.harness&&f.review.harness!='codex'?f.review.harness+':':'')+f.review.model+(f.review.reasoning_effort?'/'+f.review.reasoning_effort:''));addMeta(metadata,'Reviewed',new Date(f.review.reviewed_at).toLocaleString())}detail.appendChild(metadata);detail.appendChild(renderDiff(f));detail.appendChild(renderHistory(f))}
+function renderDetail(f){detail.replaceChildren();if(!f){detail.appendChild(node('div','empty','No findings match the current filters.'));return}detail.appendChild(node('h2','',f.title));var badges=node('div','badges');addBadge(badges,'#'+f.id,'disposition disposition-'+f.disposition);addBadge(badges,f.severity,'severity-'+f.severity);addBadge(badges,f.disposition,'disposition disposition-'+f.disposition);detail.appendChild(badges);detail.appendChild(node('h3','','Description'));detail.appendChild(node('div','description',f.description));var metadata=node('dl','metadata');addMeta(metadata,'Location',location(f),true);addMeta(metadata,'Introduced',shortSHA(f.introduced_sha),true);addMeta(metadata,'Commit age',age(f));addMeta(metadata,'Author',f.author);addMeta(metadata,'Commit date',f.commit_date?new Date(f.commit_date).toLocaleString():'');addMeta(metadata,'Resolved',shortSHA(f.resolved_sha),true);addMeta(metadata,'Dismissed',f.dismissed_at?new Date(f.dismissed_at).toLocaleString():'');addMeta(metadata,'Dismissal reason',f.dismiss_reason);if(f.review){addMeta(metadata,'Review','#'+f.review.number+'  '+(f.review.harness&&f.review.harness!='codex'?f.review.harness+':':'')+f.review.model+(f.review.reasoning_effort?'/'+f.review.reasoning_effort:''));addMeta(metadata,'Reviewed',new Date(f.review.reviewed_at).toLocaleString())}detail.appendChild(metadata);detail.appendChild(renderDiff(f));detail.appendChild(renderHistory(f))}
 function render(){var items=visibleFindings();if(!items.some(function(f){return f.id===state.selected}))state.selected=items.length?items[0].id:null;renderList(items);renderDetail(items.find(function(f){return f.id===state.selected})||null)}
 search.addEventListener('input',function(){state.query=search.value;render()});statusSelect.addEventListener('change',function(){state.status=statusSelect.value;render()});severitySelect.addEventListener('change',function(){state.severity=severitySelect.value;render()});sortSelect.addEventListener('change',function(){state.sort=sortSelect.value;render()});
-document.addEventListener('keydown',function(event){var form=/^(INPUT|SELECT|TEXTAREA)$/.test(event.target.tagName);if(event.key==='/'&&!form){event.preventDefault();search.focus();return}if(form)return;var items=visibleFindings();var index=items.findIndex(function(f){return f.id===state.selected});if(event.key==='ArrowDown'||event.key==='j'){event.preventDefault();if(items.length)state.selected=items[Math.min(items.length-1,index+1)].id;render()}else if(event.key==='ArrowUp'||event.key==='k'){event.preventDefault();if(items.length)state.selected=items[Math.max(0,index<0?0:index-1)].id;render()}else if(event.key==='ArrowLeft'||event.key==='ArrowRight'){event.preventDefault();var modes=['newest','file','severity'];var position=modes.indexOf(state.sort)+(event.key==='ArrowRight'?1:-1);position=(position+modes.length)%modes.length;state.sort=modes[position];sortSelect.value=state.sort;render()}});
+document.addEventListener('keydown',function(event){var form=/^(INPUT|SELECT|TEXTAREA)$/.test(event.target.tagName);if(event.key==='/'&&!form){event.preventDefault();search.focus();return}if(form)return;var items=visibleFindings();var index=items.findIndex(function(f){return f.id===state.selected});if(event.key==='ArrowDown'||event.key==='j'){event.preventDefault();if(items.length)state.selected=items[Math.min(items.length-1,index+1)].id;render()}else if(event.key==='ArrowUp'||event.key==='k'){event.preventDefault();if(items.length)state.selected=items[Math.max(0,index<0?0:index-1)].id;render()}else if(event.key==='ArrowLeft'||event.key==='ArrowRight'){event.preventDefault();var modes=['id','age','file','author','severity','status','title'];var position=modes.indexOf(state.sort)+(event.key==='ArrowRight'?1:-1);position=(position+modes.length)%modes.length;state.sort=modes[position];sortSelect.value=state.sort;render()}});
 document.getElementById('report-meta').textContent=report.repository+' · generated '+new Date(report.generated_at).toLocaleString();renderSummary();render();
 })();
 </script>

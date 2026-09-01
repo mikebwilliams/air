@@ -226,12 +226,16 @@ The default is
 .TP
 .BI "\-\-sort " SORT
 Sort by
-.BR newest ,
+.BR id ,
+.BR age ,
 .BR file ,
+.BR author ,
+.BR severity ,
+.BR status ,
 or
-.BR severity .
+.BR title .
 The default is
-.BR newest .
+.BR id .
 .TP
 .BI "\-\-limit " N
 Return at most
@@ -495,7 +499,7 @@ Within
 Move between findings.
 .TP
 .BR Left , " " Right
-Cycle newest-first, file/line, and severity sorting.
+Cycle ID, age, file/line, author, severity, status, and title sorting.
 .TP
 .B /
 Search.
