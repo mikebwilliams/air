@@ -78,7 +78,7 @@ func TestFindingsModelLoadsAndRendersDiffPreview(t *testing.T) {
 				Lines: []string{"-broken()", "+fixed()"}, Target: 1,
 			}, nil
 		},
-	}, nil, []Finding{finding}, false, time.Now)
+	}, nil, []Finding{finding}, nil, false, time.Now)
 	model.width = 120
 	model.height = 30
 	command := model.Init()
@@ -115,7 +115,7 @@ func TestFindingsModelCachesPreviewAndIgnoresStaleResult(t *testing.T) {
 			loads++
 			return findingDiffPreview{File: file, Lines: []string{fmt.Sprintf("+finding %d", finding.ID)}}, nil
 		},
-	}, nil, findings, false, time.Now)
+	}, nil, findings, nil, false, time.Now)
 	firstCommand := model.Init()
 	secondCommand := model.moveCursor(1)
 	if firstCommand == nil || secondCommand == nil || model.selectedID() != 1 {

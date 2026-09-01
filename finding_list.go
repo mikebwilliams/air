@@ -10,7 +10,11 @@ import (
 	"time"
 )
 
-const findingListLocationWidth = 28
+const (
+	findingListAgeWidth      = 4
+	findingListBlameWidth    = 18
+	findingListLocationWidth = 28
+)
 
 type findingListReview struct {
 	ID              int64     `json:"id"`
@@ -24,8 +28,10 @@ type findingListReview struct {
 
 type findingListItem struct {
 	Finding
-	Status string            `json:"status"`
-	Review findingListReview `json:"review"`
+	Status     string            `json:"status"`
+	Blame      string            `json:"blame"`
+	CommitDate time.Time         `json:"commit_date"`
+	Review     findingListReview `json:"review"`
 }
 
 type findingListJSONOutput struct {
@@ -74,7 +80,7 @@ func runFindingList(ctx context.Context, args []string, environment cliEnvironme
 		return errors.New("--limit must not be negative")
 	}
 
-	_, store, closeStore, err := openRepositoryStore(ctx, environment.Cwd)
+	repository, store, closeStore, err := openRepositoryStore(ctx, environment.Cwd)
 	if err != nil {
 		return err
 	}
@@ -84,8 +90,12 @@ func runFindingList(ctx context.Context, args []string, environment cliEnvironme
 		return err
 	}
 	findings, total := selectFindingList(allFindings, *status, *severity, sortMode, *limit)
+	display, err := loadFindingDisplayMetadata(ctx, repository, findings)
+	if err != nil {
+		return err
+	}
 	if *jsonOutput {
-		items, err := buildFindingListItems(ctx, store, findings)
+		items, err := buildFindingListItems(ctx, store, findings, display)
 		if err != nil {
 			return err
 		}
@@ -94,7 +104,8 @@ func runFindingList(ctx context.Context, args []string, environment cliEnvironme
 			Total: total, Findings: items,
 		})
 	}
-	writeFindingList(environment.Stdout, findings, total, *status, *severity)
+	items := makeFindingListDisplayItems(findings, display)
+	writeFindingList(environment.Stdout, items, total, *status, *severity, environmentNow(environment))
 	return nil
 }
 
@@ -149,7 +160,12 @@ func selectFindingList(
 	return selected, total
 }
 
-func buildFindingListItems(ctx context.Context, store *Store, findings []Finding) ([]findingListItem, error) {
+func buildFindingListItems(
+	ctx context.Context,
+	store *Store,
+	findings []Finding,
+	display map[int64]findingDisplayMetadata,
+) ([]findingListItem, error) {
 	items := make([]findingListItem, 0, len(findings))
 	for _, finding := range findings {
 		review, err := store.FindingReview(ctx, finding.ID)
@@ -157,8 +173,10 @@ func buildFindingListItems(ctx context.Context, store *Store, findings []Finding
 			return nil, err
 		}
 		items = append(items, findingListItem{
-			Finding: finding,
-			Status:  findingDisposition(finding),
+			Finding:    finding,
+			Status:     findingDisposition(finding),
+			Blame:      findingBlame(display[finding.ID]),
+			CommitDate: display[finding.ID].CommitDate,
 			Review: findingListReview{
 				ID: review.ID, Number: review.Number, CommitSHA: review.CommitSHA,
 				ReviewedAt: review.ReviewedAt, Harness: review.Harness, Model: review.Model,
@@ -169,7 +187,30 @@ func buildFindingListItems(ctx context.Context, store *Store, findings []Finding
 	return items, nil
 }
 
-func writeFindingList(output io.Writer, findings []Finding, total int, status, severity string) {
+func makeFindingListDisplayItems(
+	findings []Finding,
+	display map[int64]findingDisplayMetadata,
+) []findingListItem {
+	items := make([]findingListItem, 0, len(findings))
+	for _, finding := range findings {
+		metadata := display[finding.ID]
+		items = append(items, findingListItem{
+			Finding:    finding,
+			Status:     findingDisposition(finding),
+			Blame:      findingBlame(metadata),
+			CommitDate: metadata.CommitDate,
+		})
+	}
+	return items
+}
+
+func writeFindingList(
+	output io.Writer,
+	findings []findingListItem,
+	total int,
+	status, severity string,
+	now time.Time,
+) {
 	description := findingListDescription(status, severity, total == 1)
 	if total == 0 {
 		fmt.Fprintf(output, "No %s.\n", description)
@@ -186,12 +227,15 @@ func writeFindingList(output io.Writer, findings []Finding, total int, status, s
 			idWidth = width
 		}
 	}
-	fmt.Fprintf(output, "%-*s  %-8s  %-9s  %-*s  %s\n",
-		idWidth, "ID", "SEVERITY", "STATUS", findingListLocationWidth, "LOCATION", "TITLE")
+	fmt.Fprintf(output, "%-*s  %-8s  %-9s  %-*s  %-*s  %-*s  %s\n",
+		idWidth, "ID", "SEVERITY", "STATUS", findingListAgeWidth, "AGE",
+		findingListBlameWidth, "BLAME", findingListLocationWidth, "LOCATION", "TITLE")
 	for _, finding := range findings {
-		fmt.Fprintf(output, "%-*s  %-8s  %-9s  %-*s  %s\n",
+		blame := padRight(truncateTerminalText(finding.Blame, findingListBlameWidth), findingListBlameWidth)
+		fmt.Fprintf(output, "%-*s  %-8s  %-9s  %-*s  %s  %-*s  %s\n",
 			idWidth, "#"+strconv.FormatInt(finding.ID, 10), finding.Severity,
-			findingDisposition(finding), findingListLocationWidth, findingLocation(finding),
+			finding.Status, findingListAgeWidth, formatFindingAge(now, finding.CommitDate),
+			blame, findingListLocationWidth, findingLocation(finding.Finding),
 			singleLine(finding.Title))
 	}
 }

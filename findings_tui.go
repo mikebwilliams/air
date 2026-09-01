@@ -24,6 +24,7 @@ type findingsUIRunner func(
 	findingExternalCommands,
 	*Store,
 	[]Finding,
+	map[int64]findingDisplayMetadata,
 	bool,
 	func() time.Time,
 ) error
@@ -46,12 +47,16 @@ func runFindings(ctx context.Context, args []string, environment cliEnvironment)
 	if err != nil {
 		return err
 	}
+	display, err := loadFindingDisplayMetadata(ctx, repository, findings)
+	if err != nil {
+		return err
+	}
 	runner := environment.FindingsUI
 	if runner == nil {
 		runner = runTerminalFindingsUI
 	}
 	commands := newFindingExternalCommands(repository, environment.ExternalCommand)
-	return runner(ctx, environment.Stdin, environment.Stdout, commands, store, findings, *includeAll,
+	return runner(ctx, environment.Stdin, environment.Stdout, commands, store, findings, display, *includeAll,
 		func() time.Time { return environmentNow(environment) })
 }
 
@@ -62,6 +67,7 @@ func runTerminalFindingsUI(
 	external findingExternalCommands,
 	store *Store,
 	findings []Finding,
+	display map[int64]findingDisplayMetadata,
 	includeAll bool,
 	now func() time.Time,
 ) error {
@@ -70,7 +76,7 @@ func runTerminalFindingsUI(
 	if !inputOK || !outputOK || !term.IsTerminal(inputFile.Fd()) || !term.IsTerminal(outputFile.Fd()) {
 		return errors.New("findings requires an interactive terminal; use air status --json for non-interactive output")
 	}
-	model := newFindingsModel(ctx, external, store, findings, includeAll, now)
+	model := newFindingsModel(ctx, external, store, findings, display, includeAll, now)
 	program := tea.NewProgram(model,
 		tea.WithContext(ctx),
 		tea.WithInput(input),
@@ -113,6 +119,7 @@ type findingsModel struct {
 	now             func() time.Time
 	all             []Finding
 	visible         []Finding
+	display         map[int64]findingDisplayMetadata
 	cursor          int
 	width           int
 	height          int
@@ -141,6 +148,7 @@ func newFindingsModel(
 	external findingExternalCommands,
 	store *Store,
 	findings []Finding,
+	display map[int64]findingDisplayMetadata,
 	includeAll bool,
 	now func() time.Time,
 ) findingsModel {
@@ -154,6 +162,7 @@ func newFindingsModel(
 		store:          store,
 		now:            now,
 		all:            findings,
+		display:        display,
 		width:          100,
 		height:         30,
 		statusFilter:   status,
@@ -688,7 +697,7 @@ func (m findingsModel) render() string {
 	if m.help {
 		lines = append(lines, fitLines(m.helpLines(width), bodyHeight, width)...)
 	} else if width >= 96 {
-		leftWidth := width * 42 / 100
+		leftWidth := width * 52 / 100
 		rightWidth := width - leftWidth - 3
 		left := fitLines(m.listLines(bodyHeight, leftWidth), bodyHeight, leftWidth)
 		right := fitLines(m.rightPaneLines(bodyHeight, rightWidth), bodyHeight, rightWidth)
@@ -821,6 +830,10 @@ func (m findingsModel) listLines(height, width int) []string {
 		end = len(m.visible)
 	}
 	idWidth := m.findingIDWidth()
+	now := time.Now()
+	if m.now != nil {
+		now = m.now()
+	}
 	lines := make([]string, 0, end-start)
 	for index := start; index < end; index++ {
 		finding := m.visible[index]
@@ -831,28 +844,40 @@ func (m findingsModel) listLines(height, width int) []string {
 				location += ":" + strconv.Itoa(*finding.Line)
 			}
 		}
-		line := m.findingListLine(finding, idWidth, location, index == m.cursor)
+		line := m.findingListLine(finding, idWidth, location, index == m.cursor, now)
 		lines = append(lines, truncateTerminalText(line, width))
 	}
 	return lines
 }
 
-func (m findingsModel) findingListLine(finding Finding, idWidth int, location string, selected bool) string {
+func (m findingsModel) findingListLine(
+	finding Finding,
+	idWidth int,
+	location string,
+	selected bool,
+	now time.Time,
+) string {
 	id := fmt.Sprintf("%*d", idWidth, finding.ID)
 	severity := fmt.Sprintf("%-4s", severityLabel(finding.Severity))
 	dispositionName := findingDisposition(finding)
 	disposition := fmt.Sprintf("%-9s", dispositionName)
+	display := m.display[finding.ID]
+	age := fmt.Sprintf("%4s", formatFindingAge(now, display.CommitDate))
+	blame := padRight(truncateTerminalText(findingBlame(display), 14), 14)
 	title := singleLine(finding.Title)
 	if selected {
-		return m.style(fmt.Sprintf("> #%s %s %s%s  %s", id, severity, disposition, location, title), "1", "7")
+		return m.style(fmt.Sprintf("> #%s %s %s %s %s%s  %s",
+			id, severity, disposition, age, blame, location, title), "1", "7")
 	}
 	if dispositionName != "open" {
 		title = m.style(title, "2")
 	}
-	return fmt.Sprintf("  #%s %s %s%s  %s",
+	return fmt.Sprintf("  #%s %s %s %s %s%s  %s",
 		m.style(id, "2"),
 		m.styleSeverity(severity, finding.Severity),
 		m.styleDisposition(disposition, dispositionName),
+		m.style(age, "36"),
+		m.style(blame, "2"),
 		m.style(location, "2"),
 		title,
 	)
@@ -891,6 +916,15 @@ func (m findingsModel) detailLines(width int) []string {
 		lines = append(lines, "Location: "+location)
 	}
 	lines = append(lines, "Introduced: "+shortSHA(finding.IntroducedSHA))
+	display := m.display[finding.ID]
+	if !display.CommitDate.IsZero() {
+		now := time.Now()
+		if m.now != nil {
+			now = m.now()
+		}
+		lines = append(lines, "Commit age: "+formatFindingAge(now, display.CommitDate))
+	}
+	lines = append(lines, "Blame: "+findingBlame(display))
 	if m.review.ID != 0 {
 		identity := m.review.Model
 		if m.review.Harness != "" && m.review.Harness != codexReviewerName {

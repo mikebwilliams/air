@@ -10,6 +10,7 @@ import (
 	"path"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 type GitRepository struct {
@@ -23,6 +24,11 @@ type DiffResult struct {
 	BinaryFiles []string
 	Empty       bool
 	Oversized   bool
+}
+
+type commitAttribution struct {
+	Author string
+	Date   time.Time
 }
 
 func DiscoverGitRepository(ctx context.Context, start string) (*GitRepository, error) {
@@ -99,6 +105,32 @@ func (r *GitRepository) MasterHistory(ctx context.Context) ([]string, error) {
 		return nil, fmt.Errorf("enumerate master history: %w", err)
 	}
 	return parseObjectIDs(out)
+}
+
+func (r *GitRepository) MasterCommitAttributions(ctx context.Context) (map[string]commitAttribution, error) {
+	if _, err := r.MasterSHA(ctx); err != nil {
+		return nil, err
+	}
+	out, err := r.run(ctx, "log", "--first-parent", "--format=%H%x00%aN%x00%aI%x00", masterRef)
+	if err != nil {
+		return nil, fmt.Errorf("read master commit attribution: %w", err)
+	}
+	fields := strings.Split(out, "\x00")
+	attributions := make(map[string]commitAttribution, len(fields)/3)
+	for index := 0; index+2 < len(fields); index += 3 {
+		sha := strings.TrimSpace(fields[index])
+		author := strings.TrimSpace(fields[index+1])
+		dateValue := strings.TrimSpace(fields[index+2])
+		if sha == "" && author == "" && dateValue == "" {
+			continue
+		}
+		date, err := time.Parse(time.RFC3339Nano, dateValue)
+		if !isHexObjectID(sha) || author == "" || err != nil {
+			return nil, errors.New("Git returned invalid master commit attribution data")
+		}
+		attributions[sha] = commitAttribution{Author: author, Date: date}
+	}
+	return attributions, nil
 }
 
 func (r *GitRepository) IsOnMasterFirstParent(ctx context.Context, sha string) (bool, error) {

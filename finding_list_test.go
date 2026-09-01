@@ -17,6 +17,7 @@ func TestCLIFindingListFiltersSortsAndLimits(t *testing.T) {
 	environment := cliEnvironment{
 		Cwd: directory, Stdout: &stdout, Stderr: &bytes.Buffer{},
 		Getenv: func(string) string { return "" },
+		Now:    func() time.Time { return time.Date(2026, 9, 1, 12, 0, 0, 0, time.UTC) },
 	}
 
 	if err := runCLI(ctx, []string{"finding", "list"}, environment); err != nil {
@@ -24,8 +25,8 @@ func TestCLIFindingListFiltersSortsAndLimits(t *testing.T) {
 	}
 	output := stdout.String()
 	for _, expected := range []string{
-		"2 open findings", "ID", "SEVERITY", "STATUS", "LOCATION", "TITLE",
-		"#4", "error", "open", "pkg/c.go:5", "fourth",
+		"2 open findings", "ID", "SEVERITY", "STATUS", "AGE", "BLAME", "LOCATION", "TITLE",
+		"#4", "error", "open", "1d", "AIR Test", "pkg/c.go:5", "fourth",
 		"#1", "warning", "pkg/b.go:20", "first",
 	} {
 		if !strings.Contains(output, expected) {
@@ -73,7 +74,9 @@ func TestCLIFindingListFiltersSortsAndLimits(t *testing.T) {
 	if decoded.Status != "all" || decoded.Severity != "all" || decoded.Sort != "severity" ||
 		decoded.Total != 4 || len(decoded.Findings) != 1 || decoded.Findings[0].ID != findingIDs[3] ||
 		decoded.Findings[0].Status != "open" || decoded.Findings[0].Review.Model != "list-model" ||
-		decoded.Findings[0].Review.ReasoningEffort != "high" || decoded.Findings[0].Review.Number != 1 {
+		decoded.Findings[0].Review.ReasoningEffort != "high" || decoded.Findings[0].Review.Number != 1 ||
+		decoded.Findings[0].Blame != "AIR Test" ||
+		!decoded.Findings[0].CommitDate.Equal(time.Date(2026, 8, 31, 12, 0, 0, 0, time.UTC)) {
 		t.Fatalf("JSON finding list = %+v", decoded)
 	}
 }
@@ -109,8 +112,14 @@ func TestWriteFindingListKeepsColumnsStable(t *testing.T) {
 		{ID: 123, Severity: "warning", Title: "wide ID", File: &file, Line: &line},
 		{ID: 7, Severity: "info", Title: "narrow ID"},
 	}
+	commitDate := time.Date(2026, 8, 30, 12, 0, 0, 0, time.UTC)
+	display := map[int64]findingDisplayMetadata{
+		123: {CommitDate: commitDate, Blame: "A Very Long Contributor Name"},
+		7:   {CommitDate: commitDate.Add(-30 * 24 * time.Hour), Blame: "Sam"},
+	}
+	items := makeFindingListDisplayItems(findings, display)
 	var output bytes.Buffer
-	writeFindingList(&output, findings, len(findings), "open", "all")
+	writeFindingList(&output, items, len(findings), "open", "all", commitDate.Add(48*time.Hour))
 	lines := strings.Split(strings.TrimSuffix(output.String(), "\n"), "\n")
 	if len(lines) != 5 {
 		t.Fatalf("finding list lines = %q", lines)
@@ -122,9 +131,13 @@ func TestWriteFindingListKeepsColumnsStable(t *testing.T) {
 	if !strings.Contains(lines[3], file+":"+strconv.Itoa(line)) {
 		t.Fatalf("long location was truncated:\n%s", output.String())
 	}
+	if !strings.Contains(lines[3], "2d") || !strings.Contains(lines[3], "A Very Long Contr…") ||
+		!strings.Contains(lines[4], "1mo") {
+		t.Fatalf("age or blame columns are missing:\n%s", output.String())
+	}
 
 	output.Reset()
-	writeFindingList(&output, nil, 0, "open", "all")
+	writeFindingList(&output, nil, 0, "open", "all", commitDate)
 	if output.String() != "No open findings.\n" {
 		t.Fatalf("empty finding list = %q", output.String())
 	}
@@ -136,6 +149,8 @@ func testRepositoryWithFindingDispositions(t *testing.T) (*GitRepository, string
 	repository, directory := newTestGitRepository(t)
 	base := testCommitFile(t, directory, "base.txt", []byte("base\n"), "base")
 	commit := testCommitFile(t, directory, "change.txt", []byte("change\n"), "find issues")
+	testGit(t, directory, "commit", "--amend", "--no-edit", "--date=2026-08-31T12:00:00Z")
+	commit = strings.TrimSpace(testGit(t, directory, "rev-parse", "HEAD"))
 	store, err := CreateStore(ctx, repository.DatabasePath(), base)
 	if err != nil {
 		t.Fatal(err)

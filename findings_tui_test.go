@@ -71,8 +71,12 @@ func TestFindingsModelFiltersAndRenders(t *testing.T) {
 			{ID: 2, Severity: "warning", Title: "Resolved retry", Description: "retry failed", IntroducedSHA: strings.Repeat("b", 40), ResolvedSHA: &resolvedSHA},
 			{ID: 1, Severity: "info", Title: "Legacy fallback", Description: "expected", IntroducedSHA: strings.Repeat("c", 40), DismissedAt: &dismissedAt, DismissReason: "intentional"},
 		},
-		width:          120,
-		height:         30,
+		width:  120,
+		height: 30,
+		now:    func() time.Time { return now },
+		display: map[int64]findingDisplayMetadata{
+			3: {CommitDate: now.Add(-48 * time.Hour), Blame: "Ada Lovelace"},
+		},
 		statusFilter:   "open",
 		severityFilter: "all",
 		review: FindingReview{
@@ -99,7 +103,9 @@ func TestFindingsModelFiltersAndRenders(t *testing.T) {
 	model.applyFilters(3)
 	model.review = FindingReview{ID: 1, Number: 1, Model: "gpt-5.6-luna", ReasoningEffort: "xhigh", ReviewedAt: now}
 	rendered := model.render()
-	for _, expected := range []string{"Open parser corruption", "parser/state.go:42", "gpt-5.6-luna/xhigh", "Description:"} {
+	for _, expected := range []string{
+		"Open parser corruption", "parser/state.go:42", "2d", "Ada Lovelace", "gpt-5.6-luna/xhigh", "Description:",
+	} {
 		if !strings.Contains(rendered, expected) {
 			t.Errorf("render did not contain %q:\n%s", expected, rendered)
 		}
@@ -227,7 +233,7 @@ func TestFindingsModelActionsAreAudited(t *testing.T) {
 	store, findings, reviewedAt := testStoreWithFindings(t)
 	defer store.Close()
 	now := reviewedAt.Add(time.Hour)
-	model := newFindingsModel(ctx, findingExternalCommands{}, store, findings, true, func() time.Time {
+	model := newFindingsModel(ctx, findingExternalCommands{}, store, findings, nil, true, func() time.Time {
 		now = now.Add(time.Second)
 		return now
 	})
@@ -343,11 +349,15 @@ func TestRunFindingsHandsAllRowsToUI(t *testing.T) {
 		Stdout: io.Discard,
 		Stderr: io.Discard,
 		FindingsUI: func(_ context.Context, _ io.Reader, _ io.Writer, _ findingExternalCommands, _ *Store,
-			findings []Finding, includeAll bool, _ func() time.Time,
+			findings []Finding, display map[int64]findingDisplayMetadata, includeAll bool, _ func() time.Time,
 		) error {
 			called = true
 			if !includeAll || len(findings) != 1 || findings[0].Title != "CLI finding" {
 				t.Fatalf("UI input: includeAll=%t, findings=%+v", includeAll, findings)
+			}
+			metadata := display[findings[0].ID]
+			if metadata.Blame != "AIR Test" || metadata.CommitDate.IsZero() {
+				t.Fatalf("UI display metadata = %+v", metadata)
 			}
 			return nil
 		},
@@ -362,7 +372,7 @@ func TestRunFindingsHandsAllRowsToUI(t *testing.T) {
 
 func TestTerminalFindingsUIRejectsPipes(t *testing.T) {
 	err := runTerminalFindingsUI(context.Background(), bytes.NewBuffer(nil), io.Discard,
-		findingExternalCommands{}, nil, nil, false, time.Now)
+		findingExternalCommands{}, nil, nil, nil, false, time.Now)
 	if err == nil || !strings.Contains(err.Error(), "interactive terminal") {
 		t.Fatalf("error = %v", err)
 	}
