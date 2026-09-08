@@ -51,7 +51,12 @@ air precheck --staged --fail-on warning
 ```
 
 Prechecks print provisional results and never change AIR's database. They can
-also produce JSON, SARIF, or a self-contained HTML report with `--format`.
+also produce JSON, SARIF, or a self-contained HTML report with `--format` and
+write it directly with `-o`, for example:
+
+```bash
+air precheck --format html -o air-precheck.html
+```
 
 Codex is the default review harness. AIR can also use an already authenticated
 Claude Code or Gemini CLI. Run `air help` or `man air` for the complete command

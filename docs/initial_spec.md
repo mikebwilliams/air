@@ -611,7 +611,9 @@ findings still open after the complete series are included in the final
 finding list and considered by `--fail-on`. Predicted resolutions of existing
 database findings are reported separately.
 
-`--format text|json|sarif|html` selects standard output; text is the default.
+`--format text|json|sarif|html` selects the representation; text is the default.
+`-o FILE` or `--output FILE` writes it directly to a file, while an omitted
+option or `-o -` uses standard output.
 `--fail-on info|warning|error` returns a nonzero status if any final provisional
 finding has that severity or a more severe one. Without `--fail-on`, findings
 do not change the exit status. The common harness, model, effort, executable,
@@ -1367,10 +1369,10 @@ air status --json
 air show <commit-ish> --json
 air precheck --format json
 air precheck --format sarif
-air precheck --format html > air-precheck.html
+air precheck --format html -o air-precheck.html
 air export --format json
 air export --format sarif
-air export --format html > air-findings.html
+air export --format html -o air-findings.html
 ```
 
 JSON uses documented snake-case field names rather than mirroring Go field

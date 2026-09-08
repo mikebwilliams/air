@@ -1687,6 +1687,25 @@ func writeJSON(output io.Writer, value any) error {
 	return nil
 }
 
+func writeCommandOutput(stdout io.Writer, path string, write func(io.Writer) error) error {
+	if path == "" || path == "-" {
+		return write(stdout)
+	}
+	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o666)
+	if err != nil {
+		return fmt.Errorf("open output file %q: %w", path, err)
+	}
+	writeErr := write(file)
+	closeErr := file.Close()
+	if writeErr != nil {
+		return writeErr
+	}
+	if closeErr != nil {
+		return fmt.Errorf("close output file %q: %w", path, closeErr)
+	}
+	return nil
+}
+
 func printReviewAccounting(
 	output io.Writer,
 	harness, model, reasoningEffort string,
@@ -1766,30 +1785,33 @@ func printReviewResult(output io.Writer, introduced, resolved []Finding, summary
 func runExport(ctx context.Context, args []string, environment cliEnvironment) error {
 	flags := newFlagSet("export", environment.Stderr)
 	format := flags.String("format", "", "output format: json, sarif, or html")
+	outputPath := flags.StringP("output", "o", "", "write output to a file instead of standard output")
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
 	if flags.NArg() != 0 || (*format != "json" && *format != "sarif" && *format != "html") {
-		return errors.New("usage: air export --format <json|sarif|html>")
+		return errors.New("usage: air export --format <json|sarif|html> [-o FILE]")
 	}
 	repository, store, closeStore, err := openRepositoryStore(ctx, environment.Cwd)
 	if err != nil {
 		return err
 	}
 	defer closeStore()
-	if *format == "html" {
-		return writeHTMLExport(ctx, environment.Stdout, repository, store, environmentNow(environment))
-	}
-	findings, err := store.OpenFindings(ctx)
-	if err != nil {
-		return err
-	}
-	if *format == "json" {
-		return writeJSON(environment.Stdout, struct {
-			OpenFindings []Finding `json:"open_findings"`
-		}{OpenFindings: findings})
-	}
-	return writeJSON(environment.Stdout, buildSARIF(findings))
+	return writeCommandOutput(environment.Stdout, *outputPath, func(output io.Writer) error {
+		if *format == "html" {
+			return writeHTMLExport(ctx, output, repository, store, environmentNow(environment))
+		}
+		findings, err := store.OpenFindings(ctx)
+		if err != nil {
+			return err
+		}
+		if *format == "json" {
+			return writeJSON(output, struct {
+				OpenFindings []Finding `json:"open_findings"`
+			}{OpenFindings: findings})
+		}
+		return writeJSON(output, buildSARIF(findings))
+	})
 }
 
 type sarifLog struct {

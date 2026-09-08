@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
@@ -151,6 +152,38 @@ func TestCLIInitScanAndQueries(t *testing.T) {
 	if !strings.Contains(stdout.String(), "Estimated cost: $0.000007 USD") ||
 		!strings.Contains(stdout.String(), "Reviews: 1 attempts across 1 commits") {
 		t.Fatalf("cost output:\n%s", stdout.String())
+	}
+}
+
+func TestCLIExportWritesOutputFile(t *testing.T) {
+	ctx := context.Background()
+	_, directory := newTestGitRepository(t)
+	base := testCommitFile(t, directory, "app.txt", []byte("base\n"), "base")
+	var stdout bytes.Buffer
+	environment := cliEnvironment{
+		Cwd: directory, Stdout: &stdout, Stderr: &bytes.Buffer{},
+		Getenv: func(string) string { return "" },
+	}
+	if err := runCLI(ctx, []string{"init", base}, environment); err != nil {
+		t.Fatal(err)
+	}
+	stdout.Reset()
+	outputPath := filepath.Join(directory, "findings.json")
+	if err := runCLI(ctx, []string{"export", "--format", "json", "--output", outputPath}, environment); err != nil {
+		t.Fatal(err)
+	}
+	if stdout.Len() != 0 {
+		t.Fatalf("export wrote to standard output with --output: %q", stdout.String())
+	}
+	contents, err := os.ReadFile(outputPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var exported struct {
+		OpenFindings []Finding `json:"open_findings"`
+	}
+	if err := json.Unmarshal(contents, &exported); err != nil || exported.OpenFindings == nil {
+		t.Fatalf("exported output = %+v, %v; contents=%s", exported, err, contents)
 	}
 }
 

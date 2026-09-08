@@ -87,6 +87,7 @@ func runPrecheck(ctx context.Context, args []string, environment cliEnvironment)
 	flags := newFlagSet("precheck", environment.Stderr)
 	staged := flags.Bool("staged", false, "review the staged index against HEAD")
 	format := flags.String("format", "text", "output format: text, json, sarif, or html")
+	outputPath := flags.StringP("output", "o", "", "write output to a file instead of standard output")
 	failOn := flags.String("fail-on", "", "exit nonzero for findings at or above: info, warning, or error")
 	reviewerFlags := addReviewerFlags(flags, "per-target")
 	if err := flags.Parse(args); err != nil {
@@ -143,7 +144,9 @@ func runPrecheck(ctx context.Context, args []string, environment cliEnvironment)
 	if err != nil {
 		return err
 	}
-	if err := writePrecheckReport(environment.Stdout, repository, report, *format); err != nil {
+	if err := writeCommandOutput(environment.Stdout, *outputPath, func(output io.Writer) error {
+		return writePrecheckReport(output, repository, report, *format)
+	}); err != nil {
 		return err
 	}
 	if count := precheckFailureCount(report.Findings, *failOn); count != 0 {

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -45,16 +46,24 @@ func TestCLIPrecheckReviewsUnpushedCommitsWithoutWritingStore(t *testing.T) {
 		t.Fatal(err)
 	}
 	output.Reset()
+	reportPath := filepath.Join(directory, "precheck.json")
 	err := runCLI(ctx, []string{
 		"precheck", "--model", "gpt-5.6-luna", "--effort", "low",
-		"--format", "json", "--fail-on", "warning",
+		"--format", "json", "-o", reportPath, "--fail-on", "warning",
 	}, environment)
 	if err == nil || !strings.Contains(err.Error(), "precheck found 1 open finding") {
 		t.Fatalf("precheck error = %v", err)
 	}
+	if output.Len() != 0 {
+		t.Fatalf("precheck wrote to standard output with -o: %q", output.String())
+	}
+	reportJSON, err := os.ReadFile(reportPath)
+	if err != nil {
+		t.Fatal(err)
+	}
 	var report precheckReport
-	if err := json.Unmarshal(output.Bytes(), &report); err != nil {
-		t.Fatalf("decode precheck output: %v\n%s", err, output.String())
+	if err := json.Unmarshal(reportJSON, &report); err != nil {
+		t.Fatalf("decode precheck output: %v\n%s", err, reportJSON)
 	}
 	if report.Mode != "unpushed" || report.FromSHA != base || report.ToSHA != head ||
 		len(report.Attempts) != 1 || len(report.Findings) != 1 || report.Findings[0].Title != "broken behavior" {

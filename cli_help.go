@@ -94,6 +94,7 @@ var cliCommands = []cliCommandSpec{
 		Options: append([]cliHelpOption{
 			{"--staged", "Review the staged index against HEAD instead of commits."},
 			{"--format FORMAT", "Output text, json, sarif, or html (default: text)."},
+			{"-o, --output FILE", "Write output to FILE instead of standard output; use - for standard output."},
 			{"--fail-on SEVERITY", "Exit nonzero for outstanding findings at or above info, warning, or error."},
 		}, reviewerHelpOptions("per-target")...), Run: runPrecheck,
 	},
@@ -226,9 +227,12 @@ var cliCommands = []cliCommandSpec{
 	{
 		Name: "export", Category: commandCategoryReports,
 		Summary:     "Export findings as JSON, SARIF, or offline HTML.",
-		Description: "Write findings to standard output in the selected format. JSON and SARIF contain open findings; HTML is a static viewer containing every disposition.",
-		Usage:       []string{"air export --format FORMAT"},
-		Options:     []cliHelpOption{{"--format FORMAT", "Required output format: json, sarif, or html."}}, Run: runExport,
+		Description: "Write findings in the selected format. JSON and SARIF contain open findings; HTML is a static viewer containing every disposition.",
+		Usage:       []string{"air export --format FORMAT [-o FILE]"},
+		Options: []cliHelpOption{
+			{"--format FORMAT", "Required output format: json, sarif, or html."},
+			{"-o, --output FILE", "Write output to FILE instead of standard output; use - for standard output."},
+		}, Run: runExport,
 	},
 	{
 		Name: "prompt", Category: commandCategoryMaintenance,

@@ -132,6 +132,13 @@ or
 The default is
 .BR text .
 .TP
+.BI "\-o, \-\-output " FILE
+Write the report directly to
+.I FILE
+instead of standard output. Use
+.B -
+for standard output.
+.TP
 .BI "\-\-fail-on " SEVERITY
 Return a nonzero status when an outstanding provisional finding is at or above
 .BR info ,
@@ -326,12 +333,19 @@ Show the accounting-focused summary, with attempts grouped by harness, model,
 and effort. Unknown prices and token categories not reported by a harness
 remain explicit.
 .TP
-.BI "air export \-\-format " FORMAT
-Write findings to standard output. The format must be
+.BR "air export \-\-format " FORMAT " [\-o " FILE "]"
+Write a findings report. The format must be
 .BR json ,
 .BR sarif ,
 or
 .BR html .
+By default the report is written to standard output;
+.BI "\-o " FILE
+or
+.BI "\-\-output " FILE
+writes it directly to a file. Use
+.B -
+for standard output.
 JSON and SARIF include current open findings. HTML is one self-contained,
 offline, read-only viewer containing every disposition, search and filters,
 sorting, details, history, attribution, and bounded introducing-diff excerpts.
@@ -683,7 +697,7 @@ air findings
 Export a shareable report and back up the database:
 .PP
 .EX
-air export --format html > air-findings.html
+air export --format html -o air-findings.html
 air backup
 air backup import air-backup-20260831-120000.sqlite
 .EE
