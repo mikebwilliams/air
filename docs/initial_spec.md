@@ -584,6 +584,39 @@ in one transaction. Any failure rolls back the batch. Recording the skip also
 removes a matching `scan_failures` row atomically. `--dry-run` lists the exact
 selection without acquiring the scan lock or changing commit/review state.
 
+### 7.2 Pre-push and staged review
+
+```bash
+air precheck
+air precheck --staged
+air precheck <from>..<to>
+```
+
+Bare `air precheck` reviews the first-parent commits reachable from local
+`master` but not from `master`'s configured upstream. AIR resolves both tips
+once at startup and processes the resulting range oldest first. The upstream
+tip must be on local `master`'s first-parent history. An explicit range uses the
+same endpoint and first-parent validation as `air scan`.
+
+`--staged` instead reviews the exact Git index against `HEAD`; `HEAD` must be
+the tip of local `master`. Unstaged working-tree changes and untracked files are
+not part of the target. AIR applies the same empty, binary-only, and 256 KiB
+text-diff exclusions used for commit scans.
+
+Precheck reads existing open findings as resolution candidates but never
+writes AIR's database or scan-failure queue. During a multi-commit precheck,
+new findings and resolutions are maintained in memory so a later target can
+resolve a provisional finding from an earlier target. Only provisional
+findings still open after the complete series are included in the final
+finding list and considered by `--fail-on`. Predicted resolutions of existing
+database findings are reported separately.
+
+`--format text|json|sarif|html` selects standard output; text is the default.
+`--fail-on info|warning|error` returns a nonzero status if any final provisional
+finding has that severity or a more severe one. Without `--fail-on`, findings
+do not change the exit status. The common harness, model, effort, executable,
+profile, and timeout overrides accepted by `air scan` also apply.
+
 ## 8. Commit Review
 
 For each commit, use its first parent and obtain at minimum:
@@ -1332,6 +1365,9 @@ affected by the review filters.
 ```bash
 air status --json
 air show <commit-ish> --json
+air precheck --format json
+air precheck --format sarif
+air precheck --format html > air-precheck.html
 air export --format json
 air export --format sarif
 air export --format html > air-findings.html

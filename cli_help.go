@@ -87,6 +87,17 @@ var cliCommands = []cliCommandSpec{
 		}, reviewerHelpOptions("per-commit")...), Run: runScan,
 	},
 	{
+		Name: "precheck", Category: commandCategoryCommitReview,
+		Summary:     "Review staged or unpushed work without recording it.",
+		Description: "Review the staged index, an explicit first-parent commit range, or commits on master not yet in its configured upstream. Findings and accounting are provisional and AIR state is not changed.",
+		Usage:       []string{"air precheck [OPTIONS] [FROM..TO]"},
+		Options: append([]cliHelpOption{
+			{"--staged", "Review the staged index against HEAD instead of commits."},
+			{"--format FORMAT", "Output text, json, sarif, or html (default: text)."},
+			{"--fail-on SEVERITY", "Exit nonzero for outstanding findings at or above info, warning, or error."},
+		}, reviewerHelpOptions("per-target")...), Run: runPrecheck,
+	},
+	{
 		Name: "retry", Category: commandCategoryCommitReview,
 		Summary:     "Retry commits in the durable failure queue.",
 		Description: "Review failed commits that still occur on master, oldest first, using the current harness configuration.",

@@ -110,6 +110,40 @@ The common review options described under
 are also accepted.
 .RE
 .TP
+.BR "air precheck" " [" OPTIONS "] [" FROM .. TO "]"
+Review commits on local master that are not in its configured upstream, oldest
+first, without modifying AIR state. An explicit first-parent range may be
+supplied instead. New findings and predicted resolutions are provisional, and
+only findings still open after the complete series are reported.
+.RS
+.TP
+.B \-\-staged
+Review the exact staged Git index against HEAD instead of reviewing commits.
+HEAD must be the tip of local master. This option cannot be combined with a
+commit range; unstaged and untracked changes are ignored.
+.TP
+.BI "\-\-format " FORMAT
+Write
+.BR text ,
+.BR json ,
+.BR sarif ,
+or
+.BR html .
+The default is
+.BR text .
+.TP
+.BI "\-\-fail-on " SEVERITY
+Return a nonzero status when an outstanding provisional finding is at or above
+.BR info ,
+.BR warning ,
+or
+.BR error .
+Without this option, findings do not change the exit status.
+.TP
+.B "Review options"
+The common review options are also accepted and apply to each target.
+.RE
+.TP
 .BR "air retry" " [" OPTIONS "]"
 Retry live commits in the durable failure queue, oldest failure first, using
 the current review configuration.
@@ -609,6 +643,9 @@ The command failed, configuration or arguments were invalid, or a scan batch
 recorded one or more review failures. Unless
 .B \-\-stop-on-error
 was used, a failed scan may still have successfully processed later commits.
+A precheck also returns 1 when its
+.B \-\-fail-on
+threshold matches an outstanding provisional finding.
 .SH EXAMPLES
 Initialize at a release and configure Codex:
 .PP
@@ -625,6 +662,13 @@ Review with another harness for one invocation:
 .EX
 air scan --harness claude --model claude-model --effort high
 air scan --harness gemini --model gemini-model --effort default
+.EE
+.PP
+Review work before pushing without changing AIR state:
+.PP
+.EX
+air precheck --fail-on warning
+air precheck --staged --fail-on warning
 .EE
 .PP
 Retry failures and inspect findings:

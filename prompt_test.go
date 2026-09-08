@@ -40,3 +40,32 @@ func TestRecheckPromptsRequireExactCompleteOutcomes(t *testing.T) {
 		t.Fatalf("recheck prompt version = %q, want 1", recheckPromptVersion)
 	}
 }
+
+func TestStagedPrecheckPromptUsesOnlyIndexSnapshot(t *testing.T) {
+	prompt, err := buildReviewPromptWithStatic(ReviewInput{
+		Commit: CommitMetadata{SHA: stagedPrecheckSHA, ParentSHA: "parent"},
+		Staged: true,
+	}, "review instructions")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, phrase := range []string{
+		"currently staged Git index",
+		"git diff --cached",
+		"git show :PATH",
+		"Ignore unstaged working-tree changes and untracked files",
+	} {
+		if !strings.Contains(prompt, phrase) {
+			t.Fatalf("staged prompt does not contain %q:\n%s", phrase, prompt)
+		}
+	}
+	regular, err := buildReviewPromptWithStatic(ReviewInput{
+		Commit: CommitMetadata{SHA: "commit", ParentSHA: "parent"},
+	}, "review instructions")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(regular, "<precheck_target>") {
+		t.Fatalf("ordinary review contains staged directive:\n%s", regular)
+	}
+}

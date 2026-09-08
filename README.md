@@ -42,6 +42,17 @@ commits it has already reviewed or intentionally skipped.
 AIR carries open findings forward as it scans. If a later commit fixes one, AIR
 recognizes the fix and marks the finding resolved automatically.
 
+Before pushing, review every local `master` commit not yet in its configured
+upstream, or review only the staged index:
+
+```bash
+air precheck --fail-on warning
+air precheck --staged --fail-on warning
+```
+
+Prechecks print provisional results and never change AIR's database. They can
+also produce JSON, SARIF, or a self-contained HTML report with `--format`.
+
 Codex is the default review harness. AIR can also use an already authenticated
 Claude Code or Gemini CLI. Run `air help` or `man air` for the complete command
 reference.

@@ -141,7 +141,7 @@ func TestCLICommandRegistryIsComplete(t *testing.T) {
 		validateCLIHelpChildren(t, command.Name, command.Children)
 	}
 	expected := []string{
-		"init", "doctor", "status", "version", "pending", "scan", "retry", "failures", "rescan", "skip", "clean",
+		"init", "doctor", "status", "version", "pending", "scan", "precheck", "retry", "failures", "rescan", "skip", "clean",
 		"recheck", "findings", "finding", "log", "show", "stats", "cost", "export", "prompt", "config", "model", "db", "backup", "reset",
 	}
 	for _, name := range expected {

@@ -107,6 +107,14 @@ func (r *GitRepository) MasterHistory(ctx context.Context) ([]string, error) {
 	return parseObjectIDs(out)
 }
 
+func (r *GitRepository) MasterUpstreamSHA(ctx context.Context) (string, error) {
+	sha, err := r.ResolveCommit(ctx, "master@{upstream}")
+	if err != nil {
+		return "", fmt.Errorf("master has no usable configured upstream: %w", err)
+	}
+	return sha, nil
+}
+
 func (r *GitRepository) MasterCommitAttributions(ctx context.Context) (map[string]commitAttribution, error) {
 	if _, err := r.MasterSHA(ctx); err != nil {
 		return nil, err
@@ -287,6 +295,45 @@ func (r *GitRepository) CommitDiff(ctx context.Context, parentSHA, sha string) (
 	diff, err := r.runBytes(ctx, maxDiffBytes, args...)
 	if err != nil {
 		return DiffResult{}, fmt.Errorf("read diff for %s: %w", shortSHA(sha), err)
+	}
+	return DiffResult{
+		Text:        string(diff.data),
+		TextFiles:   textPaths,
+		BinaryFiles: binaryPaths,
+		Oversized:   diff.exceeded,
+	}, nil
+}
+
+func (r *GitRepository) StagedDiff(ctx context.Context, baseSHA string) (DiffResult, error) {
+	numstat, err := r.runBytes(ctx, 0, "diff", "--cached", "--no-ext-diff", "--no-textconv",
+		"--numstat", "-z", "--no-renames", baseSHA)
+	if err != nil {
+		return DiffResult{}, fmt.Errorf("inspect staged diff: %w", err)
+	}
+	entries, err := parseNumstat(numstat.data)
+	if err != nil {
+		return DiffResult{}, fmt.Errorf("inspect staged diff: %w", err)
+	}
+	if len(entries) == 0 {
+		return DiffResult{Empty: true}, nil
+	}
+	var textPaths, binaryPaths []string
+	for _, entry := range entries {
+		if entry.binary {
+			binaryPaths = append(binaryPaths, entry.path)
+		} else {
+			textPaths = append(textPaths, entry.path)
+		}
+	}
+	if len(textPaths) == 0 {
+		return DiffResult{BinaryFiles: binaryPaths}, nil
+	}
+	args := []string{"diff", "--cached", "--no-ext-diff", "--no-textconv", "--no-color",
+		"--no-renames", baseSHA, "--"}
+	args = append(args, textPaths...)
+	diff, err := r.runBytes(ctx, maxDiffBytes, args...)
+	if err != nil {
+		return DiffResult{}, fmt.Errorf("read staged diff: %w", err)
 	}
 	return DiffResult{
 		Text:        string(diff.data),

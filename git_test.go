@@ -167,6 +167,41 @@ func TestCommitDiffFiltersBinaryAndCapsLargeText(t *testing.T) {
 	assertStrings(t, diff.TextFiles, []string{"large.txt"})
 }
 
+func TestStagedDiffFiltersBinaryAndCapsLargeText(t *testing.T) {
+	repository, directory := newTestGitRepository(t)
+	base := testCommitFile(t, directory, "base.txt", []byte("base\n"), "base")
+
+	if err := writeTestFile(directory, "base.txt", []byte("base\ntext change\n")); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeTestFile(directory, "image.bin", []byte{0, 1, 2, 3, 0, 4}); err != nil {
+		t.Fatal(err)
+	}
+	testGit(t, directory, "add", "--", "base.txt", "image.bin")
+	diff, err := repository.StagedDiff(context.Background(), base)
+	if err != nil {
+		t.Fatalf("StagedDiff mixed: %v", err)
+	}
+	if !strings.Contains(diff.Text, "text change") || strings.Contains(diff.Text, "image.bin") {
+		t.Fatalf("unexpected staged textual diff:\n%s", diff.Text)
+	}
+	assertStrings(t, diff.TextFiles, []string{"base.txt"})
+	assertStrings(t, diff.BinaryFiles, []string{"image.bin"})
+
+	large := bytes.Repeat([]byte("0123456789abcdef\n"), 20_000)
+	if err := writeTestFile(directory, "large.txt", large); err != nil {
+		t.Fatal(err)
+	}
+	testGit(t, directory, "add", "--", "large.txt")
+	diff, err = repository.StagedDiff(context.Background(), base)
+	if err != nil {
+		t.Fatalf("StagedDiff large: %v", err)
+	}
+	if !diff.Oversized || len(diff.Text) != maxDiffBytes {
+		t.Fatalf("large staged diff: oversized=%t length=%d", diff.Oversized, len(diff.Text))
+	}
+}
+
 func TestCommitDiffDoesNotRunTextconv(t *testing.T) {
 	repository, directory := newTestGitRepository(t)
 	script := filepath.Join(directory, "textconv.sh")

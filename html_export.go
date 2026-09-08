@@ -13,6 +13,7 @@ const htmlExportMaxDiffLines = 80
 
 type htmlExportReport struct {
 	Version     int                 `json:"version"`
+	Title       string              `json:"title"`
 	Repository  string              `json:"repository"`
 	GeneratedAt string              `json:"generated_at"`
 	Findings    []htmlExportFinding `json:"findings"`
@@ -76,6 +77,10 @@ func writeHTMLExport(
 	if err != nil {
 		return err
 	}
+	return writeHTMLExportReport(output, report)
+}
+
+func writeHTMLExportReport(output io.Writer, report htmlExportReport) error {
 	if _, err := io.WriteString(output, htmlExportPrefix); err != nil {
 		return fmt.Errorf("write HTML export: %w", err)
 	}
@@ -106,6 +111,7 @@ func buildHTMLExport(
 	}
 	report := htmlExportReport{
 		Version:     1,
+		Title:       "AIR Findings Report",
 		Repository:  filepath.Base(repository.WorkTree),
 		GeneratedAt: now.Format(time.RFC3339),
 		Findings:    make([]htmlExportFinding, 0, len(findings)),
@@ -220,7 +226,7 @@ const htmlExportPrefix = `<!doctype html>
 </head>
 <body>
 <main class="page">
-<header class="masthead"><div><h1>AIR Findings Report</h1><div id="report-meta" class="muted"></div></div><div id="summary" class="summary"></div></header>
+<header class="masthead"><div><h1 id="report-title">AIR Findings Report</h1><div id="report-meta" class="muted"></div></div><div id="summary" class="summary"></div></header>
 <section class="toolbar" aria-label="Finding controls">
 <input id="search" class="search" type="search" placeholder="Search findings (/)">
 <select id="status" aria-label="Status"><option value="open">Open</option><option value="all">All statuses</option><option value="dismissed">Dismissed</option><option value="resolved">Resolved</option></select>
@@ -262,7 +268,7 @@ function renderDetail(f){detail.replaceChildren();if(!f){detail.appendChild(node
 function render(){var items=visibleFindings();if(!items.some(function(f){return f.id===state.selected}))state.selected=items.length?items[0].id:null;renderList(items);renderDetail(items.find(function(f){return f.id===state.selected})||null)}
 search.addEventListener('input',function(){state.query=search.value;render()});statusSelect.addEventListener('change',function(){state.status=statusSelect.value;render()});severitySelect.addEventListener('change',function(){state.severity=severitySelect.value;render()});sortSelect.addEventListener('change',function(){state.sort=sortSelect.value;render()});
 document.addEventListener('keydown',function(event){var form=/^(INPUT|SELECT|TEXTAREA)$/.test(event.target.tagName);if(event.key==='/'&&!form){event.preventDefault();search.focus();return}if(form)return;var items=visibleFindings();var index=items.findIndex(function(f){return f.id===state.selected});if(event.key==='ArrowDown'||event.key==='j'){event.preventDefault();if(items.length)state.selected=items[Math.min(items.length-1,index+1)].id;render()}else if(event.key==='ArrowUp'||event.key==='k'){event.preventDefault();if(items.length)state.selected=items[Math.max(0,index<0?0:index-1)].id;render()}else if(event.key==='ArrowLeft'||event.key==='ArrowRight'){event.preventDefault();var modes=['id','age','file','author','severity','status','title'];var position=modes.indexOf(state.sort)+(event.key==='ArrowRight'?1:-1);position=(position+modes.length)%modes.length;state.sort=modes[position];sortSelect.value=state.sort;render()}});
-document.getElementById('report-meta').textContent=report.repository+' · generated '+new Date(report.generated_at).toLocaleString();renderSummary();render();
+document.getElementById('report-title').textContent=report.title||'AIR Findings Report';document.getElementById('report-meta').textContent=report.repository+' · generated '+new Date(report.generated_at).toLocaleString();renderSummary();render();
 })();
 </script>
 </body>

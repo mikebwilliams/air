@@ -133,6 +133,19 @@ func buildReviewPromptWithStatic(input ReviewInput, staticPrompt string) (string
 	prompt.WriteString("\n</commit_metadata>\n\n<open_findings>\n")
 	prompt.Write(findingsJSON)
 	prompt.WriteString("\n</open_findings>\n")
+	if input.Staged {
+		prompt.WriteString(`
+
+<precheck_target>
+This invocation overrides references above to an exact Git commit. Review only
+the currently staged Git index as a change from HEAD. Use git diff --cached to
+inspect the change and git show :PATH when exact staged file contents are
+needed. Ignore unstaged working-tree changes and untracked files. The synthetic
+commit metadata identifies this staged precheck and is not a resolvable Git
+object.
+</precheck_target>
+`)
+	}
 	return prompt.String(), nil
 }
 

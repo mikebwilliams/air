@@ -212,6 +212,7 @@ type ReviewOutput struct {
 type ReviewInput struct {
 	Commit       CommitMetadata
 	OpenFindings []Finding
+	Staged       bool
 }
 
 type ReviewResult struct {
