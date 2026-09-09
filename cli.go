@@ -982,9 +982,12 @@ func runRecheck(ctx context.Context, args []string, environment cliEnvironment) 
 	limit := flags.Int("limit", 0, "maximum findings to recheck; zero means unlimited")
 	batchBy := flags.String("batch-by", defaultRecheckBatchBy, "group findings by file or count")
 	batchSize := flags.Int("batch-size", defaultRecheckBatchSize, "maximum findings per model call")
+	jobs := flags.IntP("jobs", "j", 1, "maximum concurrent recheck batches")
 	force := flags.Bool("force", false, "repeat checks already completed with this harness configuration at HEAD")
 	dryRun := flags.Bool("dry-run", false, "show pending work without reviewing or writing")
-	continueOnError := flags.Bool("continue-on-error", false, "continue after a failed model batch")
+	continueOnError := flags.Bool("continue-on-error", true, "continue after a failed model batch")
+	retryOnError := flags.Bool("retry-on-error", true, "automatically retry failed model batches")
+	retryLimit := flags.Int("retry-limit", defaultRecheckRetryLimit, "maximum retries per failed batch; zero disables retries")
 	reviewerFlags := addReviewerFlags(flags, "per-batch")
 	if err := flags.Parse(args); err != nil {
 		return err
@@ -998,8 +1001,11 @@ func runRecheck(ctx context.Context, args []string, environment cliEnvironment) 
 	if err := validateRecheckBatchBy(*batchBy); err != nil {
 		return err
 	}
-	if *dryRun && *continueOnError {
-		return errors.New("--continue-on-error is not valid with --dry-run")
+	if *jobs <= 0 {
+		return errors.New("--jobs must be positive")
+	}
+	if *retryLimit < 0 {
+		return errors.New("--retry-limit must not be negative")
 	}
 	ids := make([]int64, 0, flags.NArg())
 	for _, value := range flags.Args() {
@@ -1043,8 +1049,9 @@ func runRecheck(ctx context.Context, args []string, environment cliEnvironment) 
 	return recheckRepository(ctx, repository, store, recheckOptions{
 		FindingIDs: ids, Harness: configuration.Harness, Model: configuredModel,
 		ReasoningEffort: configuredEffort, PromptVersion: recheckPrompt.PromptVersion,
-		Limit: *limit, BatchBy: *batchBy, BatchSize: *batchSize,
+		Limit: *limit, BatchBy: *batchBy, BatchSize: *batchSize, Jobs: *jobs,
 		Force: *force, DryRun: *dryRun, ContinueOnError: *continueOnError,
+		RetryOnError: *retryOnError, RetryLimit: *retryLimit,
 		Output: environment.Stdout, Now: environment.Now, ElapsedNow: environment.ElapsedNow,
 		NewReviewer: factory,
 	})

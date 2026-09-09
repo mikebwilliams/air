@@ -7,10 +7,14 @@ import (
 	"io"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 )
 
-const defaultRecheckBatchBy = "file"
+const (
+	defaultRecheckBatchBy    = "file"
+	defaultRecheckRetryLimit = 3
+)
 
 type recheckReviewerFactory func() (RecheckReviewer, ReviewIdentity, error)
 
@@ -23,9 +27,12 @@ type recheckOptions struct {
 	Limit           int
 	BatchBy         string
 	BatchSize       int
+	Jobs            int
 	Force           bool
 	DryRun          bool
 	ContinueOnError bool
+	RetryOnError    bool
+	RetryLimit      int
 	Output          io.Writer
 	Now             func() time.Time
 	ElapsedNow      func() time.Time
@@ -40,6 +47,15 @@ func recheckRepository(
 ) error {
 	if options.Limit < 0 {
 		return errors.New("recheck limit must not be negative")
+	}
+	if options.RetryLimit < 0 {
+		return errors.New("recheck retry limit must not be negative")
+	}
+	if options.Jobs < 0 {
+		return errors.New("recheck jobs must be positive")
+	}
+	if options.Jobs == 0 {
+		options.Jobs = 1
 	}
 	if options.BatchSize <= 0 || options.BatchSize > maxRecheckBatchSize {
 		return fmt.Errorf("recheck batch size must be between 1 and %d", maxRecheckBatchSize)
@@ -118,12 +134,15 @@ func recheckRepository(
 	}
 	batches := buildRecheckBatches(pending, options.BatchBy, options.BatchSize)
 	if options.DryRun {
-		fmt.Fprintf(options.Output, "Pending recheck at %s with %s: %d findings in %d batches",
-			shortSHA(headSHA), identityLabel, len(pending), len(batches))
+		fmt.Fprintf(options.Output, "Pending recheck at %s with %s: %d findings in %d batches (jobs: %d)",
+			shortSHA(headSHA), identityLabel, len(pending), len(batches), options.Jobs)
 		if skipped != 0 {
 			fmt.Fprintf(options.Output, " (%d already checked)", skipped)
 		}
 		fmt.Fprintln(options.Output)
+		if options.RetryOnError && options.RetryLimit > 0 {
+			fmt.Fprintf(options.Output, "Failed batches will be retried up to %d times.\n", options.RetryLimit)
+		}
 		for index, batch := range batches {
 			fmt.Fprintf(options.Output, "  Batch %d (%s)\n", index+1, formatRecheckBatch(batch, options.BatchBy))
 		}
@@ -132,14 +151,24 @@ func recheckRepository(
 	if options.NewReviewer == nil {
 		return errors.New("no model reviewer is configured")
 	}
-	reviewer, identity, err := options.NewReviewer()
-	if err != nil {
-		return err
+	// Construct each worker on the coordinator, since factories can read settings
+	// from the database. Each reviewer is used by only one batch at a time.
+	type worker struct {
+		reviewer RecheckReviewer
+		identity ReviewIdentity
 	}
-	identity.PromptVersion = promptVersionOrDefault(identity.PromptVersion, promptIdentity)
-	if identity.PromptVersion != promptIdentity {
-		return fmt.Errorf("reviewer prompt identity %q does not match recheck identity %q",
-			identity.PromptVersion, promptIdentity)
+	workers := make([]worker, min(options.Jobs, len(batches)))
+	for index := range workers {
+		reviewer, identity, err := options.NewReviewer()
+		if err != nil {
+			return err
+		}
+		identity.PromptVersion = promptVersionOrDefault(identity.PromptVersion, promptIdentity)
+		if identity.PromptVersion != promptIdentity {
+			return fmt.Errorf("reviewer prompt identity %q does not match recheck identity %q",
+				identity.PromptVersion, promptIdentity)
+		}
+		workers[index] = worker{reviewer: reviewer, identity: identity}
 	}
 	now := options.Now
 	if now == nil {
@@ -149,54 +178,103 @@ func recheckRepository(
 	if elapsedNow == nil {
 		elapsedNow = time.Now
 	}
+	// Keep injected clocks safe even when several workers finish together.
+	var clockMu sync.Mutex
+	readElapsed := func() time.Time {
+		clockMu.Lock()
+		defer clockMu.Unlock()
+		return elapsedNow()
+	}
+	workerContext, cancelWorkers := context.WithCancel(ctx)
+	var running sync.WaitGroup
+	defer func() {
+		cancelWorkers()
+		running.Wait()
+	}()
+	type completion struct {
+		worker int
+		batch  int
+		result RecheckResult
+		err    error
+	}
+	completed := make(chan completion, len(workers))
+	attempts := make([]int, len(batches))
+	nextBatch, active := 0, 0
+	startBatch := func(workerIndex, index int) {
+		attempts[index]++
+		active++
+		running.Add(1)
+		go func() {
+			defer running.Done()
+			result, err := reviewRecheckBatch(workerContext, workers[workerIndex].reviewer,
+				RecheckInput{HeadSHA: headSHA, Findings: batches[index]}, readElapsed)
+			// Capacity covers every active worker, including when the coordinator
+			// exits on cancellation or a database error.
+			completed <- completion{worker: workerIndex, batch: index, result: result, err: err}
+		}()
+	}
+	for index := range workers {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		startBatch(index, nextBatch)
+		nextBatch++
+	}
 	totalResolved := 0
 	totalStillPresent := 0
 	totalUncertain := 0
 	failureCount := 0
 	successCount := 0
-	for index, batch := range batches {
+	var firstFailure error
+	for active > 0 {
+		var done completion
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case done = <-completed:
+		}
+		active--
 		if err := ctx.Err(); err != nil {
 			return err
 		}
+		batch := batches[done.batch]
 		batchLabel := formatRecheckBatch(batch, options.BatchBy)
-		started := elapsedNow()
-		result, err := reviewer.Recheck(ctx, RecheckInput{HeadSHA: headSHA, Findings: batch})
-		if err != nil {
-			failureCount++
+		if done.err != nil {
 			fmt.Fprintf(options.Output, "Recheck batch %d failed (%s): %v\n",
-				index+1, batchLabel, err)
-			if options.ContinueOnError {
+				done.batch+1, batchLabel, done.err)
+			if options.RetryOnError && attempts[done.batch] <= options.RetryLimit {
+				if err := ctx.Err(); err != nil {
+					return err
+				}
+				fmt.Fprintf(options.Output, "Retrying recheck batch %d (%s; retry %d/%d).\n",
+					done.batch+1, batchLabel, attempts[done.batch], options.RetryLimit)
+				startBatch(done.worker, done.batch)
 				continue
 			}
-			return fmt.Errorf("recheck %s: %w", batchLabel, err)
-		}
-		result.Duration = elapsedNow().Sub(started)
-		if result.Duration < 0 {
-			return errors.New("measure recheck duration: clock moved backwards")
-		}
-		if result.Usage == nil {
-			return fmt.Errorf("recheck %s: reviewer did not report token usage", batchLabel)
-		}
-		if err := validateRecheckOutput(result.Output, recheckFindingIDs(batch)); err != nil {
 			failureCount++
-			fmt.Fprintf(options.Output, "Recheck batch %d failed (%s): %v\n",
-				index+1, batchLabel, err)
-			if options.ContinueOnError {
-				continue
+			if firstFailure == nil {
+				firstFailure = fmt.Errorf("recheck %s: %w", batchLabel, done.err)
 			}
-			return fmt.Errorf("recheck %s: %w", batchLabel, err)
+		} else {
+			if _, err := store.ApplyRecheck(ctx, headSHA, workers[done.worker].identity, batch, done.result, now()); err != nil {
+				return err
+			}
+			resolved, stillPresent, uncertain := countRecheckOutcomes(done.result.Output)
+			totalResolved += resolved
+			totalStillPresent += stillPresent
+			totalUncertain += uncertain
+			successCount += len(batch)
+			fmt.Fprintf(options.Output,
+				"Recheck batch %d (%s): %d resolved, %d still present, %d uncertain\n",
+				done.batch+1, batchLabel, resolved, stillPresent, uncertain)
 		}
-		if _, err := store.ApplyRecheck(ctx, headSHA, identity, batch, result, now()); err != nil {
-			return err
+		if nextBatch < len(batches) && (firstFailure == nil || options.ContinueOnError) {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			startBatch(done.worker, nextBatch)
+			nextBatch++
 		}
-		resolved, stillPresent, uncertain := countRecheckOutcomes(result.Output)
-		totalResolved += resolved
-		totalStillPresent += stillPresent
-		totalUncertain += uncertain
-		successCount += len(batch)
-		fmt.Fprintf(options.Output,
-			"Recheck batch %d (%s): %d resolved, %d still present, %d uncertain\n",
-			index+1, batchLabel, resolved, stillPresent, uncertain)
 	}
 	fmt.Fprintf(options.Output,
 		"Rechecked %d findings at %s with %s: %d resolved, %d still present, %d uncertain",
@@ -206,10 +284,46 @@ func recheckRepository(
 		fmt.Fprintf(options.Output, "; %d already checked", skipped)
 	}
 	fmt.Fprintln(options.Output)
+	if firstFailure != nil && !options.ContinueOnError {
+		return firstFailure
+	}
 	if failureCount != 0 {
 		return fmt.Errorf("%d recheck batches failed", failureCount)
 	}
 	return nil
+}
+
+func reviewRecheckBatch(
+	ctx context.Context,
+	reviewer RecheckReviewer,
+	input RecheckInput,
+	elapsedNow func() time.Time,
+) (RecheckResult, error) {
+	if err := ctx.Err(); err != nil {
+		return RecheckResult{}, err
+	}
+	started := elapsedNow()
+	result, err := reviewer.Recheck(ctx, input)
+	if err != nil {
+		return RecheckResult{}, err
+	}
+	result.Duration = elapsedNow().Sub(started)
+	if result.Duration < 0 {
+		return RecheckResult{}, errors.New("measure recheck duration: clock moved backwards")
+	}
+	if result.Usage == nil {
+		return RecheckResult{}, errors.New("reviewer did not report token usage")
+	}
+	if err := validateTokenUsage(*result.Usage); err != nil {
+		return RecheckResult{}, fmt.Errorf("invalid recheck token usage: %w", err)
+	}
+	if result.ReportedCostMicrousd != nil && *result.ReportedCostMicrousd < 0 {
+		return RecheckResult{}, errors.New("recheck reported cost must not be negative")
+	}
+	if err := validateRecheckOutput(result.Output, recheckFindingIDs(input.Findings)); err != nil {
+		return RecheckResult{}, err
+	}
+	return result, nil
 }
 
 func selectRecheckFindings(ctx context.Context, store *Store, ids []int64) ([]Finding, error) {

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"reflect"
 	"strings"
@@ -135,6 +136,7 @@ func TestRecheckBatchPlansMatchExecution(t *testing.T) {
 		limit int
 		ids   []int64
 		args  []string
+		jobs  int
 		want  [][]int64
 	}{
 		{
@@ -142,7 +144,7 @@ func TestRecheckBatchPlansMatchExecution(t *testing.T) {
 			want: [][]int64{{2, 5}, {6}, {1, 3}, {8}, {4, 7}, {9}},
 		},
 		{
-			name: "count mixes files", mode: "count", args: []string{"--batch-by", "count"},
+			name: "count mixes files", mode: "count", args: []string{"--batch-by", "count", "--jobs", "3"}, jobs: 3,
 			want: [][]int64{{1, 2}, {3, 4}, {5, 6}, {7, 8}, {9}},
 		},
 		{
@@ -151,7 +153,7 @@ func TestRecheckBatchPlansMatchExecution(t *testing.T) {
 			want: [][]int64{{2, 5}, {1, 3}, {4}},
 		},
 		{
-			name: "explicit IDs", ids: []int64{8, 6, 3, 1}, args: []string{"8", "6", "3", "1"},
+			name: "explicit IDs", ids: []int64{8, 6, 3, 1}, args: []string{"-j", "2", "8", "6", "3", "1"}, jobs: 2,
 			want: [][]int64{{6}, {3, 1}, {8}},
 		},
 	}
@@ -186,6 +188,9 @@ func TestRecheckBatchPlansMatchExecution(t *testing.T) {
 				Getenv: func(string) string { return "" },
 			}); err != nil {
 				t.Fatal(err)
+			}
+			if want := fmt.Sprintf("(jobs: %d)", max(1, test.jobs)); !strings.Contains(plan.String(), want) {
+				t.Fatalf("dry run does not show concurrency %q:\n%s", want, plan.String())
 			}
 			prior, err := store.PreviouslyRecheckedFindingIDs(ctx, head, codexReviewerName,
 				"check-model", "high", recheckPromptVersion)
@@ -246,6 +251,8 @@ func TestRecheckBatchPlansMatchExecution(t *testing.T) {
 func TestRecheckRejectsInvalidBatchingBeforeRepositoryAccess(t *testing.T) {
 	for _, args := range [][]string{
 		{"--batch-by", "directory"}, {"--batch-by", ""}, {"--batch-size", "0"}, {"--batch-size", "51"},
+		{"--jobs", "0"}, {"--jobs", "-1"}, {"-j", "0"},
+		{"--retry-limit", "-1"},
 	} {
 		err := runCLI(context.Background(), append([]string{"recheck"}, args...), cliEnvironment{
 			Cwd: t.TempDir(), Stdout: io.Discard, Stderr: io.Discard,

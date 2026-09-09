@@ -1285,6 +1285,9 @@ air recheck --model gpt-5.6-sol --effort xhigh
 air recheck --model gpt-5.6-sol --effort xhigh 17 31 562
 air recheck --batch-size 30 --dry-run
 air recheck --batch-by count --batch-size 20
+air recheck --jobs 4
+air recheck --jobs 4 --retry-limit 5
+air recheck --retry-on-error=false --continue-on-error=false
 ```
 
 With no IDs, the command selects all current open findings. Explicit IDs must
@@ -1312,17 +1315,40 @@ order, matching the original behavior.
 `--batch-size N` sets the per-call maximum and accepts 1 through 50. `--limit N`
 bounds the total pending findings before grouping, after filtering previous
 checks. Within a file, selection order is retained. `--dry-run` lists the exact
-planned batches with file paths (in file mode) and finding IDs, without invoking
-a reviewer or writing.
-Each successful batch is committed atomically. `--continue-on-error` continues
-after failed model batches and returns a nonzero result at the end. Failed
-recheck batches do not change finding state or create successful-attempt rows;
+planned batches with file paths (in file mode), finding IDs, and the selected
+concurrency, without invoking a reviewer or writing.
+
+`-j N` or `--jobs N` runs up to N batches concurrently, with a default of 1
+and a minimum of 1. Each worker has its own reviewer instance and every batch
+inspects the same fixed HEAD. The command holds the scan lock until all workers
+exit. Database writes and progress output are handled by one coordinator, which
+commits each successful batch atomically as it completes; later batches can be
+saved before earlier ones finish. Token usage, costs, and elapsed review time
+remain attributed to each successful batch.
+
+Automatic retries and continuing after failures are enabled by default.
+`--retry-limit N` bounds retries per batch after the initial attempt; the default
+of 3 permits at most four attempts. Zero disables retries, as does
+`--retry-on-error=false`. Negative retry limits are invalid. A retry uses the
+same findings, fixed HEAD, and worker slot, with a fresh harness invocation and
+timeout. It does not consume another finding from `--limit`. Errors and retry
+numbers are printed as they occur. Only the successful attempt's token usage,
+cost, and duration are recorded; failed attempts remain unrecorded.
+
+After a batch exhausts its retries, the default `--continue-on-error=true` keeps
+processing the remaining selected findings. The command returns a nonzero result
+if any batches still failed; a successful retry does not count as a failed batch.
+`--continue-on-error=false` instead stops launching new batches once a failure
+exhausts its retries, lets running batches finish their attempts, and saves
+their successful results. Cancellation or a database error stops running workers
+without retrying and waits for them to exit; already committed results remain.
+Failed recheck batches do not change finding state or create successful-attempt rows;
 rerunning the command naturally selects them while skipping completed batches.
 
 Successful results are resumable by finding ID, target HEAD, harness, model,
 effort, and recheck prompt version. The same identity at the same HEAD is skipped on later
-runs; a changed HEAD or model/effort is eligible again. Changing batch size or
-grouping alone does not repeat completed findings.
+runs; a changed HEAD or model/effort is eligible again. Changing batch size,
+grouping, concurrency, or retry policy alone does not repeat completed findings.
 `--force` repeats otherwise identical successful checks. Recheck uses the same
 CLI/environment/database review-setting precedence as `scan`, so a one-off
 stronger model needs no separate configuration record.

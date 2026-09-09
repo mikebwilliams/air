@@ -223,16 +223,46 @@ Send at most
 findings per model call. The default is 20 and the maximum is 50.
 The total finding limit is applied before grouping into batches.
 .TP
+.BI "\-j, \-\-jobs " N
+Run at most
+.I N
+recheck batches concurrently. Must be positive; the default is 1.
+All batches inspect the same HEAD snapshot. Completed results are saved and
+reported as they arrive, so progress may appear out of batch order.
+Failed batches are retried and processing continues by default.
+.TP
 .B \-\-force
 Repeat checks already completed at HEAD with the same harness, model, effort,
 and prompt identity.
 .TP
 .B \-\-dry-run
 List planned batches with their finding IDs and, in file mode, file paths,
-without invoking the harness or writing state.
+and show the selected concurrency without invoking the harness or writing state.
+.TP
+.B \-\-retry-on-error
+Automatically retry failed model batches. Enabled by default; use
+.B \-\-retry-on-error=false
+to disable. Each retry uses the same findings and HEAD, starts a fresh harness
+invocation with its own timeout, and counts toward the concurrency cap.
+Errors and retry numbers are printed as they occur.
+.TP
+.BI "\-\-retry-limit " N
+Retry each failed batch at most
+.I N
+times after its initial attempt. The default is 3, meaning at most four attempts
+per batch. Zero disables retries; negative values are invalid.
+Only a successful attempt is recorded, with its own token usage, cost, and
+duration. Cancellation and database errors are not retried.
 .TP
 .B \-\-continue-on-error
-Continue after a failed model batch.
+Keep launching batches after retries are exhausted. Enabled by default; the
+command processes all selected findings and returns nonzero if any batches
+still failed. Use
+.B \-\-continue-on-error=false
+to stop launching new batches after an exhausted failure. Already running
+batches finish their attempts and successful results are saved.
+Cancellation or a database error stops running work; completed database
+transactions are retained.
 .TP
 .B "Review options"
 The common review options are also accepted. The selected timeout applies to

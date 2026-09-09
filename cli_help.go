@@ -152,9 +152,12 @@ var cliCommands = []cliCommandSpec{
 			{"--limit N", "Recheck at most N findings; zero means unlimited."},
 			{"--batch-by MODE", "Group findings by file (default) or count."},
 			{"--batch-size N", fmt.Sprintf("Send at most N findings per model call (default: %d; maximum: %d).", defaultRecheckBatchSize, maxRecheckBatchSize)},
+			{"-j, --jobs N", "Run at most N recheck batches concurrently (default: 1)."},
 			{"--force", "Repeat checks already completed with this harness configuration at HEAD."},
 			{"--dry-run", "List planned batches with files and finding IDs without reviewing or writing."},
-			{"--continue-on-error", "Continue after a failed model batch."},
+			{"--retry-on-error", "Automatically retry failed batches (default: true; use =false to disable)."},
+			{"--retry-limit N", fmt.Sprintf("Retry each failed batch at most N times (default: %d; zero disables retries).", defaultRecheckRetryLimit)},
+			{"--continue-on-error", "Continue after exhausted retries (default: true; use =false to stop new work and finish running batches)."},
 		}, reviewerHelpOptions("per-batch")...), Run: runRecheck,
 	},
 	{
