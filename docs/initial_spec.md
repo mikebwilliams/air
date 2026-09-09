@@ -1283,6 +1283,8 @@ air show <commit-ish> --review 2
 air recheck [reviewer flags] [<finding-id> ...]
 air recheck --model gpt-5.6-sol --effort xhigh
 air recheck --model gpt-5.6-sol --effort xhigh 17 31 562
+air recheck --batch-size 30 --dry-run
+air recheck --batch-by count --batch-size 20
 ```
 
 With no IDs, the command selects all current open findings. Explicit IDs must
@@ -1299,9 +1301,19 @@ Only `resolved` changes finding disposition. All successful outcomes are
 retained for auditability and shown by `air finding` and the interactive
 browser.
 
-AIR processes batches of 20 findings by default. `--batch-size N` accepts 1
-through 50, `--limit N` bounds the number of findings selected by one command,
-and `--dry-run` reports pending work without invoking a reviewer or writing.
+AIR groups findings by their recorded file by default (`--batch-by file`).
+Each file is processed separately, in path order, with batches capped at 20
+findings. A file with more findings is split across multiple calls. Findings
+without a recorded file are batched separately at the end. Grouping affects
+which findings share a call; the reviewer can still inspect related files and
+history. `--batch-by count` instead fills batches across files in selection
+order, matching the original behavior.
+
+`--batch-size N` sets the per-call maximum and accepts 1 through 50. `--limit N`
+bounds the total pending findings before grouping, after filtering previous
+checks. Within a file, selection order is retained. `--dry-run` lists the exact
+planned batches with file paths (in file mode) and finding IDs, without invoking
+a reviewer or writing.
 Each successful batch is committed atomically. `--continue-on-error` continues
 after failed model batches and returns a nonzero result at the end. Failed
 recheck batches do not change finding state or create successful-attempt rows;
@@ -1309,7 +1321,8 @@ rerunning the command naturally selects them while skipping completed batches.
 
 Successful results are resumable by finding ID, target HEAD, harness, model,
 effort, and recheck prompt version. The same identity at the same HEAD is skipped on later
-runs; a changed HEAD or model/effort is eligible again.
+runs; a changed HEAD or model/effort is eligible again. Changing batch size or
+grouping alone does not repeat completed findings.
 `--force` repeats otherwise identical successful checks. Recheck uses the same
 CLI/environment/database review-setting precedence as `scan`, so a one-off
 stronger model needs no separate configuration record.

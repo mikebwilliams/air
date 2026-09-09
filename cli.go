@@ -980,7 +980,8 @@ func newConfiguredReviewer(
 func runRecheck(ctx context.Context, args []string, environment cliEnvironment) error {
 	flags := newFlagSet("recheck", environment.Stderr)
 	limit := flags.Int("limit", 0, "maximum findings to recheck; zero means unlimited")
-	batchSize := flags.Int("batch-size", defaultRecheckBatchSize, "findings per model call")
+	batchBy := flags.String("batch-by", defaultRecheckBatchBy, "group findings by file or count")
+	batchSize := flags.Int("batch-size", defaultRecheckBatchSize, "maximum findings per model call")
 	force := flags.Bool("force", false, "repeat checks already completed with this harness configuration at HEAD")
 	dryRun := flags.Bool("dry-run", false, "show pending work without reviewing or writing")
 	continueOnError := flags.Bool("continue-on-error", false, "continue after a failed model batch")
@@ -993,6 +994,9 @@ func runRecheck(ctx context.Context, args []string, environment cliEnvironment) 
 	}
 	if *batchSize <= 0 || *batchSize > maxRecheckBatchSize {
 		return fmt.Errorf("--batch-size must be between 1 and %d", maxRecheckBatchSize)
+	}
+	if err := validateRecheckBatchBy(*batchBy); err != nil {
+		return err
 	}
 	if *dryRun && *continueOnError {
 		return errors.New("--continue-on-error is not valid with --dry-run")
@@ -1039,7 +1043,7 @@ func runRecheck(ctx context.Context, args []string, environment cliEnvironment) 
 	return recheckRepository(ctx, repository, store, recheckOptions{
 		FindingIDs: ids, Harness: configuration.Harness, Model: configuredModel,
 		ReasoningEffort: configuredEffort, PromptVersion: recheckPrompt.PromptVersion,
-		Limit: *limit, BatchSize: *batchSize,
+		Limit: *limit, BatchBy: *batchBy, BatchSize: *batchSize,
 		Force: *force, DryRun: *dryRun, ContinueOnError: *continueOnError,
 		Output: environment.Stdout, Now: environment.Now, ElapsedNow: environment.ElapsedNow,
 		NewReviewer: factory,

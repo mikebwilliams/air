@@ -207,17 +207,29 @@ Recheck at most
 .I N
 findings. Zero means unlimited.
 .TP
+.BI "\-\-batch-by " MODE
+Group findings by
+.B file
+(the default) or
+.BR count .
+File mode batches each recorded file separately, in path order, splitting it
+as needed to respect the batch-size cap. Findings without a file are batched
+separately at the end. Count mode fills batches in selection order across files.
+Grouping does not restrict which related files the reviewer may inspect.
+.TP
 .BI "\-\-batch-size " N
-Send
+Send at most
 .I N
 findings per model call. The default is 20 and the maximum is 50.
+The total finding limit is applied before grouping into batches.
 .TP
 .B \-\-force
 Repeat checks already completed at HEAD with the same harness, model, effort,
 and prompt identity.
 .TP
 .B \-\-dry-run
-Show pending work without invoking the harness or writing state.
+List planned batches with their finding IDs and, in file mode, file paths,
+without invoking the harness or writing state.
 .TP
 .B \-\-continue-on-error
 Continue after a failed model batch.

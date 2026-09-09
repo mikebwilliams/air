@@ -150,9 +150,10 @@ var cliCommands = []cliCommandSpec{
 		Usage:       []string{"air recheck [OPTIONS] [FINDING_ID ...]"},
 		Options: append([]cliHelpOption{
 			{"--limit N", "Recheck at most N findings; zero means unlimited."},
-			{"--batch-size N", fmt.Sprintf("Send N findings per model call (default: %d; maximum: %d).", defaultRecheckBatchSize, maxRecheckBatchSize)},
+			{"--batch-by MODE", "Group findings by file (default) or count."},
+			{"--batch-size N", fmt.Sprintf("Send at most N findings per model call (default: %d; maximum: %d).", defaultRecheckBatchSize, maxRecheckBatchSize)},
 			{"--force", "Repeat checks already completed with this harness configuration at HEAD."},
-			{"--dry-run", "Show pending work without reviewing or writing."},
+			{"--dry-run", "List planned batches with files and finding IDs without reviewing or writing."},
 			{"--continue-on-error", "Continue after a failed model batch."},
 		}, reviewerHelpOptions("per-batch")...), Run: runRecheck,
 	},

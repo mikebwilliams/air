@@ -6,8 +6,11 @@ import (
 	"fmt"
 	"io"
 	"sort"
+	"strings"
 	"time"
 )
+
+const defaultRecheckBatchBy = "file"
 
 type recheckReviewerFactory func() (RecheckReviewer, ReviewIdentity, error)
 
@@ -18,6 +21,7 @@ type recheckOptions struct {
 	ReasoningEffort string
 	PromptVersion   string
 	Limit           int
+	BatchBy         string
 	BatchSize       int
 	Force           bool
 	DryRun          bool
@@ -39,6 +43,12 @@ func recheckRepository(
 	}
 	if options.BatchSize <= 0 || options.BatchSize > maxRecheckBatchSize {
 		return fmt.Errorf("recheck batch size must be between 1 and %d", maxRecheckBatchSize)
+	}
+	if options.BatchBy == "" {
+		options.BatchBy = defaultRecheckBatchBy
+	}
+	if err := validateRecheckBatchBy(options.BatchBy); err != nil {
+		return err
 	}
 	if options.Model == "" {
 		return errors.New("recheck model must not be empty")
@@ -106,13 +116,17 @@ func recheckRepository(
 		fmt.Fprintln(options.Output, ".")
 		return nil
 	}
+	batches := buildRecheckBatches(pending, options.BatchBy, options.BatchSize)
 	if options.DryRun {
-		fmt.Fprintf(options.Output, "Pending recheck at %s with %s: %d findings",
-			shortSHA(headSHA), identityLabel, len(pending))
+		fmt.Fprintf(options.Output, "Pending recheck at %s with %s: %d findings in %d batches",
+			shortSHA(headSHA), identityLabel, len(pending), len(batches))
 		if skipped != 0 {
 			fmt.Fprintf(options.Output, " (%d already checked)", skipped)
 		}
 		fmt.Fprintln(options.Output)
+		for index, batch := range batches {
+			fmt.Fprintf(options.Output, "  Batch %d (%s)\n", index+1, formatRecheckBatch(batch, options.BatchBy))
+		}
 		return nil
 	}
 	if options.NewReviewer == nil {
@@ -140,35 +154,37 @@ func recheckRepository(
 	totalUncertain := 0
 	failureCount := 0
 	successCount := 0
-	for offset := 0; offset < len(pending); offset += options.BatchSize {
-		end := min(offset+options.BatchSize, len(pending))
-		batch := pending[offset:end]
+	for index, batch := range batches {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		batchLabel := formatRecheckBatch(batch, options.BatchBy)
 		started := elapsedNow()
 		result, err := reviewer.Recheck(ctx, RecheckInput{HeadSHA: headSHA, Findings: batch})
 		if err != nil {
 			failureCount++
 			fmt.Fprintf(options.Output, "Recheck batch %d failed (%s): %v\n",
-				offset/options.BatchSize+1, formatFindingIDRange(batch), err)
+				index+1, batchLabel, err)
 			if options.ContinueOnError {
 				continue
 			}
-			return fmt.Errorf("recheck %s: %w", formatFindingIDRange(batch), err)
+			return fmt.Errorf("recheck %s: %w", batchLabel, err)
 		}
 		result.Duration = elapsedNow().Sub(started)
 		if result.Duration < 0 {
 			return errors.New("measure recheck duration: clock moved backwards")
 		}
 		if result.Usage == nil {
-			return fmt.Errorf("recheck %s: reviewer did not report token usage", formatFindingIDRange(batch))
+			return fmt.Errorf("recheck %s: reviewer did not report token usage", batchLabel)
 		}
 		if err := validateRecheckOutput(result.Output, recheckFindingIDs(batch)); err != nil {
 			failureCount++
 			fmt.Fprintf(options.Output, "Recheck batch %d failed (%s): %v\n",
-				offset/options.BatchSize+1, formatFindingIDRange(batch), err)
+				index+1, batchLabel, err)
 			if options.ContinueOnError {
 				continue
 			}
-			return fmt.Errorf("recheck %s: %w", formatFindingIDRange(batch), err)
+			return fmt.Errorf("recheck %s: %w", batchLabel, err)
 		}
 		if _, err := store.ApplyRecheck(ctx, headSHA, identity, batch, result, now()); err != nil {
 			return err
@@ -180,7 +196,7 @@ func recheckRepository(
 		successCount += len(batch)
 		fmt.Fprintf(options.Output,
 			"Recheck batch %d (%s): %d resolved, %d still present, %d uncertain\n",
-			offset/options.BatchSize+1, formatFindingIDRange(batch), resolved, stillPresent, uncertain)
+			index+1, batchLabel, resolved, stillPresent, uncertain)
 	}
 	fmt.Fprintf(options.Output,
 		"Rechecked %d findings at %s with %s: %d resolved, %d still present, %d uncertain",
@@ -222,14 +238,70 @@ func selectRecheckFindings(ctx context.Context, store *Store, ids []int64) ([]Fi
 	return findings, nil
 }
 
-func formatFindingIDRange(findings []Finding) string {
+func validateRecheckBatchBy(value string) error {
+	if value != "file" && value != "count" {
+		return fmt.Errorf("invalid --batch-by %q; expected file or count", value)
+	}
+	return nil
+}
+
+// Selection, prior-result filtering, and the total limit are applied before
+// batching so the batching mode affects grouping, not which findings are checked.
+func buildRecheckBatches(findings []Finding, batchBy string, batchSize int) [][]Finding {
+	groups := [][]Finding{findings}
+	if batchBy == "file" {
+		byFile := make(map[string][]Finding)
+		for _, finding := range findings {
+			file := ""
+			if finding.File != nil {
+				file = *finding.File
+			}
+			byFile[file] = append(byFile[file], finding)
+		}
+		paths := make([]string, 0, len(byFile))
+		for file := range byFile {
+			if file != "" {
+				paths = append(paths, file)
+			}
+		}
+		sort.Strings(paths)
+		groups = nil
+		for _, file := range paths {
+			groups = append(groups, byFile[file])
+		}
+		if unlocated := byFile[""]; len(unlocated) != 0 {
+			groups = append(groups, unlocated)
+		}
+	}
+	var batches [][]Finding
+	for _, group := range groups {
+		for offset := 0; offset < len(group); offset += batchSize {
+			batches = append(batches, group[offset:min(offset+batchSize, len(group))])
+		}
+	}
+	return batches
+}
+
+func formatRecheckBatch(findings []Finding, batchBy string) string {
+	ids := formatFindingIDs(findings)
+	if batchBy != "file" {
+		return ids
+	}
+	if findings[0].File == nil || *findings[0].File == "" {
+		return "no file; " + ids
+	}
+	return fmt.Sprintf("%q; %s", *findings[0].File, ids)
+}
+
+func formatFindingIDs(findings []Finding) string {
 	ids := make([]int64, 0, len(findings))
 	for _, finding := range findings {
 		ids = append(ids, finding.ID)
 	}
 	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
-	if len(ids) == 1 {
-		return fmt.Sprintf("#%d", ids[0])
+	labels := make([]string, 0, len(ids))
+	for _, id := range ids {
+		labels = append(labels, fmt.Sprintf("#%d", id))
 	}
-	return fmt.Sprintf("#%d–#%d", ids[0], ids[len(ids)-1])
+	return strings.Join(labels, ", ")
 }
