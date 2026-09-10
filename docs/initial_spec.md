@@ -1377,6 +1377,58 @@ candidate restrictions, or structured response contract. `reset` deletes the
 override and restores the compiled instructions. Backups naturally include the
 overrides.
 
+### Temporary project hints
+
+```bash
+air hint add "The Foo protocol is experimental; do not report version bumps or backwards compatibility breaks. Still check consistency between current producers and consumers."
+air hint list
+air hint remove 1
+air scan --hint "The new transport is intentionally disabled for now."
+air hint list --prompt hints:sha256:IDENTITY
+```
+
+Hints supplement the built-in or custom instructions for review and recheck;
+they do not replace either editable prompt. Saved hints live in the existing
+`config` table, with monotonically increasing positive IDs that are not reused
+after removal. `add` accepts one quoted text argument; `remove` requires an
+existing ID. Text must be nonempty UTF-8, at most 16 KiB per hint and 256 KiB
+combined. There are initially no expiry dates, path filters, or enable states.
+
+`scan`, `retry`, `rescan`, `precheck`, and `recheck` accept repeatable `--hint TEXT`
+flags. These append one-off hints to saved hints in argument order. Commas are
+literal, and flags never change the saved active list. Hints are resolved once
+per invocation, before creating reviewers, so every commit, worker, and retry
+uses the same snapshot even if a user edits hints while it is running.
+
+Hints are presented as user instructions before AIR's fixed protocol. They may
+narrow reporting scope but cannot override read-only inspection, data trust
+boundaries, output requirements, or resolution evidence rules. A scope exclusion
+must not mark an existing defect resolved: recheck assesses its actual failure
+mode, leaving dismissal to the user.
+
+An effective prompt with hints has identity `hints:sha256:<digest>`, covering
+the underlying prompt identity, kind, and complete effective static text.
+Without hints existing prompt identities remain unchanged. Adding or removing
+hints never silently repeats scanned commits; explicit rescan is required.
+Recheck resumability includes the hint-aware identity, so changed hints make
+otherwise identical open findings eligible again. Returning to a previously
+used identity can reuse its successful checks.
+
+On a successful review or recheck, the exact ordered hint list (including text
+and saved IDs; one-off hints have no ID) is stored immutably in `config` under
+`hint.snapshot.<prompt identity>`, in the same transaction as the attempt.
+Attempts reference it through their existing `prompt_version`. Snapshots are
+deduplicated, survive hint removal and rescans, and are included in backups.
+No database schema change or migration is required. Failed attempts and dry
+runs do not create snapshots. Precheck remains non-persistent and includes its
+hint list and prompt identity in JSON, and the hint text in text reports.
+
+`air prompt show --full KIND` includes active saved hints; the editable-only
+view does not, so exporting and replacing prompt instructions cannot duplicate
+hints. `prompt reset` does not remove hints. `air show`, including historical
+`--review N` and JSON output, includes the hint snapshot for that review.
+`air hint list --prompt IDENTITY` displays a recorded review or recheck snapshot.
+
 ### Repository accounting
 
 ```bash

@@ -68,6 +68,10 @@ func TestCLIHelpWorksWithoutRepositoryState(t *testing.T) {
 			contains: []string{"air prompt show [--full] KIND", "--full"},
 		},
 		{
+			name: "hint nested flag", args: []string{"hint", "list", "--help"},
+			contains: []string{"air hint list [--prompt IDENTITY]", "--prompt IDENTITY"},
+		},
+		{
 			name: "backup import flag", args: []string{"backup", "import", "--help"},
 			contains: []string{"air backup import [OPTIONS] PATH", "Validate and import", "--force"},
 		},
@@ -142,7 +146,7 @@ func TestCLICommandRegistryIsComplete(t *testing.T) {
 	}
 	expected := []string{
 		"init", "doctor", "status", "version", "pending", "scan", "precheck", "retry", "failures", "rescan", "skip", "clean",
-		"recheck", "findings", "finding", "log", "show", "stats", "cost", "export", "prompt", "config", "model", "db", "backup", "reset",
+		"recheck", "findings", "finding", "log", "show", "stats", "cost", "export", "prompt", "hint", "config", "model", "db", "backup", "reset",
 	}
 	for _, name := range expected {
 		if !seen[name] {

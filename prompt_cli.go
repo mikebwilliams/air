@@ -56,7 +56,7 @@ func runPromptList(ctx context.Context, args []string, environment cliEnvironmen
 
 func runPromptShow(ctx context.Context, args []string, environment cliEnvironment) error {
 	flags := newFlagSet("prompt show", environment.Stderr)
-	full := flags.Bool("full", false, "include AIR's fixed protocol and response contract")
+	full := flags.Bool("full", false, "include active hints and AIR's fixed protocol and response contract")
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
@@ -136,7 +136,10 @@ func runPromptSet(ctx context.Context, args []string, environment cliEnvironment
 	if err := store.SetConfig(ctx, spec.ConfigKey, instructions); err != nil {
 		return err
 	}
-	custom := spec.withCustomInstructions(instructions)
+	custom, err := resolveReviewerPrompt(ctx, store, spec.Kind)
+	if err != nil {
+		return err
+	}
 	fmt.Fprintf(environment.Stdout, "Set %s prompt (%s)\n",
 		custom.Kind, custom.PromptVersion)
 	return nil

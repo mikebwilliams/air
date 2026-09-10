@@ -68,6 +68,8 @@ type precheckReport struct {
 	Harness              string               `json:"harness"`
 	Model                string               `json:"model"`
 	ReasoningEffort      string               `json:"reasoning_effort,omitempty"`
+	PromptVersion        string               `json:"prompt_version"`
+	Hints                []ReviewHint         `json:"hints,omitempty"`
 	Attempts             []precheckAttempt    `json:"attempts"`
 	Findings             []Finding            `json:"findings"`
 	PredictedResolutions []precheckResolution `json:"predicted_resolutions"`
@@ -126,13 +128,14 @@ func runPrecheck(ctx context.Context, args []string, environment cliEnvironment)
 	if err != nil {
 		return err
 	}
-	reviewPrompt, err := resolveReviewerPrompt(ctx, store, "review")
+	reviewPrompt, err := resolveReviewerPrompt(ctx, store, "review", (*reviewerFlags.hints)...)
 	if err != nil {
 		return err
 	}
 	identity := ReviewIdentity{
 		Harness: configuration.Harness, Model: modelByName(configuration.Model),
 		ReasoningEffort: configuration.Effort, PromptVersion: reviewPrompt.PromptVersion,
+		Hints: reviewPrompt.Hints,
 	}
 	factory := func() (Reviewer, ReviewIdentity, error) {
 		return newConfiguredReviewer(ctx, repository, store, environment, configuration, reviewPrompt)
@@ -244,6 +247,7 @@ func precheckRepository(
 		Mode: options.Plan.Mode, FromSHA: options.Plan.FromSHA, ToSHA: options.Plan.ToSHA,
 		GeneratedAt: now(), Harness: normalizedHarness(options.Identity.Harness),
 		Model: options.Identity.Model.Name, ReasoningEffort: options.Identity.ReasoningEffort,
+		PromptVersion: options.Identity.PromptVersion, Hints: options.Identity.Hints,
 		Attempts: make([]precheckAttempt, 0, len(options.Plan.Commits)),
 		Findings: []Finding{}, PredictedResolutions: []precheckResolution{},
 	}
@@ -287,6 +291,8 @@ func precheckRepository(
 			report.Harness = normalizedHarness(identity.Harness)
 			report.Model = identity.Model.Name
 			report.ReasoningEffort = identity.ReasoningEffort
+			report.PromptVersion = identity.PromptVersion
+			report.Hints = identity.Hints
 		}
 		open := sortedActiveFindings(active)
 		candidates, deferred := selectResolutionCandidates(open, diff.TextFiles)
@@ -501,6 +507,7 @@ func writePrecheckText(output io.Writer, report precheckReport) {
 	if report.Mode != "staged" {
 		fmt.Fprintf(output, "Range: %s..%s\n", shortSHA(report.FromSHA), shortSHA(report.ToSHA))
 	}
+	printReviewHints(output, report.Hints)
 	for _, attempt := range report.Attempts {
 		label := shortSHA(attempt.Commit.SHA)
 		if attempt.Status == "skipped" {

@@ -248,7 +248,7 @@ var cliCommands = []cliCommandSpec{
 			{
 				Name: "show", Summary: "Show editable or full effective prompt text.",
 				Usage:   []string{"air prompt show [--full] KIND"},
-				Options: []cliHelpOption{{"--full", "Include AIR's fixed protocol and response contract."}},
+				Options: []cliHelpOption{{"--full", "Include active project hints and AIR's fixed protocol and response contract."}},
 			},
 			{
 				Name: "set", Summary: "Store repository-specific reviewer instructions.",
@@ -266,6 +266,21 @@ var cliCommands = []cliCommandSpec{
 				Usage: []string{"air prompt reset KIND"},
 			},
 		}, Run: runPrompt,
+	},
+	{
+		Name: "hint", Category: commandCategoryMaintenance,
+		Summary:     "Manage temporary project review instructions.",
+		Description: "Save project hints that supplement review and recheck prompts without replacing them. Changes apply to future invocations; recorded hint snapshots are retained.",
+		Usage:       []string{"air hint COMMAND [ARGUMENTS]"},
+		Children: []cliCommandSpec{
+			{Name: "add", Summary: "Save a project hint and print its stable ID.", Usage: []string{"air hint add TEXT"}},
+			{
+				Name: "list", Summary: "List active hints or a recorded hint snapshot.",
+				Usage:   []string{"air hint list [--prompt IDENTITY]"},
+				Options: []cliHelpOption{{"--prompt IDENTITY", "Show hints used with a recorded hints:sha256: prompt identity."}},
+			},
+			{Name: "remove", Summary: "Remove an active hint without erasing review history.", Usage: []string{"air hint remove HINT_ID"}},
+		}, Run: runHint,
 	},
 	{
 		Name: "config", Category: commandCategoryMaintenance,
@@ -334,6 +349,7 @@ var cliCommands = []cliCommandSpec{
 
 func reviewerHelpOptions(timeoutScope string) []cliHelpOption {
 	return []cliHelpOption{
+		{"--hint TEXT", "Add a one-off project hint; repeatable, supplements saved hints."},
 		{"--harness HARNESS", "Override the review harness: codex, claude, or gemini."},
 		{"--model MODEL", "Override the configured model identifier."},
 		{"--effort EFFORT", "Override the reviewer effort."},

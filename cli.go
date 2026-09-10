@@ -640,6 +640,7 @@ const (
 )
 
 type reviewerFlagValues struct {
+	hints         *[]string
 	harness       *string
 	model         *string
 	effort        *string
@@ -672,6 +673,7 @@ type configuredReviewer interface {
 
 func addReviewerFlags(flags *flag.FlagSet, timeoutScope string) reviewerFlagValues {
 	return reviewerFlagValues{
+		hints:         flags.StringArray("hint", nil, "add a one-off project hint; repeatable, supplements saved hints"),
 		harness:       flags.String("harness", "", "review harness: codex, claude, or gemini"),
 		model:         flags.String("model", "", "model identifier"),
 		effort:        flags.String("effort", "", "reviewer effort"),
@@ -893,7 +895,7 @@ func runScanCommand(ctx context.Context, args []string, environment cliEnvironme
 	if err != nil {
 		return err
 	}
-	reviewPrompt, err := resolveReviewerPrompt(ctx, store, "review")
+	reviewPrompt, err := resolveReviewerPrompt(ctx, store, "review", (*reviewerFlags.hints)...)
 	if err != nil {
 		return err
 	}
@@ -947,6 +949,7 @@ func newConfiguredReviewer(
 	identity := ReviewIdentity{
 		Harness: configuration.Harness, Model: reviewModel,
 		ReasoningEffort: configuredEffort, PromptVersion: prompt.PromptVersion,
+		Hints: prompt.Hints,
 	}
 	switch configuration.Harness {
 	case codexReviewerName:
@@ -1029,7 +1032,7 @@ func runRecheck(ctx context.Context, args []string, environment cliEnvironment) 
 	if err != nil {
 		return err
 	}
-	recheckPrompt, err := resolveReviewerPrompt(ctx, store, "recheck")
+	recheckPrompt, err := resolveReviewerPrompt(ctx, store, "recheck", (*reviewerFlags.hints)...)
 	if err != nil {
 		return err
 	}
@@ -1622,6 +1625,7 @@ func runShow(ctx context.Context, args []string, environment cliEnvironment) err
 			attempt.CostContext, attempt.CostComplete, attempt.ReportedCostMicrousd,
 			attempt.DurationMilliseconds)
 		printReviewResult(environment.Stdout, introduced, resolved, attempt.Summary)
+		printReviewHints(environment.Stdout, attempt.Hints)
 		return nil
 	}
 
@@ -1655,6 +1659,7 @@ func runShow(ctx context.Context, args []string, environment cliEnvironment) err
 		record.CostContext, record.CostComplete, record.ReportedCostMicrousd,
 		record.DurationMilliseconds)
 	printReviewResult(environment.Stdout, introduced, resolved, record.Summary)
+	printReviewHints(environment.Stdout, record.Hints)
 	if *listReviews {
 		fmt.Fprintln(environment.Stdout, "\nReview attempts:")
 		for _, attempt := range attempts {

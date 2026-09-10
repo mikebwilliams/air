@@ -96,6 +96,9 @@ func (s *Store) ApplyRecheck(
 	if err := recordModel(ctx, tx, identity.Model); err != nil {
 		return 0, err
 	}
+	if err := recordHintSnapshot(ctx, tx, identity); err != nil {
+		return 0, err
+	}
 	for _, finding := range findings {
 		var resolvedSHA, dismissedAt sql.NullString
 		var resolvedRecheck sql.NullInt64

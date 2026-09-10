@@ -40,49 +40,51 @@ type CommitMetadata struct {
 }
 
 type CommitRecord struct {
-	SHA                      string      `json:"sha"`
-	ParentSHA                string      `json:"parent_sha,omitempty"`
-	ProcessedAt              time.Time   `json:"processed_at"`
-	Status                   string      `json:"status"`
-	SkipReason               string      `json:"skip_reason,omitempty"`
-	Harness                  string      `json:"harness,omitempty"`
-	Model                    string      `json:"model,omitempty"`
-	ReasoningEffort          string      `json:"reasoning_effort,omitempty"`
-	PromptVersion            string      `json:"prompt_version,omitempty"`
-	Summary                  string      `json:"summary,omitempty"`
-	RawResponse              string      `json:"raw_response,omitempty"`
-	Usage                    *TokenUsage `json:"usage,omitempty"`
-	EstimatedCostMicrousd    *int64      `json:"estimated_cost_microusd,omitempty"`
-	EstimatedCostMaxMicrousd *int64      `json:"estimated_cost_max_microusd,omitempty"`
-	CostContext              string      `json:"cost_context,omitempty"`
-	CostComplete             bool        `json:"cost_complete"`
-	ReportedCostMicrousd     *int64      `json:"reported_cost_microusd,omitempty"`
-	DurationMilliseconds     *int64      `json:"duration_ms,omitempty"`
-	NewCount                 int         `json:"new_count"`
-	ResolvedCount            int         `json:"resolved_count"`
+	SHA                      string       `json:"sha"`
+	ParentSHA                string       `json:"parent_sha,omitempty"`
+	ProcessedAt              time.Time    `json:"processed_at"`
+	Status                   string       `json:"status"`
+	SkipReason               string       `json:"skip_reason,omitempty"`
+	Harness                  string       `json:"harness,omitempty"`
+	Model                    string       `json:"model,omitempty"`
+	ReasoningEffort          string       `json:"reasoning_effort,omitempty"`
+	PromptVersion            string       `json:"prompt_version,omitempty"`
+	Hints                    []ReviewHint `json:"hints,omitempty"`
+	Summary                  string       `json:"summary,omitempty"`
+	RawResponse              string       `json:"raw_response,omitempty"`
+	Usage                    *TokenUsage  `json:"usage,omitempty"`
+	EstimatedCostMicrousd    *int64       `json:"estimated_cost_microusd,omitempty"`
+	EstimatedCostMaxMicrousd *int64       `json:"estimated_cost_max_microusd,omitempty"`
+	CostContext              string       `json:"cost_context,omitempty"`
+	CostComplete             bool         `json:"cost_complete"`
+	ReportedCostMicrousd     *int64       `json:"reported_cost_microusd,omitempty"`
+	DurationMilliseconds     *int64       `json:"duration_ms,omitempty"`
+	NewCount                 int          `json:"new_count"`
+	ResolvedCount            int          `json:"resolved_count"`
 }
 
 type ReviewAttempt struct {
-	ID                       int64      `json:"id"`
-	Number                   int        `json:"number"`
-	CommitSHA                string     `json:"commit_sha"`
-	ReviewedAt               time.Time  `json:"reviewed_at"`
-	Harness                  string     `json:"harness"`
-	Model                    string     `json:"model"`
-	ReasoningEffort          string     `json:"reasoning_effort,omitempty"`
-	PromptVersion            string     `json:"prompt_version"`
-	Summary                  string     `json:"summary"`
-	RawResponse              string     `json:"raw_response"`
-	Usage                    TokenUsage `json:"usage"`
-	EstimatedCostMicrousd    *int64     `json:"estimated_cost_microusd,omitempty"`
-	EstimatedCostMaxMicrousd *int64     `json:"estimated_cost_max_microusd,omitempty"`
-	CostContext              string     `json:"cost_context,omitempty"`
-	CostComplete             bool       `json:"cost_complete"`
-	ReportedCostMicrousd     *int64     `json:"reported_cost_microusd,omitempty"`
-	DurationMilliseconds     *int64     `json:"duration_ms,omitempty"`
-	NewCount                 int        `json:"new_count"`
-	ResolvedCount            int        `json:"resolved_count"`
-	Current                  bool       `json:"current"`
+	ID                       int64        `json:"id"`
+	Number                   int          `json:"number"`
+	CommitSHA                string       `json:"commit_sha"`
+	ReviewedAt               time.Time    `json:"reviewed_at"`
+	Harness                  string       `json:"harness"`
+	Model                    string       `json:"model"`
+	ReasoningEffort          string       `json:"reasoning_effort,omitempty"`
+	PromptVersion            string       `json:"prompt_version"`
+	Hints                    []ReviewHint `json:"hints,omitempty"`
+	Summary                  string       `json:"summary"`
+	RawResponse              string       `json:"raw_response"`
+	Usage                    TokenUsage   `json:"usage"`
+	EstimatedCostMicrousd    *int64       `json:"estimated_cost_microusd,omitempty"`
+	EstimatedCostMaxMicrousd *int64       `json:"estimated_cost_max_microusd,omitempty"`
+	CostContext              string       `json:"cost_context,omitempty"`
+	CostComplete             bool         `json:"cost_complete"`
+	ReportedCostMicrousd     *int64       `json:"reported_cost_microusd,omitempty"`
+	DurationMilliseconds     *int64       `json:"duration_ms,omitempty"`
+	NewCount                 int          `json:"new_count"`
+	ResolvedCount            int          `json:"resolved_count"`
+	Current                  bool         `json:"current"`
 }
 
 type ReviewStats struct {
@@ -153,6 +155,7 @@ type ReviewIdentity struct {
 	Model           Model
 	ReasoningEffort string
 	PromptVersion   string
+	Hints           []ReviewHint
 }
 
 type Finding struct {

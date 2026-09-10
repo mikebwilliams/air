@@ -401,7 +401,8 @@ Show the editable instructions for prompt
 .IR KIND .
 With
 .BR \-\-full ,
-also show AIR's fixed protocol, safety constraints, and response contract.
+also show active project hints and AIR's fixed protocol, safety constraints,
+and response contract.
 The supported kinds are
 .B review
 and
@@ -416,6 +417,35 @@ AIR keeps the fixed protocol and response contract unchanged.
 .TP
 .BI "air prompt reset " KIND
 Remove the repository override and restore the built-in instructions.
+Project hints are separate and are not removed by resetting a prompt.
+.TP
+.BI "air hint add " TEXT
+Save temporary project instructions in the repository database and print a
+stable numeric ID. Quote multiword text. Each hint must be nonempty UTF-8,
+at most 16 KiB; combined active and one-off hint text is limited to 256 KiB.
+.TP
+.BR "air hint list" " [\-\-prompt IDENTITY]"
+List active project hints in ID order. With
+.BR \-\-prompt ,
+show the immutable hint snapshot for a recorded
+.B hints:sha256:
+prompt identity instead. Snapshots include one-off hints.
+.TP
+.BI "air hint remove " HINT_ID
+Remove an active hint. IDs are not reused, and hint text used by previous
+successful reviews and rechecks is retained in their snapshots.
+.PP
+Hints supplement built-in or custom prompts for all harnesses. They cannot
+override AIR's fixed protocol, and excluding a problem from reporting is not
+evidence that an existing finding is resolved. Use finding dismissal for that.
+Each invocation freezes its hints for all commits, parallel batches, and retries.
+Changes affect future invocations, not already running work. They do not cause
+scan to repeat processed commits; use rescan explicitly. Recheck identity
+includes hints, so a changed hint set makes open findings eligible again.
+Use air prompt show \-\-full review to inspect saved hints in the effective prompt,
+and air show (including \-\-review N or \-\-json) to inspect hints used by a review.
+Precheck remains non-persistent; its text and JSON reports include the hints used.
+Backups include active hints and retained snapshots. No schema upgrade is needed.
 .TP
 .BI "air config get [\-\-effective] " NAME
 Print one database setting. With
@@ -506,9 +536,15 @@ The commands
 .BR scan ,
 .BR retry ,
 .BR rescan ,
+.BR precheck ,
 and
 .B recheck
 accept these common overrides:
+.TP
+.BI "\-\-hint " TEXT
+Add a hint for this invocation only. Repeat the flag for multiple hints;
+commas within a hint are literal. One-off hints supplement, rather than replace,
+the saved hints and do not change the active database configuration.
 .TP
 .BI "\-\-harness " HARNESS
 Select

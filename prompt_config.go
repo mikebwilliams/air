@@ -14,6 +14,7 @@ func resolveReviewerPrompt(
 	ctx context.Context,
 	store *Store,
 	kind string,
+	extraHints ...string,
 ) (reviewerPrompt, error) {
 	prompt, err := reviewerPromptSpec(kind)
 	if err != nil {
@@ -23,14 +24,25 @@ func resolveReviewerPrompt(
 	if err != nil {
 		return reviewerPrompt{}, err
 	}
-	if !found {
-		return prompt, nil
+	if found {
+		instructions, err = validatePromptInstructions(instructions)
+		if err != nil {
+			return reviewerPrompt{}, fmt.Errorf("invalid database %s prompt: %w", kind, err)
+		}
+		prompt = prompt.withCustomInstructions(instructions)
 	}
-	instructions, err = validatePromptInstructions(instructions)
+	hints, err := store.Hints(ctx)
 	if err != nil {
-		return reviewerPrompt{}, fmt.Errorf("invalid database %s prompt: %w", kind, err)
+		return reviewerPrompt{}, err
 	}
-	return prompt.withCustomInstructions(instructions), nil
+	for _, text := range extraHints {
+		text, err := validateHint(text)
+		if err != nil {
+			return reviewerPrompt{}, fmt.Errorf("invalid --hint: %w", err)
+		}
+		hints = append(hints, ReviewHint{Text: text})
+	}
+	return prompt.withHints(hints)
 }
 
 func validatePromptInstructions(value string) (string, error) {

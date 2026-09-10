@@ -1250,6 +1250,9 @@ func (s *Store) ApplyReview(
 	if err := recordModel(ctx, tx, identity.Model); err != nil {
 		return nil, err
 	}
+	if err := recordHintSnapshot(ctx, tx, identity); err != nil {
+		return nil, err
+	}
 
 	processedAt := formatTime(now)
 	_, err = tx.ExecContext(ctx, `
@@ -1439,6 +1442,10 @@ func (s *Store) Commit(ctx context.Context, sha string) (CommitRecord, error) {
 	if err != nil {
 		return CommitRecord{}, fmt.Errorf("read commit review: %w", err)
 	}
+	record.Hints, err = s.HintsForPrompt(ctx, record.PromptVersion)
+	if err != nil {
+		return CommitRecord{}, err
+	}
 	return record, nil
 }
 
@@ -1472,6 +1479,22 @@ func (s *Store) Log(ctx context.Context) ([]CommitRecord, error) {
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("read review log: %w", err)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	snapshots := make(map[string][]ReviewHint)
+	for index := range records {
+		version := records[index].PromptVersion
+		hints, found := snapshots[version]
+		if !found {
+			hints, err = s.HintsForPrompt(ctx, version)
+			if err != nil {
+				return nil, err
+			}
+			snapshots[version] = hints
+		}
+		records[index].Hints = hints
 	}
 	return records, nil
 }
@@ -1585,6 +1608,16 @@ func (s *Store) ReviewAttempts(ctx context.Context, sha string) ([]ReviewAttempt
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("list review attempts: %w", err)
+	}
+	// Release the single database connection before loading hint snapshots.
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	for index := range attempts {
+		attempts[index].Hints, err = s.HintsForPrompt(ctx, attempts[index].PromptVersion)
+		if err != nil {
+			return nil, err
+		}
 	}
 	if len(attempts) > 0 {
 		attempts[len(attempts)-1].Current = true
