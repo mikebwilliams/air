@@ -1,4 +1,4 @@
-module github.com/mikebwilliams/air
+module github.com/mikebwilliams/repose
 
 go 1.26
 

@@ -6,8 +6,8 @@ MANDIR ?= $(PREFIX)/share/man
 DESTDIR ?=
 BUILD_DIR ?= .build
 
-BINARY := $(BUILD_DIR)/air
-MANPAGE := man/air.1
+BINARY := $(BUILD_DIR)/repose
+MANPAGE := man/repose.1
 GO_SOURCES := $(wildcard *.go)
 
 .PHONY: all build test install
@@ -25,6 +25,6 @@ test:
 
 install: $(BINARY) $(MANPAGE)
 	$(INSTALL) -d "$(DESTDIR)$(BINDIR)"
-	$(INSTALL) -m 0755 "$(BINARY)" "$(DESTDIR)$(BINDIR)/air"
+	$(INSTALL) -m 0755 "$(BINARY)" "$(DESTDIR)$(BINDIR)/repose"
 	$(INSTALL) -d "$(DESTDIR)$(MANDIR)/man1"
-	$(INSTALL) -m 0644 "$(MANPAGE)" "$(DESTDIR)$(MANDIR)/man1/air.1"
+	$(INSTALL) -m 0644 "$(MANPAGE)" "$(DESTDIR)$(MANDIR)/man1/repose.1"

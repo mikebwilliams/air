@@ -1,0 +1,25 @@
+{
+  "rules": [
+    {
+      "prefix": "qa",
+      "exclude": true,
+      "reason": "QA is outside audit scope."
+    },
+    {
+      "prefix": "pcbnew",
+      "group": "board-editor",
+      "tags": ["board", "undo"],
+      "note": "Check that board edits preserve undo/redo behavior and derived state."
+    },
+    {
+      "prefix": "eeschema",
+      "group": "schematic-editor",
+      "tags": ["schematic"]
+    },
+    {
+      "prefix": "thirdparty",
+      "exclude": true,
+      "reason": "Audit maintained KiCad code first."
+    }
+  ]
+}

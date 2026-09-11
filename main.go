@@ -12,10 +12,10 @@ func main() {
 	defer stop()
 	cwd, err := os.Getwd()
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "air:", err)
+		fmt.Fprintln(os.Stderr, "repose:", err)
 		os.Exit(1)
 	}
-	err = runCLI(ctx, os.Args[1:], cliEnvironment{
+	err = runReposeCLI(ctx, os.Args[1:], cliEnvironment{
 		Cwd:    cwd,
 		Stdin:  os.Stdin,
 		Stdout: os.Stdout,
@@ -23,7 +23,7 @@ func main() {
 		Getenv: os.Getenv,
 	})
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "air:", err)
+		fmt.Fprintln(os.Stderr, "repose:", err)
 		os.Exit(1)
 	}
 }

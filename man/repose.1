@@ -1,0 +1,121 @@
+.TH REPOSE 1 "September 2026" "Repose 0.2-dev" "User Commands"
+.SH NAME
+repose \- sustained C/C++ repository audits
+.SH SYNOPSIS
+.B repose inventory
+.I COMMAND
+.RI [ OPTIONS ]
+.br
+.B repose version
+.SH DESCRIPTION
+Repose builds a reviewable inventory of a fixed repository snapshot, primarily
+for KiCad. Use a clean, dedicated scan checkout with a compilation database
+configured for that checkout. This release implements inventory building and
+review. Model scanning and semantic indexing are upcoming milestones.
+.SH COMMANDS
+.TP
+.B repose inventory build
+Save an immutable inventory of HEAD, build inputs, tracked files, and policy.
+Identical inputs reuse an existing version. Inherits the current policy and
+compilation database path unless explicitly overridden.
+.TP
+.B repose inventory list
+List inventory versions, newest first, with review status.
+.TP
+.B repose inventory show [ID]
+Show an inventory summary. Defaults to current. With --json, export the full
+document including files, compilation commands, and policy.
+.TP
+.B repose inventory files [ID]
+List files, defaulting to in-scope code in the current inventory.
+.TP
+.B repose inventory check [ID]
+Validate the checkout commit, tracked cleanliness, and recorded build inputs.
+Defaults to current.
+.TP
+.B repose inventory approve ID
+Record review of a specific inventory after validating its checkout and build
+inputs. Requires an explicit ID; current and latest are not accepted. Approval does not run
+a scan. New inventory versions require their own review.
+.TP
+.B repose inventory exclude PREFIX... --reason TEXT
+Exclude C/C++ files or directory subtrees from direct review. Derive a new
+current inventory from the saved map and persist the policy for future builds.
+Existing versions stay unchanged. Excluded code remains available as context.
+.TP
+.B repose inventory include PREFIX... [--reason TEXT]
+Restore C/C++ paths to review scope. The new rule overrides previous scope rules
+while preserving grouping annotations.
+.TP
+.B repose inventory exclusions [ID]
+List default and explicit scope rules with matched and effective C/C++ counts.
+Defaults to current. Effective counts account for later overrides.
+.TP
+.B repose inventory policy export [ID]
+Export the inventory policy as editable JSON. Defaults to current.
+.TP
+.B repose inventory policy import FILE
+Replace the current policy with a JSON policy and derive an inventory version
+without accessing source or build files.
+.TP
+.B repose version
+Print the Repose version.
+.SH OPTIONS
+.TP
+.B --repo DIR
+Dedicated scan checkout, relative to the current directory. Defaults to the
+current directory. Available on all inventory commands.
+.TP
+.B --json
+Output JSON. Available on all inventory commands.
+.TP
+.B --compile-commands FILE
+Compilation database for inventory build, relative to the checkout.
+Initially defaults to build/compile_commands.json; later builds inherit the
+current inventory's compilation database path.
+.TP
+.B --policy FILE
+JSON grouping, exclusion, tag, and note rules for inventory build. Relative to
+the current directory. Rules match literal repository-relative prefixes;
+a dot matches all paths. Replaces the saved policy on successful build.
+Explicit imports reject unmatched rules. Inherited rules for paths absent in a
+new snapshot are retained and reported.
+.TP
+.B --reason TEXT
+Reason for a scope decision. Required by exclude; optional for include.
+.TP
+.B --path PREFIX
+Filter inventory files by an exact file or directory prefix.
+.TP
+.B --group NAME
+Filter inventory files by group.
+.TP
+.B --tag TAG
+Filter inventory files by tag.
+.TP
+.B --status STATUS
+Filter inventory files by included, excluded, all, missing-command, or
+header-unmapped. Defaults to included. Filters combine by intersection.
+.SH INVENTORY IDS
+Use a full ID or an unambiguous hexadecimal prefix of at least four characters.
+Inventory content is immutable. Rebuilding after changing policy creates a new
+version. Approval and timestamps are separate metadata.
+Inspection defaults to current, the version selected by the last successful
+build or policy edit. The latest selector names the most recently created
+version, which can differ after restoring an earlier policy.
+.SH FILES
+.TP
+.I <worktree-git-dir>/repose/repose.sqlite
+Worktree-local inventory storage, separate from AIR and other linked worktrees.
+.SH LIMITATIONS
+Untracked files are outside the source inventory. Generated and external
+compilation inputs are counted separately. Headers await semantic association.
+The build input checks do not establish freshness of generated headers,
+external dependencies, compiler binaries, or an index.
+Inspection uses read-only database connections without schema migration.
+Writers retain WAL/SHM sidecars for subsequent read-only access. Older databases
+without those sidecars require one writable open first.
+.SH SEE ALSO
+.BR git (1),
+.BR cmake (1),
+.BR clangd (1)
