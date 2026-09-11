@@ -4,8 +4,9 @@ Repose is a local tool for sustained, parallel AI audits of a fixed C/C++
 repository snapshot. Its primary target is KiCad. An inventory can support
 multiple scans with different models, questions, and selected areas of code.
 
-The first milestone implements **inventory building and review**. Model scanning,
-the durable parallel queue, and clangd symbol/reference indexing are upcoming.
+Repose implements **inventory building, curation, assignment previews, and a
+terminal browser**. Model scanning, the durable parallel queue, and clangd
+symbol/reference indexing are upcoming.
 The [design and implementation sequence](docs/repose-design.md) records their
 contracts and the current boundaries.
 
@@ -64,7 +65,7 @@ Generated or other untracked compilation inputs and external inputs are counted
 separately. Generated code that is tracked outside `build/` needs an explicit
 policy exclusion if you want to exclude it.
 
-All inventory commands accept `--json`. `inventory show --json` exports the full
+All inventory commands except `browse` accept `--json`. `inventory show --json` exports the full
 saved document, including commands and policy. `files` also accepts `--group`,
 `--tag`, and `--status header-unmapped`; filters combine by intersection.
 
@@ -92,6 +93,74 @@ the complete list. `exclusions` shows default rules, user rules, and inclusion
 overrides. Matched counts cover C/C++ paths under a prefix; effective counts show
 how many paths have their final scope determined by that rule. Later rules win,
 so an include command can restore a file or subtree under an excluded directory.
+
+## Navigate and curate the map
+
+```sh
+.build/repose inventory tree --repo kicad-repose --path pcbnew --depth 1
+.build/repose inventory inspect --repo kicad-repose --path pcbnew/router
+.build/repose inventory group pcbnew/router --name router --repo kicad-repose
+.build/repose inventory annotate pcbnew/router --tag geometry --note "Check shove rollback and ownership." --repo kicad-repose
+.build/repose inventory groups --repo kicad-repose
+.build/repose inventory inspect --group router --repo kicad-repose
+```
+
+These examples use a `kicad-repose` checkout or symlink in the current directory.
+Tree, groups, and inspect accept the same `--path`, `--group`, `--tag`, and
+`--status` filters as files. Filters combine by intersection and default to
+included code. Use `--status all` to see exclusions and other tracked paths.
+Tree shows directories, with totals covering every selected descendant even
+below the displayed depth. Inspect shows compiler coverage gaps, annotations,
+the ten largest files, and matching policy rules in precedence order.
+
+Group commands assign a name across one or more prefixes, including excluded
+paths. Later overlapping group assignments win. Annotate adds tags and notes;
+repeat `--tag` for multiple tags. Repeating an identical edit reuses the version.
+Use policy export/import to remove or replace annotations. These are human
+curation notes; they make no claim about compiler-derived relationships.
+
+## Preview review assignments
+
+```sh
+.build/repose inventory plan --repo kicad-repose --path pcbnew/router
+.build/repose inventory plan --repo kicad-repose --group router --goal "Check shove rollback and ownership." --max-files 6 --max-bytes 65536 --json > router-plan.json
+```
+
+The `files-v1` planner packs sorted files within each group and directory.
+Every selected included file appears exactly once. Defaults are eight files
+and 65,536 target bytes per assignment. A larger individual file remains whole
+in a flagged singleton; it requires a later split or explicit size decision.
+Sources missing compilation commands and headers awaiting semantic association
+remain visible. Byte counts measure target files, not tokens or total model
+context. This first planner does not infer include relationships or guarantee
+that a source and related header land in the same assignment.
+
+JSON records the inventory ID, observed commit, question, filters, limits, target
+facts and annotations, and deterministic plan/assignment IDs. Command IDs refer
+to that saved inventory. Previews work without live source/build files and do
+not check checkout freshness, save a scan, or call a model. Changed questions,
+inventory versions, or limits produce a new plan identity. Durable scans will
+freeze their own model, inputs, tasks, and coverage against the inventory.
+
+## Browse in the terminal
+
+```sh
+.build/repose inventory browse --repo kicad-repose --path pcbnew/router
+```
+
+Use arrows or `j/k` to move, Enter to open, `h` to go up, `d` for details, `/` to
+filter visible paths, and `a` to toggle all/included files. Press `g` to set a
+group, `t` to add a tag, `n` to add a note, `x` to exclude with a reason, and `i`
+to include. Enter submits an edit; Escape cancels it. Edits apply to **all paths
+under the selected prefix**, including files hidden by display filters. The
+`./` row selects the directory itself. `p` previews assignments with a question;
+the CLI offers configurable limits and JSON export. `?` shows all keys.
+
+The default/current inventory is editable. An explicit ID or `latest` opens
+read-only. Browsing opens read-only connections; saving opens a temporary writer
+and checks that the current inventory has not changed. After a concurrent edit,
+`r` reloads current so you can inspect it and retry. Old versions and approvals
+remain intact. A scan checkout/build change does not prevent browsing saved facts.
 
 ## Edit the policy in bulk
 

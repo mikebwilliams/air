@@ -29,6 +29,7 @@ type cliEnvironment struct {
 	GeminiCommand   commandContextFunc
 	Now             func() time.Time
 	FindingsUI      findingsUIRunner
+	InventoryUI     inventoryUIRunner
 	ExternalCommand commandContextFunc
 	ElapsedNow      func() time.Time
 }

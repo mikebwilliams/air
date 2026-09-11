@@ -1,4 +1,4 @@
-.TH REPOSE 1 "September 2026" "Repose 0.2-dev" "User Commands"
+.TH REPOSE 1 "September 2026" "Repose 0.3-dev" "User Commands"
 .SH NAME
 repose \- sustained C/C++ repository audits
 .SH SYNOPSIS
@@ -28,6 +28,46 @@ document including files, compilation commands, and policy.
 .TP
 .B repose inventory files [ID]
 List files, defaulting to in-scope code in the current inventory.
+.TP
+.B repose inventory tree [ID]
+Show directory totals below --path, to --depth levels (default 1). Totals include
+all selected descendants. Accepts the same selection filters as files.
+.TP
+.B repose inventory groups [ID]
+Summarize selected files by group, with sizes, coverage gaps, tags and notes.
+.TP
+.B repose inventory inspect [ID]
+Inspect a path/group selection, its coverage gaps, annotations, ten largest
+files, and matching policy rules in precedence order.
+.TP
+.B repose inventory group PREFIX... --name NAME
+Assign a group to tracked prefixes, including excluded files. Later overlapping
+group rules win. Saves a new current policy version.
+.TP
+.B repose inventory annotate PREFIX... [--tag TAG] [--note TEXT]
+Add tags and a note to prefixes. Repeat --tag for multiple tags. Identical edits
+reuse a version. Policy export/import supports removing annotations.
+.TP
+.B repose inventory plan [ID]
+Preview deterministic assignments for included files selected by --path,
+--group and --tag. Sorted targets are packed within group/directory boundaries.
+Defaults to 8 files and 65536 target bytes per assignment; oversized files remain
+flagged singletons. Every selected target appears exactly once. --json exports
+inventory/snapshot IDs, goal, selection, limits, target facts and annotations.
+This command neither saves a scan nor calls a model or validates the checkout.
+Byte counts are target file sizes, not model context limits. Semantic
+relationships and header associations are not inferred.
+.TP
+.B repose inventory browse [ID]
+Open the terminal inventory browser. Accepts the same selection filters as
+files. Current is editable; explicit IDs and latest are read-only. Browsing
+uses read-only connections; a writer opens only when saving an edit.
+Arrows or j/k navigate, Enter opens, h goes up, d shows details, / filters visible
+paths, a toggles all/included files, and r reloads current. Use g for group,
+t for tag, n for note, x to exclude, i to include, and p to preview assignments.
+Enter submits edits; Escape cancels. Edits affect all paths under the selected
+prefix, including hidden files. Concurrent policy changes require a reload and
+retry. Press ? for all keys and q to quit.
 .TP
 .B repose inventory check [ID]
 Validate the checkout commit, tracked cleanliness, and recorded build inputs.
@@ -67,7 +107,7 @@ Dedicated scan checkout, relative to the current directory. Defaults to the
 current directory. Available on all inventory commands.
 .TP
 .B --json
-Output JSON. Available on all inventory commands.
+Output JSON. Available on all inventory commands except browse.
 .TP
 .B --compile-commands FILE
 Compilation database for inventory build, relative to the checkout.
@@ -85,17 +125,36 @@ new snapshot are retained and reported.
 Reason for a scope decision. Required by exclude; optional for include.
 .TP
 .B --path PREFIX
-Filter inventory files by an exact file or directory prefix.
+Filter files, tree, groups, inspect, plan or browse by an exact file or directory prefix.
 .TP
 .B --group NAME
-Filter inventory files by group.
+Filter a selection by group.
 .TP
 .B --tag TAG
-Filter inventory files by tag.
+Filter a selection by tag, or add a tag with annotate (repeatable).
 .TP
 .B --status STATUS
 Filter inventory files by included, excluded, all, missing-command, or
 header-unmapped. Defaults to included. Filters combine by intersection.
+.TP
+.B --depth N
+Directory levels below --path for tree. Defaults to 1; accepts 0 through 100.
+.TP
+.B --name NAME
+Group name for inventory group.
+.TP
+.B --note TEXT
+Review note to add with inventory annotate.
+.TP
+.B --goal TEXT
+Question for each preview assignment. Defaults to "Find correctness issues."
+.TP
+.B --max-files N
+Maximum targets per preview assignment. Defaults to 8; must be positive.
+.TP
+.B --max-bytes N
+Maximum target file bytes per preview assignment. Defaults to 65536; must be
+positive. A larger file stays in a flagged singleton assignment.
 .SH INVENTORY IDS
 Use a full ID or an unambiguous hexadecimal prefix of at least four characters.
 Inventory content is immutable. Rebuilding after changing policy creates a new

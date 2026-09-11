@@ -110,7 +110,8 @@ databases without sidecars need one writable open to prepare them. See SQLite's
 ### Current boundaries
 
 - This first map is a file inventory. Symbols, references, include relationships,
-  header-to-translation-unit associations, and task generation are upcoming.
+  and header-to-translation-unit associations are upcoming. File assignment
+  previews are available; semantic task generation and a durable queue are not.
 - The current build configuration provides partial compiler coverage. Missing
   commands and unmapped headers remain visible; platform/feature alternatives
   must be handled explicitly by later configurations or review tasks.
@@ -126,6 +127,20 @@ databases without sidecars need one writable open to prepare them. See SQLite's
   It does not continuously monitor a development tree.
 
 ## Parallel execution and recovery contract
+
+The current CLI provides directory/group summaries, detailed inspection, direct
+group/tag/note curation, and `inventory plan`. The `files-v1` preview partitions
+selected included files within group/directory boundaries using file and byte
+limits. Oversized files remain flagged singletons. Plans include the inventory,
+snapshot, question, selection, limits, target facts/annotations, and deterministic
+IDs. These are file partitions rather than semantic units or persisted scan
+records. Header relationships and model context budgets are not inferred.
+
+`inventory browse` uses the same selection, curation, and planning functions.
+It reads without writer transactions and opens a writer only to save an edit
+against the previously viewed current ID. Explicit historical selectors are
+read-only. Policy changes preserve existing inventories and approvals. Browser
+filters control display; prefix edits also apply to hidden descendants.
 
 The next execution layer starts with one local coordinator and a bounded pool
 of workers. SQLite stores tasks before dispatch, including their frozen inputs.
@@ -162,7 +177,8 @@ scan rather than changing the meaning of previous completion.
 
 1. **Inventory foundation — implemented.** Repose entry point, file/build map,
    policy annotations, immutable persistence, inspection/filtering, explicit
-   review acknowledgement, and snapshot/build-input checks.
+   review acknowledgement, snapshot/build-input checks, CLI curation, file
+   assignment previews, and a terminal inventory browser.
 2. **Semantic inventory.** Prepare shared clangd access for the scan checkout;
    record indexing status and diagnostics, associate headers, extract symbols
    and navigation relationships, and make the enriched map reviewable. Validate

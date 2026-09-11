@@ -14,7 +14,7 @@ import (
 	"text/tabwriter"
 )
 
-const reposeVersion = "0.2-dev"
+const reposeVersion = "0.3-dev"
 
 const reposeHelp = `Repose — sustained C/C++ repository audits
 
@@ -24,6 +24,14 @@ Usage:
   repose inventory show [ID] [--repo DIR]
   repose inventory files [ID] [--repo DIR] [--path PREFIX] [--group NAME]
                          [--tag TAG] [--status STATUS]
+  repose inventory tree [ID] [--path PREFIX] [--depth N] [--repo DIR]
+  repose inventory groups [ID] [--repo DIR]
+  repose inventory inspect [ID] [--path PREFIX] [--group NAME] [--repo DIR]
+  repose inventory group PREFIX... --name NAME [--repo DIR]
+  repose inventory annotate PREFIX... [--tag TAG] [--note TEXT] [--repo DIR]
+  repose inventory plan [ID] [--path PREFIX] [--group NAME] [--tag TAG]
+                        [--goal TEXT] [--max-files N] [--max-bytes N] [--repo DIR]
+  repose inventory browse [ID] [--path PREFIX] [--repo DIR]
   repose inventory check [ID] [--repo DIR]
   repose inventory approve ID [--repo DIR]
   repose inventory exclude PREFIX... --reason TEXT [--repo DIR]
@@ -33,7 +41,7 @@ Usage:
   repose inventory policy import FILE [--repo DIR]
   repose version
 
-Inventory commands support --json. IDs may be hexadecimal prefixes, current,
+Inventory commands except browse support --json. IDs may be hexadecimal prefixes, current,
 or latest (most recently created). Inspection defaults to current. Approval
 requires an explicit ID.
 
@@ -46,6 +54,23 @@ to the current directory. No compiler, model, or repository script is executed.
 Files default to in-scope code. Status: included, excluded, all, missing-command,
 or header-unmapped. Path prefixes match exact files or directory descendants.
 JSON show exports the complete saved inventory, commands, and policy.
+
+Tree, groups, inspect, and browse accept the same selection filters as files.
+Tree defaults to one directory level; counts include all selected descendants.
+Group assigns a name to prefixes; annotate adds tags (repeatable --tag) and notes.
+Edits version the current policy; policy export/import supports bulk replacement
+and removing annotations. Excluded paths can still carry annotations.
+
+Plan previews deterministic file assignments within each group and directory.
+Defaults: 8 files / 65536 target bytes, goal: Find correctness issues.
+Each selected file appears once; oversized files remain flagged singletons.
+The preview uses saved facts, without validating the live checkout, and neither
+saves a scan nor invokes a model. Byte limits are not model context limits.
+
+Browse opens the terminal inventory browser; ? shows keys. Current is editable,
+while explicit IDs and latest open read-only. Edits affect all paths under the
+selected prefix, including files hidden by display filters. The browser opens
+a write connection only when saving an edit.
 
 Exclude/include derive a new current inventory using the saved map. Old versions
 remain unchanged. Excluded files remain available as context. Changes are shown
@@ -82,6 +107,8 @@ func runReposeCLI(ctx context.Context, args []string, environment cliEnvironment
 func runInventoryCLI(ctx context.Context, args []string, environment cliEnvironment) error {
 	command := args[0]
 	switch command {
+	case "tree", "groups", "inspect", "group", "annotate", "plan", "browse":
+		return runInventoryWorkspaceCLI(ctx, args, environment)
 	case "exclude", "include", "exclusions", "policy":
 		return runInventoryPolicyCLI(ctx, args, environment)
 	case "build", "list", "show", "files", "check", "approve":
