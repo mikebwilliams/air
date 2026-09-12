@@ -34,6 +34,8 @@ Usage:
                  [--dry-run|--create-only] [--force] [--json] [--repo DIR]
   repose findings [--scan ID] [--verification VERDICT] [--all] [--json] [--repo DIR]
   repose finding show|dismiss|reopen|note ID [--reason TEXT] [--repo DIR]
+  repose export --format json|sarif|html [-o FILE] [--scan ID|latest]
+                [--path PREFIX] [--verification VERDICT] [--all] [--repo DIR]
   repose inventory build [--repo DIR] [--compile-commands FILE] [--policy FILE]
   repose inventory list [--repo DIR]
   repose inventory show [ID] [--repo DIR]
@@ -153,6 +155,17 @@ attempts, and --timeout applies per batch. Verdicts are confirmed, false_positiv
 uncertain, with reasoning and full history. Original findings and manual decisions
 are preserved. Findings V filters latest verdicts; --verification also filters CLI
 output (all, unchecked, confirmed, false_positive, uncertain).
+Export restores JSON, SARIF, and a self-contained offline HTML viewer. --format
+is required; -o/--output writes to a file (relative to the current directory),
+and - or no output file writes to stdout. JSON/SARIF contain open findings by
+default; --all includes dismissed findings. HTML includes all dispositions and
+initially shows open findings; --all initially shows every disposition.
+--scan selects source findings; latest means the newest completed original scan,
+and a recheck ID selects its source scan. --path and --verification narrow scope.
+Exports retain observed snapshots, assignment/attempt provenance, model identity,
+manual history, and every recheck verdict. HTML shows snapshot source excerpts
+and supports search, sorting, and verdict filters. Export reads saved state without
+upgrading the database or invoking models; source previews use the observed commit.
 Cross-scan deduplication and token/cost budgets remain future work.
 `
 
@@ -181,6 +194,13 @@ func runReposeCLI(ctx context.Context, args []string, environment cliEnvironment
 			return nil
 		}
 		return runAuditRecheckCLI(ctx, args[1:], environment)
+	}
+	if args[0] == "export" {
+		if containsHelpFlag(args[1:]) {
+			fmt.Fprint(environment.Stdout, reposeHelp)
+			return nil
+		}
+		return runAuditExportCLI(ctx, args[1:], environment)
 	}
 	if args[0] == "findings" || args[0] == "finding" {
 		return runAuditFindingsCLI(ctx, args, environment)

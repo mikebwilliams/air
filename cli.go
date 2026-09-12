@@ -1889,9 +1889,20 @@ type sarifRegion struct {
 }
 
 type sarifProperties struct {
-	FindingID    int64  `json:"finding_id"`
-	IntroducedBy string `json:"introduced_sha"`
-	Symbol       string `json:"symbol,omitempty"`
+	FindingID     int64               `json:"finding_id"`
+	IntroducedBy  string              `json:"introduced_sha,omitempty"`
+	Symbol        string              `json:"symbol,omitempty"`
+	ObservedSHA   string              `json:"observed_sha,omitempty"`
+	ObservedAt    *time.Time          `json:"observed_at,omitempty"`
+	ScanID        string              `json:"scan_id,omitempty"`
+	TaskID        string              `json:"task_id,omitempty"`
+	AttemptID     int64               `json:"attempt_id,omitempty"`
+	Disposition   string              `json:"disposition,omitempty"`
+	DismissedAt   *time.Time          `json:"dismissed_at,omitempty"`
+	DismissReason string              `json:"dismiss_reason,omitempty"`
+	Review        *htmlExportReview   `json:"review,omitempty"`
+	Events        []htmlExportEvent   `json:"events,omitempty"`
+	Verifications []auditVerification `json:"verifications,omitempty"`
 }
 
 func buildSARIF(findings []Finding) sarifLog {

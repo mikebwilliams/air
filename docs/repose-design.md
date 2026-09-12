@@ -215,7 +215,9 @@ scan rather than changing the meaning of previous completion.
    results atomically with attempt completion; incomplete or malformed responses
    fail the batch. Existing single-finding passes still resume by ID with their
    original protocol. The TUI and JSON expose verdicts, reasoning, and history.
-   Duplicate consolidation, pricing estimates, and richer exports remain future work.
+   JSON, SARIF, and offline HTML exports retain snapshot provenance and verification
+   history. HTML uses source excerpts at the observed snapshot with verdict filters.
+   Duplicate consolidation and pricing estimates remain future work.
 5. **Specialized repeated passes.** Add cross-file task generation, explicit
    prior-evidence inputs, model comparisons, and deeper KiCad-specific questions.
 

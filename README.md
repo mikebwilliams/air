@@ -379,6 +379,39 @@ Repose binary after a writer upgrades the database; older builds cannot open v6.
 Existing inventories, scans, findings, attempts, and earlier verification history
 are preserved by the upgrade.
 
+## Export findings
+
+The inherited `export` command supports JSON, SARIF, and a self-contained HTML
+report that opens locally in a browser:
+
+```sh
+.build/repose export --repo kicad-repose --format html -o findings.html
+.build/repose export --repo kicad-repose --scan latest --format json -o findings.json
+.build/repose export --repo kicad-repose --format sarif --verification confirmed -o findings.sarif
+```
+
+`-o`/`--output` is relative to your current directory. Omit it or use `-o -` for
+stdout. JSON and SARIF export open findings by default; `--all` includes dismissed
+findings. HTML includes every disposition and initially displays open findings;
+`--all` initially shows all of them. Its search, sorting, status, severity, and
+verification filters work offline.
+
+`--scan ID` limits the source scan; `--scan latest` selects the newest completed
+original scan. A recheck ID selects findings from its source scan, including all
+their verification history. Omit `--scan` to include findings across original
+scans. `--path PREFIX` and `--verification VERDICT` narrow the exported records;
+the HTML filters cannot reveal records excluded by these command-line options.
+
+All formats retain the observed snapshot, scan/assignment/attempt IDs, original
+review model, manual history, and each recheck's independent verdict and reasoning.
+JSON uses a versioned report with a `findings` array. SARIF uses Repose's tool/rule
+identity and carries this history in each result's properties. The HTML report
+embeds source excerpts from the observed commit and displays recheck history.
+An unavailable source excerpt is reported without dropping the finding.
+
+Export opens the database read-only and neither upgrades it nor invokes models.
+It works while scans run and when the checkout differs from the observed snapshot.
+
 ## Browse in the terminal
 
 ```sh

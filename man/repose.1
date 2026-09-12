@@ -103,6 +103,24 @@ Findings preserve the observed commit, scan, assignment, attempt, and model
 provenance. Recheck verdicts supplement original findings. Automatic consolidation
 is not implemented.
 .TP
+.B repose export --format json|sarif|html [-o FILE]
+Export findings as JSON, SARIF, or a self-contained offline HTML viewer.
+Accepts --repo DIR, --scan ID|latest, --path PREFIX, --verification VERDICT, and
+--all. Output defaults to stdout; -o/--output writes to a file relative to the
+current directory, and -o - explicitly selects stdout.
+JSON/SARIF export open findings unless --all includes dismissed findings. HTML
+includes all dispositions and initially shows open findings; --all initially
+shows all of them. Its search, sorting, and status/severity/verdict filters work
+offline. Command-line path and verdict filters restrict the embedded records.
+Without --scan, findings from every original scan are eligible. Latest selects
+the newest completed original scan; a recheck ID selects its source scan's
+findings with all their verification history.
+All formats retain observed snapshots, assignment/attempt provenance, review model,
+manual history, and independent recheck verdicts. JSON has a versioned report with
+a findings array; SARIF stores provenance and history in result properties. HTML
+shows source excerpts at the observed snapshot, even when the checkout has changed.
+Export reads the database without upgrading it or invoking a model.
+.TP
 .B repose inventory build
 Save an immutable inventory of HEAD, build inputs, tracked files, and policy.
 Identical inputs reuse an existing version. Inherits the current policy and
