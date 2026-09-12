@@ -88,9 +88,11 @@ imports derive immutable versions from the stored facts, then publish the
 version and current pointer in one transaction. A compare against the input
 version prevents a concurrent policy edit from being lost. Restoring an existing
 document reuses its ID and approval while making it current; `latest` remains
-the most recently created document. Version 1 storage migrates on write without
-rewriting inventory documents or approvals. Inspection supports both schemas
-without migration.
+the most recently created document. Older storage migrates on write without
+rewriting inventory documents or approvals. Schema version 3 adds semantic
+profiles and immutable per-file results. Version 4 adds scan, task, attempt,
+finding, and lifecycle event tables. Inspection supports versions 1 through 4
+without migration; writers upgrade older Repose databases transactionally.
 
 New exclusions require a reason and a matching C/C++ file/directory prefix.
 Inclusion overrides follow the same ordered policy. Exclusions remove direct
@@ -109,9 +111,11 @@ databases without sidecars need one writable open to prepare them. See SQLite's
 
 ### Current boundaries
 
-- This first map is a file inventory. Symbols, references, include relationships,
-  and header-to-translation-unit associations are upcoming. File assignment
-  previews are available; semantic task generation and a durable queue are not.
+- The immutable inventory remains a file/build map. Separate semantic profiles
+  now provide symbols, resolved direct includes, borrowed header contexts,
+  diagnostics, and assignment previews using symbol boundaries. Full reference
+  graphs and alternate compile variants remain upcoming. The initial durable
+  queue and observed-snapshot findings workflow are implemented.
 - The current build configuration provides partial compiler coverage. Missing
   commands and unmapped headers remain visible; platform/feature alternatives
   must be handled explicitly by later configurations or review tasks.
@@ -122,7 +126,8 @@ databases without sidecars need one writable open to prepare them. See SQLite's
 - Start/check/approval validate tracked cleanliness, commit, and recorded build
   input fingerprints. These checks do not certify the freshness of generated
   headers, external dependencies, compiler binaries, or an index. Preparing and
-  recording a compatible semantic environment belongs to the indexing milestone.
+  recording a compatible semantic environment is part of indexing. Direct and
+  forced includes are fingerprinted; transitive/external changes need a refresh.
 - A scan relies on the dedicated checkout remaining unchanged while it runs.
   It does not continuously monitor a development tree.
 
@@ -142,7 +147,7 @@ against the previously viewed current ID. Explicit historical selectors are
 read-only. Policy changes preserve existing inventories and approvals. Browser
 filters control display; prefix edits also apply to hidden descendants.
 
-The next execution layer starts with one local coordinator and a bounded pool
+The execution layer uses one local coordinator and a bounded pool
 of workers. SQLite stores tasks before dispatch, including their frozen inputs.
 Scans on multiple models share resource limits. Compiler indexing should be
 shared for an inventory rather than restarted per model task.
@@ -169,7 +174,9 @@ working scan; distributed scheduling is deferred.
 Subset selection freezes scan scope. Execution limits control further task
 dispatch without shrinking that scope: concurrency, task count, elapsed time,
 and eventually token/cost budgets. Already-running calls may exceed a dispatch
-budget; report that explicitly. Concurrency may change on resume. Changes to
+budget; report that explicitly. Concurrency and per-assignment timeouts may change
+on resume. New scans default to 30 minutes; run/resume overrides apply only to that
+invocation, and each attempt records its effective timeout when claimed. Changes to
 model, question, scope, prompt, inventory, or supplied evidence create a new
 scan rather than changing the meaning of previous completion.
 
@@ -179,18 +186,36 @@ scan rather than changing the meaning of previous completion.
    policy annotations, immutable persistence, inspection/filtering, explicit
    review acknowledgement, snapshot/build-input checks, CLI curation, file
    assignment previews, and a terminal inventory browser.
-2. **Semantic inventory.** Prepare shared clangd access for the scan checkout;
-   record indexing status and diagnostics, associate headers, extract symbols
-   and navigation relationships, and make the enriched map reviewable. Validate
-   with an actual dedicated KiCad scan checkout and matching build inputs.
-3. **Durable parallel scan.** Persist scans/tasks/attempts, implement bounded
-   workers, pause/interrupt/recovery and subset selection, then adapt a model
-   runner for a first correctness scan. Fault-test worker crashes, coordinator
-   interruption, stale completions, and repeated resume. Exercise this on a
-   small real subset before an audit lasting days.
-4. **Findings and verification.** Introduce observed-at-snapshot evidence,
-   verification tasks, duplicate consolidation, and adapt AIR's triage UI,
-   accounting, and exports to the new schema.
+2. **Semantic inventory — initial integration implemented.** Shared clangd
+   process, bounded file workers, durable per-file results/resume, symbol ranges,
+   resolved includes and borrowed header contexts, diagnostics, CLI/TUI inspection,
+   and semantic assignment previews. Validated on the actual KiCad router.
+   See [semantic indexing details](semantic-inventory.md) for limits and storage.
+3. **Durable parallel scan — initial integration implemented.** Frozen scans,
+   prompts, tasks, and attempts; bounded workers; pause/interrupt/recovery;
+   task/time dispatch limits; and explicit failed-task retries. Codex, Claude,
+   and Gemini subprocess adapters use assignment prompts and structured results.
+   Tests exercise interruption, abandoned claims, stale/duplicate completion,
+   malformed output, concurrent dispatch, and repeated resume. Codex quota errors
+   pause dispatch and drain workers, retaining blocked tasks as pending. Temporary
+   throttling uses durable cooldowns, bounded retries, and a single probe before
+   parallel work resumes. Total dispatch caps include retries; a 32-worker,
+   32-attempt batch is covered by a CLI integration test. Automatic allowance
+   checks, other-harness quota handling, and token/cost budgets remain future work.
+4. **Findings and verification — triage and rechecks implemented.** Findings now
+   retain observed-at-snapshot evidence, scan/task/attempt provenance, raw output,
+   usage, and available reported cost. AIR's triage UI supports the new store,
+   notes/disposition history, and source previews. Recheck passes group findings by
+   their original assignment, cap each batch with `--batch-max` (default 5), and
+   freeze that layout. They use a separately selected model and the shared
+   coordinator, retaining independent confirmed/false-positive/uncertain verdicts
+   without changing manual dispositions. Worker and attempt limits count batch
+   calls. Matching selections/models/batch maxima resume; explicit fresh passes
+   retain earlier opinions. Schema version 6 stores every batch's verification
+   results atomically with attempt completion; incomplete or malformed responses
+   fail the batch. Existing single-finding passes still resume by ID with their
+   original protocol. The TUI and JSON expose verdicts, reasoning, and history.
+   Duplicate consolidation, pricing estimates, and richer exports remain future work.
 5. **Specialized repeated passes.** Add cross-file task generation, explicit
    prior-evidence inputs, model comparisons, and deeper KiCad-specific questions.
 

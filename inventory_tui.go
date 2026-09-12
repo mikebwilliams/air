@@ -22,15 +22,37 @@ type inventoryUIRunner func(context.Context, io.Reader, io.Writer, inventoryBrow
 type inventoryBrowserEdit struct{ Action, Prefix, Text string }
 
 type inventoryBrowserOptions struct {
-	Record    InventoryRecord
-	Selection inventorySelection
-	Editable  bool
-	Save      func(context.Context, InventoryRecord, inventoryBrowserEdit) (InventoryRecord, error)
-	Reload    func(context.Context) (InventoryRecord, error)
+	Record       InventoryRecord
+	Selection    inventorySelection
+	Editable     bool
+	Save         func(context.Context, InventoryRecord, inventoryBrowserEdit) (InventoryRecord, error)
+	Reload       func(context.Context) (InventoryRecord, error)
+	Semantic     *semanticSnapshot
+	LoadSemantic func(context.Context, InventoryRecord) (*semanticSnapshot, error)
+	InitialPlan  *inventoryPlanSession
 }
 
-func runInventoryBrowser(ctx context.Context, environment cliEnvironment, databasePath string, record InventoryRecord, selection inventorySelection, editable bool) error {
-	options := inventoryBrowserOptions{Record: record, Selection: selection, Editable: editable}
+func runInventoryBrowser(ctx context.Context, environment cliEnvironment, databasePath string, record InventoryRecord, selection inventorySelection, editable bool, initialPlan *inventoryPlanSession) error {
+	options := inventoryBrowserOptions{Record: record, Selection: selection, Editable: editable, InitialPlan: initialPlan}
+	options.LoadSemantic = func(ctx context.Context, record InventoryRecord) (*semanticSnapshot, error) {
+		store, err := openInventoryReadOnly(ctx, databasePath)
+		if err != nil {
+			return nil, err
+		}
+		defer store.Close()
+		return store.semanticSnapshot(ctx, record.Inventory, "")
+	}
+	var err error
+	if initialPlan != nil {
+		// Keep the exact results used to generate this plan, even if indexing
+		// advances while the browser opens.
+		options.Semantic = initialPlan.Semantic
+	} else {
+		options.Semantic, err = options.LoadSemantic(ctx, record)
+	}
+	if err != nil {
+		return err
+	}
 	options.Reload = func(ctx context.Context) (InventoryRecord, error) {
 		store, err := openInventoryReadOnly(ctx, databasePath)
 		if err != nil {
@@ -85,7 +107,7 @@ func runTerminalInventoryUI(ctx context.Context, input io.Reader, output io.Writ
 	inputFile, inputOK := input.(*os.File)
 	outputFile, outputOK := output.(*os.File)
 	if !inputOK || !outputOK || !term.IsTerminal(inputFile.Fd()) || !term.IsTerminal(outputFile.Fd()) {
-		return errors.New("inventory browse requires an interactive terminal; use inventory tree, inspect, or plan --json")
+		return errors.New("inventory TUI requires an interactive terminal; use inventory tree, inspect, or plan --json")
 	}
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -104,8 +126,9 @@ type inventoryBrowserRow struct {
 }
 
 type inventoryBrowserLoaded struct {
-	Record InventoryRecord
-	Err    error
+	Record   InventoryRecord
+	Err      error
+	Semantic *semanticSnapshot
 }
 
 type inventoryBrowserModel struct {
@@ -119,11 +142,15 @@ type inventoryBrowserModel struct {
 	pending                               bool
 	page                                  []string
 	scroll                                int
+	planView                              *inventoryPlanBrowser
 }
 
 func newInventoryBrowserModel(ctx context.Context, options inventoryBrowserOptions) inventoryBrowserModel {
 	m := inventoryBrowserModel{ctx: ctx, options: options, selection: options.Selection, width: 100, height: 30}
 	m.refreshRows("")
+	if options.InitialPlan != nil {
+		m.planView = newInventoryPlanBrowser(*options.InitialPlan, options.Record.Inventory)
+	}
 	return m
 }
 
@@ -196,11 +223,14 @@ func (m inventoryBrowserModel) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		} else {
 			preferred := m.selectedPath()
 			m.options.Record = message.Record
+			m.options.Semantic = message.Semantic
 			m.refreshRows(preferred)
 			m.message = "Loaded inventory " + message.Record.ID[:12] + " (" + inventoryReviewLabel(message.Record.ReviewedAt != nil) + ")"
 		}
 	case tea.PasteMsg:
-		if m.mode != "" {
+		if m.planView != nil && m.planView.searching {
+			m.planView.input += singleLine(message.Content)
+		} else if m.mode != "" {
 			m.input += singleLine(message.Content)
 		}
 	case tea.KeyPressMsg:
@@ -219,6 +249,15 @@ func (m inventoryBrowserModel) selectedPath() string {
 func (m inventoryBrowserModel) handleKey(key string) (tea.Model, tea.Cmd) {
 	if key == "ctrl+c" {
 		return m, tea.Quit
+	}
+	if m.planView != nil {
+		if m.planView.handleKey(key, m.width, m.height) {
+			if m.options.InitialPlan != nil {
+				return m, tea.Quit
+			}
+			m.planView = nil
+		}
+		return m, nil
 	}
 	if m.pending {
 		return m, nil
@@ -294,7 +333,10 @@ func (m inventoryBrowserModel) handleKey(key string) (tea.Model, tea.Cmd) {
 	case "r":
 		m.pending = true
 		m.message = "Reloading..."
-		return m, func() tea.Msg { record, err := m.options.Reload(m.ctx); return inventoryBrowserLoaded{record, err} }
+		return m, func() tea.Msg { record, err := m.options.Reload(m.ctx); return m.loaded(record, err) }
+	case "s":
+		m.page = m.semanticLines()
+		m.scroll = 0
 	case "d":
 		m.page = m.detailLines()
 		m.scroll = 0
@@ -313,8 +355,8 @@ func (m inventoryBrowserModel) handleKey(key string) (tea.Model, tea.Cmd) {
 			m.input = "Find correctness issues."
 		}
 	case "?":
-		m.page = []string{"Inventory browser", "", "j/k or arrows: move; Enter/right: open directory or file details", "h/left/Backspace: parent; Home/End and PgUp/PgDown: navigate", "/: filter visible paths (Enter applies); Esc: clear filter", "a: toggle all files / included files; r: reload inventory", "g: set group; t: add tag; n: add note", "x: exclude with reason; i: include (optional reason)", "Edits apply to ALL paths under the selected prefix, including hidden files.", "Enter submits an edit; Esc cancels. Each edit versions the inventory.", "Explicit inventory IDs and latest open read-only.", "p: preview selected scope with a question (8 files / 65536 bytes)", "Preview pages: j/k, PgUp/PgDown scroll; Esc/q return", "CLI inventory plan --json exports previews and accepts other size limits.", "Policy export/import supports removing tags or notes.", "No scans or compiler indexing are started by this browser.", "q: quit"}
-		m.page = append(m.page, "d: full details of the selected file or directory")
+		m.page = []string{"Inventory browser", "", "j/k or arrows: move; Enter/right: open directory or file details", "h/left/Backspace: parent; Home/End and PgUp/PgDown: navigate", "/: filter visible paths (Enter applies); Esc: clear filter", "a: toggle all files / included files; r: reload inventory", "g: set group; t: add tag; n: add note", "x: exclude with reason; i: include (optional reason)", "Edits apply to ALL paths under the selected prefix, including hidden files.", "Enter submits an edit; Esc cancels. Each edit versions the inventory.", "Explicit inventory IDs and latest open read-only.", "p: browse assignments for selected scope with a question (8 files / 65536 bytes)", "Detail pages: j/k, PgUp/PgDown scroll; Esc/q return", "Plan: Tab panes; t/s/c/d targets/symbols/context/diagnostics; Enter details; / search.", "Policy export/import supports removing tags or notes.", "No scans or compiler indexing are started by this browser.", "q: quit"}
+		m.page = append(m.page, "CLI inventory plan --tui opens assignments directly; --json exports a plan.", "d: full details; s: saved symbols, includes, and diagnostics", "p uses semantic planning when an index is available; r reloads index results.")
 		m.scroll = 0
 	}
 	return m, nil
@@ -347,15 +389,15 @@ func (m inventoryBrowserModel) handleInput(key string) (tea.Model, tea.Cmd) {
 			selection := m.selection
 			selection.Path, selection.Status = m.editPath, "included"
 			plan, err := planInventory(m.options.Record, selection, m.input, inventoryPlanLimits{8, 65536})
+			if m.options.Semantic != nil {
+				plan, err = planSemanticInventory(m.options.Record, selection, m.input, inventoryPlanLimits{8, 65536}, m.options.Semantic)
+			}
 			m.mode = ""
 			if err != nil {
 				m.message = err.Error()
 				return m, nil
 			}
-			var output bytes.Buffer
-			_ = printInventoryPlan(&output, plan)
-			m.page = strings.Split(strings.TrimSuffix(output.String(), "\n"), "\n")
-			m.scroll = 0
+			m.planView = newInventoryPlanBrowser(inventoryPlanSession{Plan: plan, Semantic: m.options.Semantic}, m.options.Record.Inventory)
 			return m, nil
 		}
 		edit := inventoryBrowserEdit{mode, m.editPath, m.input}
@@ -364,7 +406,7 @@ func (m inventoryBrowserModel) handleInput(key string) (tea.Model, tea.Cmd) {
 		m.message = "Saving policy..."
 		return m, func() tea.Msg {
 			record, err := m.options.Save(m.ctx, m.options.Record, edit)
-			return inventoryBrowserLoaded{record, err}
+			return m.loaded(record, err)
 		}
 	default:
 		if utf8.RuneCountInString(key) == 1 {
@@ -375,6 +417,50 @@ func (m inventoryBrowserModel) handleInput(key string) (tea.Model, tea.Cmd) {
 		}
 	}
 	return m, nil
+}
+
+func (m inventoryBrowserModel) loaded(record InventoryRecord, err error) inventoryBrowserLoaded {
+	result := inventoryBrowserLoaded{Record: record, Err: err}
+	if err == nil && m.options.LoadSemantic != nil {
+		result.Semantic, result.Err = m.options.LoadSemantic(m.ctx, record)
+	}
+	return result
+}
+
+func (m inventoryBrowserModel) semanticLines() []string {
+	if m.options.Semantic == nil {
+		return []string{"No semantic index for this snapshot/build.", "Use inventory index --path PREFIX, then r to reload."}
+	}
+	selection := m.selection
+	selection.Path = m.selectedPath()
+	indexed := m.options.Semantic.byPath()
+	lines := []string{"Semantic index " + m.options.Semantic.Profile.ID[:12], "Saved facts; one source command variant; borrowed header contexts.", ""}
+	for _, file := range selection.files(m.options.Record.Inventory) {
+		result, exists := indexed[file.Path]
+		if !exists {
+			lines = append(lines, inventoryDisplay(file.Path)+": pending")
+			continue
+		}
+		lines = append(lines, inventoryDisplay(file.Path)+": "+result.Status, fmt.Sprintf("Command %d from %s", result.CommandID, inventoryDisplay(result.CommandSource)))
+		if result.Error != "" {
+			lines = append(lines, inventoryDisplay(result.Error))
+		}
+		for _, diagnostic := range result.Diagnostics {
+			lines = append(lines, fmt.Sprintf("  diagnostic severity %d at line %d: %s", diagnostic.Severity, diagnostic.Range.Start.Line+1, inventoryDisplay(diagnostic.Message)))
+		}
+		for _, include := range result.Includes {
+			lines = append(lines, fmt.Sprintf("  include line %d: %s", include.Range.Start.Line+1, inventoryDisplay(include.Path)))
+		}
+		var output bytes.Buffer
+		printSemanticSymbols(&output, file.Path, result.Status, result.Symbols, "")
+		for _, line := range strings.Split(strings.TrimSpace(output.String()), "\n") {
+			if line != "" {
+				lines = append(lines, strings.ReplaceAll(line, "\t", "  "))
+			}
+		}
+		lines = append(lines, "")
+	}
+	return lines
 }
 
 func inventoryDisplay(value string) string {
@@ -391,7 +477,10 @@ func (m inventoryBrowserModel) detailLines() []string {
 	inspection := inspectInventory(m.options.Record, selection)
 	lines := []string{inventoryDisplay(selection.Path), fmt.Sprintf("%d files  %d bytes", inspection.Files, inspection.Bytes),
 		fmt.Sprintf("%d sources / %d headers / %d excluded", inspection.Sources, inspection.Headers, inspection.Excluded),
-		fmt.Sprintf("%d sources without commands", inspection.MissingCommand), fmt.Sprintf("%d headers await semantic association", inspection.UnmappedHeader), ""}
+		fmt.Sprintf("%d sources without commands", inspection.MissingCommand), fmt.Sprintf("%d headers without direct commands", inspection.UnmappedHeader), ""}
+	if m.options.Semantic != nil {
+		lines = append(lines, "Semantic index: "+m.options.Semantic.Profile.ID[:12]+" (s to inspect)")
+	}
 	if !m.rows[m.cursor].Directory && len(inspection.Largest) == 1 {
 		file := inspection.Largest[0]
 		lines = append(lines, "Blob: "+file.BlobID, fmt.Sprintf("Command IDs: %v", file.CommandIDs))
@@ -413,6 +502,9 @@ func (m inventoryBrowserModel) detailLines() []string {
 }
 
 func (m inventoryBrowserModel) View() tea.View {
+	if m.planView != nil {
+		return m.planView.view(m.width, m.height, m.options.InitialPlan != nil)
+	}
 	width, height := max(1, m.width), max(1, m.height)
 	access := "current; editable"
 	if !m.options.Editable {
@@ -471,7 +563,7 @@ func (m inventoryBrowserModel) View() tea.View {
 	} else if m.page != nil {
 		lines = append(lines, message, "j/k scroll | PgUp/PgDown | Esc/q back", "No scan is started by this browser.")
 	} else {
-		lines = append(lines, message, "Enter open | d details | g group | t tag | n note | x exclude | i include | p plan | ? help | q quit", "List: files / bytes / path. Edits include hidden descendants. / filter | a all | r reload")
+		lines = append(lines, message, "Enter open | d details | s symbols | g group | t tag | n note | x exclude | i include | p plan | ? help | q quit", "List: files / bytes / path. Edits include hidden descendants. / filter | a all | r reload")
 	}
 	view := tea.NewView(strings.Join(fitLines(lines, height, width), "\n"))
 	view.AltScreen = true

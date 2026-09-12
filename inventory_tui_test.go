@@ -80,7 +80,7 @@ func TestInventoryBrowserNavigationAndEditing(t *testing.T) {
 		}
 		model, _ = inventoryBrowserTestKey(t, model, "p")
 		model, _ = inventoryBrowserTestKey(t, model, "enter")
-		if model.page == nil || !strings.Contains(strings.Join(model.page, "\n"), "3 files") {
+		if model.planView == nil || model.planView.plan.Files != 3 {
 			t.Fatal("preview missing")
 		}
 		model, _ = inventoryBrowserTestKey(t, model, "esc")

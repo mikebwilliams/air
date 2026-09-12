@@ -129,7 +129,7 @@ func openInventoryStore(ctx context.Context, filename string, create bool) (*inv
 		}
 		version, application = 1, 1380994899
 	}
-	if (version != 1 && version != 2) || application != 1380994899 {
+	if (version < 1 || version > 6) || application != 1380994899 {
 		return nil, fmt.Errorf("unsupported Repose database (application %d, version %d)", application, version)
 	}
 	if version == 1 {
@@ -137,6 +137,30 @@ func openInventoryStore(ctx context.Context, filename string, create bool) (*inv
 			return nil, fmt.Errorf("upgrade Repose policy storage: %w", err)
 		}
 		version = 2
+	}
+	if version == 2 {
+		if _, err := base.db.ExecContext(ctx, reposeSemanticSchemaSQL); err != nil {
+			return nil, fmt.Errorf("upgrade Repose semantic storage: %w", err)
+		}
+		version = 3
+	}
+	if version == 3 {
+		if _, err := base.db.ExecContext(ctx, reposeAuditSchemaSQL); err != nil {
+			return nil, fmt.Errorf("upgrade Repose scan storage: %w", err)
+		}
+		version = 4
+	}
+	if version == 4 {
+		if _, err := base.db.ExecContext(ctx, reposeRecheckSchemaSQL); err != nil {
+			return nil, fmt.Errorf("upgrade Repose recheck storage: %w", err)
+		}
+		version = 5
+	}
+	if version == 5 {
+		if _, err := base.db.ExecContext(ctx, reposeRecheckBatchSchemaSQL); err != nil {
+			return nil, fmt.Errorf("upgrade Repose recheck batches: %w", err)
+		}
+		version = 6
 	}
 	if _, err := base.db.ExecContext(ctx, "COMMIT"); err != nil {
 		return nil, err
@@ -160,7 +184,7 @@ func openInventoryReadOnly(ctx context.Context, filename string) (*inventoryStor
 	if err = base.db.QueryRowContext(ctx, "PRAGMA user_version").Scan(&version); err == nil {
 		err = base.db.QueryRowContext(ctx, "PRAGMA application_id").Scan(&application)
 	}
-	if err == nil && ((version != 1 && version != 2) || application != 1380994899) {
+	if err == nil && ((version < 1 || version > 6) || application != 1380994899) {
 		err = fmt.Errorf("unsupported Repose database (application %d, version %d)", application, version)
 	}
 	if err != nil {

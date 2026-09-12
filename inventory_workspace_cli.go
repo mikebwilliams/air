@@ -40,13 +40,21 @@ func runInventoryWorkspaceCLI(ctx context.Context, args []string, environment cl
 	}
 	goal := "Find correctness issues."
 	limits := inventoryPlanLimits{MaxFiles: 8, MaxBytes: 65536}
+	useSemantic, indexID := false, ""
+	planTUI := false
 	if command == "plan" {
+		flags.BoolVar(&planTUI, "tui", false, "browse assignments, symbols, and context (uses saved index when available)")
+		flags.BoolVar(&useSemantic, "semantic", false, "plan using saved symbols and include context")
+		flags.StringVar(&indexID, "index", "", "semantic profile ID (implies --semantic)")
 		flags.StringVar(&goal, "goal", goal, "question for every assignment")
 		flags.IntVar(&limits.MaxFiles, "max-files", limits.MaxFiles, "maximum files per assignment")
 		flags.Int64Var(&limits.MaxBytes, "max-bytes", limits.MaxBytes, "maximum target source bytes per assignment")
 	}
 	if err := flags.Parse(args[1:]); err != nil {
 		return err
+	}
+	if planTUI && asJSON {
+		return fmt.Errorf("--tui and --json cannot be used together")
 	}
 	if editing {
 		if flags.NArg() == 0 {
@@ -156,7 +164,7 @@ func runInventoryWorkspaceCLI(ctx context.Context, args []string, environment cl
 			return writeInventoryJSON(environment.Stdout, inspection)
 		}
 		fmt.Fprintf(environment.Stdout, "Inventory: %s\nSelection: path=%q group=%q tag=%q status=%s\n", record.ID[:12], selection.Path, selection.Group, selection.Tag, selection.Status)
-		fmt.Fprintf(environment.Stdout, "%d files, %d bytes; %d sources, %d headers, %d excluded\n%d sources without commands; %d headers awaiting semantic association\n",
+		fmt.Fprintf(environment.Stdout, "%d files, %d bytes; %d sources, %d headers, %d excluded\n%d sources without commands; %d headers without direct commands (see index-status for semantic coverage)\n",
 			inspection.Files, inspection.Bytes, inspection.Sources, inspection.Headers, inspection.Excluded, inspection.MissingCommand, inspection.UnmappedHeader)
 		if err := printInventoryGroups(environment.Stdout, inspection.Groups); err != nil {
 			return err
@@ -172,12 +180,25 @@ func runInventoryWorkspaceCLI(ctx context.Context, args []string, environment cl
 		if err != nil {
 			return err
 		}
+		var snapshot *semanticSnapshot
+		if useSemantic || indexID != "" || planTUI {
+			snapshot, err = store.semanticSnapshot(ctx, record.Inventory, indexID)
+			if err == nil && (snapshot != nil || useSemantic || indexID != "") {
+				plan, err = planSemanticInventory(record, selection, goal, limits, snapshot)
+			}
+		}
+		if err != nil {
+			return err
+		}
 		if asJSON {
 			return writeInventoryJSON(environment.Stdout, plan)
 		}
+		if planTUI {
+			return runInventoryBrowser(ctx, environment, databasePath, record, selection, false, &inventoryPlanSession{Plan: plan, Semantic: snapshot})
+		}
 		return printInventoryPlan(environment.Stdout, plan)
 	case "browse":
-		return runInventoryBrowser(ctx, environment, databasePath, record, selection, selector == "" || selector == "current")
+		return runInventoryBrowser(ctx, environment, databasePath, record, selection, selector == "" || selector == "current", nil)
 	}
 	return nil
 }
@@ -195,11 +216,24 @@ func printInventoryGroups(output io.Writer, groups []inventoryGroupSummary) erro
 func printInventoryPlan(output io.Writer, plan inventoryPlan) error {
 	fmt.Fprintf(output, "Assignment preview: %s\nInventory: %s  snapshot: %s\nGoal: %q\n%d assignments, %d files, %d bytes\n",
 		plan.ID[:12], plan.InventoryID[:12], shortSHA(plan.SnapshotSHA), plan.Goal, len(plan.Assignments), plan.Files, plan.Bytes)
-	fmt.Fprintln(output, "File-based preview only; no scan is saved or started. Bytes measure target files, not model context. Headers await semantic association.")
+	if plan.SemanticProfileID == "" {
+		fmt.Fprintln(output, "File-based preview only; no scan is saved or started. Bytes measure target files, not model context. Headers await semantic association.")
+	} else {
+		fmt.Fprintf(output, "Semantic index: %s; byte ranges are zero-based, end-exclusive. Every selected byte remains covered. Context paths do not count against target limits. No scan is started.\n", plan.SemanticProfileID[:12])
+	}
 	for _, assignment := range plan.Assignments {
 		fmt.Fprintf(output, "\n%s  group=%q  %d files  %d bytes\n", assignment.ID[:12], assignment.Group, len(assignment.Files), assignment.Bytes)
-		for _, file := range assignment.Files {
-			fmt.Fprintf(output, "  %q\n", file.Path)
+		if len(assignment.Ranges) > 0 {
+			for _, part := range assignment.Ranges {
+				fmt.Fprintf(output, "  %q bytes [%d,%d) %q\n", part.Path, part.StartByte, part.EndByte, part.Symbols)
+			}
+			for _, dependency := range assignment.Context {
+				fmt.Fprintf(output, "  context %q (%s)\n", dependency.Path, dependency.Reason)
+			}
+		} else {
+			for _, file := range assignment.Files {
+				fmt.Fprintf(output, "  %q\n", file.Path)
+			}
 		}
 		for _, warning := range assignment.Warnings {
 			fmt.Fprintf(output, "  ! %q\n", warning)

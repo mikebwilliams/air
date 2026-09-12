@@ -16,26 +16,30 @@ type inventoryPlanLimits struct {
 }
 
 type inventoryAssignment struct {
-	ID        string          `json:"id"`
-	Group     string          `json:"group"`
-	Directory string          `json:"directory"`
-	Bytes     int64           `json:"bytes"`
-	Oversized bool            `json:"oversized"`
-	Files     []InventoryFile `json:"files"`
-	Warnings  []string        `json:"warnings"`
+	ID        string                 `json:"id"`
+	Group     string                 `json:"group"`
+	Directory string                 `json:"directory"`
+	Bytes     int64                  `json:"bytes"`
+	Oversized bool                   `json:"oversized"`
+	Files     []InventoryFile        `json:"files"`
+	Warnings  []string               `json:"warnings"`
+	Ranges    []inventoryTargetRange `json:"ranges,omitempty"`
+	Context   []inventoryContextFile `json:"context,omitempty"`
 }
 
 type inventoryPlan struct {
-	ID          string                `json:"id"`
-	Planner     string                `json:"planner"`
-	InventoryID string                `json:"inventory_id"`
-	SnapshotSHA string                `json:"snapshot_sha"`
-	Goal        string                `json:"goal"`
-	Selection   inventorySelection    `json:"selection"`
-	Limits      inventoryPlanLimits   `json:"limits"`
-	Files       int                   `json:"files"`
-	Bytes       int64                 `json:"bytes"`
-	Assignments []inventoryAssignment `json:"assignments"`
+	ID                string                       `json:"id"`
+	Planner           string                       `json:"planner"`
+	InventoryID       string                       `json:"inventory_id"`
+	SnapshotSHA       string                       `json:"snapshot_sha"`
+	Goal              string                       `json:"goal"`
+	Selection         inventorySelection           `json:"selection"`
+	Limits            inventoryPlanLimits          `json:"limits"`
+	Files             int                          `json:"files"`
+	Bytes             int64                        `json:"bytes"`
+	Assignments       []inventoryAssignment        `json:"assignments"`
+	SemanticProfileID string                       `json:"semantic_profile_id,omitempty"`
+	SemanticResults   []inventorySemanticResultRef `json:"semantic_results,omitempty"`
 }
 
 // This preview partitions targets, not semantic review units. Sorted files are

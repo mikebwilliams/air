@@ -71,12 +71,16 @@ func runTerminalFindingsUI(
 	includeAll bool,
 	now func() time.Time,
 ) error {
+	model := newFindingsModel(ctx, external, store, findings, display, includeAll, now)
+	return runTerminalFindingsModel(ctx, input, output, model)
+}
+
+func runTerminalFindingsModel(ctx context.Context, input io.Reader, output io.Writer, model findingsModel) error {
 	inputFile, inputOK := input.(*os.File)
 	outputFile, outputOK := output.(*os.File)
 	if !inputOK || !outputOK || !term.IsTerminal(inputFile.Fd()) || !term.IsTerminal(outputFile.Fd()) {
-		return errors.New("findings requires an interactive terminal; use air status --json for non-interactive output")
+		return errors.New("findings requires an interactive terminal; use --json for non-interactive output")
 	}
-	model := newFindingsModel(ctx, external, store, findings, display, includeAll, now)
 	program := tea.NewProgram(model,
 		tea.WithContext(ctx),
 		tea.WithInput(input),
@@ -112,41 +116,51 @@ type findingPreviewCacheEntry struct {
 	err     string
 }
 
+type findingUIStore interface {
+	AllFindings(context.Context) ([]Finding, error)
+	DismissFinding(context.Context, int64, string, time.Time) error
+	AddFindingNote(context.Context, int64, string, time.Time) error
+	ReopenFinding(context.Context, int64, time.Time) error
+	FindingEvents(context.Context, int64) ([]FindingEvent, error)
+	FindingReview(context.Context, int64) (FindingReview, error)
+}
+
 type findingsModel struct {
-	ctx             context.Context
-	external        findingExternalCommands
-	store           *Store
-	now             func() time.Time
-	all             []Finding
-	visible         []Finding
-	display         map[int64]findingDisplayMetadata
-	cursor          int
-	width           int
-	height          int
-	detailOffset    int
-	statusFilter    string
-	severityFilter  string
-	sortMode        findingSortMode
-	query           string
-	queryBeforeEdit string
-	mode            findingsInputMode
-	input           string
-	message         string
-	help            bool
-	events          []FindingEvent
-	review          FindingReview
-	colorProfile    colorprofile.Profile
-	preview         findingDiffPreview
-	previewError    string
-	previewFinding  int64
-	previewLoading  bool
-	previewCache    map[int64]findingPreviewCacheEntry
+	ctx                context.Context
+	external           findingExternalCommands
+	store              findingUIStore
+	now                func() time.Time
+	all                []Finding
+	visible            []Finding
+	display            map[int64]findingDisplayMetadata
+	cursor             int
+	width              int
+	height             int
+	detailOffset       int
+	statusFilter       string
+	severityFilter     string
+	verificationFilter string
+	sortMode           findingSortMode
+	query              string
+	queryBeforeEdit    string
+	mode               findingsInputMode
+	input              string
+	message            string
+	help               bool
+	events             []FindingEvent
+	review             FindingReview
+	colorProfile       colorprofile.Profile
+	preview            findingDiffPreview
+	previewError       string
+	previewFinding     int64
+	previewLoading     bool
+	previewCache       map[int64]findingPreviewCacheEntry
 }
 
 func newFindingsModel(
 	ctx context.Context,
 	external findingExternalCommands,
-	store *Store,
+	store findingUIStore,
 	findings []Finding,
 	display map[int64]findingDisplayMetadata,
 	includeAll bool,
@@ -157,18 +171,19 @@ func newFindingsModel(
 		status = "all"
 	}
 	model := findingsModel{
-		ctx:            ctx,
-		external:       external,
-		store:          store,
-		now:            now,
-		all:            findings,
-		display:        display,
-		width:          100,
-		height:         30,
-		statusFilter:   status,
-		severityFilter: "all",
-		sortMode:       findingsSortID,
-		previewCache:   make(map[int64]findingPreviewCacheEntry),
+		ctx:                ctx,
+		external:           external,
+		store:              store,
+		now:                now,
+		all:                findings,
+		display:            display,
+		width:              100,
+		height:             30,
+		statusFilter:       status,
+		severityFilter:     "all",
+		verificationFilter: "all",
+		sortMode:           findingsSortID,
+		previewCache:       make(map[int64]findingPreviewCacheEntry),
 	}
 	model.applyFilters(0)
 	model.loadDetail()
@@ -291,8 +306,15 @@ func (m findingsModel) handleKey(key string) (tea.Model, tea.Cmd) {
 		m.query = ""
 		m.statusFilter = "open"
 		m.severityFilter = "all"
+		m.verificationFilter = "all"
 		m.applyFilters(m.selectedID())
 		return m, m.refreshSelection()
+	case "V":
+		if m.external.snapshot {
+			m.verificationFilter = nextValue(m.verificationFilter, []string{"all", "unchecked", "confirmed", "false_positive", "uncertain"})
+			m.applyFilters(m.selectedID())
+			return m, m.refreshSelection()
+		}
 	case "D":
 		if finding, ok := m.selectedFinding(); ok {
 			if findingDisposition(finding) != "open" {
@@ -302,7 +324,13 @@ func (m findingsModel) handleKey(key string) (tea.Model, tea.Cmd) {
 				m.input = ""
 			}
 		}
+	case "R":
+		return m, m.reload(m.selectedID())
 	case "d":
+		if m.external.snapshot {
+			m.message = "Snapshot source is shown in the preview."
+			return m, nil
+		}
 		return m, m.launchExternal("Diff", m.external.diff)
 	case "o":
 		return m, m.launchExternal("Editor", m.external.open)
@@ -475,6 +503,9 @@ func (m *findingsModel) reload(preferredID int64) tea.Cmd {
 		return nil
 	}
 	m.all = findings
+	if m.external.snapshot {
+		m.display = auditFindingDisplay(findings)
+	}
 	m.applyFilters(preferredID)
 	return m.refreshSelection()
 }
@@ -491,6 +522,9 @@ func (m *findingsModel) applyFilters(preferredID int64) {
 			continue
 		}
 		if m.severityFilter != "all" && m.severityFilter != finding.Severity {
+			continue
+		}
+		if m.verificationFilter != "" && m.verificationFilter != "all" && auditVerificationOutcome(finding) != m.verificationFilter {
 			continue
 		}
 		if query != "" && !strings.Contains(strings.ToLower(findingSearchText(finding)), query) {
@@ -670,9 +704,20 @@ func (m findingsModel) pageSize() int {
 }
 
 func (m findingsModel) View() tea.View {
-	view := tea.NewView(m.render())
+	content := m.render()
+	if m.external.snapshot {
+		content = strings.Join(fitLines(strings.Split(content, "\n"), max(1, m.height), max(1, m.width)), "\n")
+	}
+	view := tea.NewView(content)
 	view.AltScreen = true
 	return view
+}
+
+func (m findingsModel) sortLabel() string {
+	if m.external.snapshot && m.sortMode == findingsSortAuthor {
+		return "scan"
+	}
+	return string(m.sortMode)
 }
 
 func (m findingsModel) render() string {
@@ -684,8 +729,15 @@ func (m findingsModel) render() string {
 	if height < 10 {
 		height = 10
 	}
-	header := fmt.Sprintf("AIR findings  %d/%d  status:%s  severity:%s  sort:%s",
-		m.position(), len(m.visible), m.statusFilter, m.severityFilter, m.sortMode)
+	name := "AIR"
+	if m.external.snapshot {
+		name = "Repose"
+	}
+	header := fmt.Sprintf(name+" findings  %d/%d  status:%s  severity:%s  sort:%s",
+		m.position(), len(m.visible), m.statusFilter, m.severityFilter, m.sortLabel())
+	if m.external.snapshot && m.verificationFilter != "" && m.verificationFilter != "all" {
+		header += "  verification:" + m.verificationFilter
+	}
 	if m.query != "" {
 		header += "  search:" + strconv.Quote(m.query)
 	}
@@ -741,10 +793,13 @@ func (m findingsModel) previewLines(height, width int) []string {
 		return nil
 	}
 	finding, ok := m.selectedFinding()
-	if !ok {
-		return []string{m.style("Introducing diff", "1", "36"), "No finding is selected."}
-	}
 	heading := "Introducing diff"
+	if m.external.snapshot {
+		heading = "Observed source"
+	}
+	if !ok {
+		return []string{m.style(heading, "1", "36"), "No finding is selected."}
+	}
 	if finding.File != nil {
 		heading += " — " + *finding.File
 	}
@@ -756,7 +811,7 @@ func (m findingsModel) previewLines(height, width int) []string {
 		return append(lines, m.style("Loading relevant hunk…", "2"))
 	}
 	if m.previewError != "" {
-		return append(lines, wrapText("Diff unavailable: "+m.previewError, width)...)
+		return append(lines, wrapText("Preview unavailable: "+m.previewError, width)...)
 	}
 	if m.preview.Message != "" {
 		return append(lines, wrapText(m.preview.Message, width)...)
@@ -865,6 +920,9 @@ func (m findingsModel) findingListLine(
 	age := fmt.Sprintf("%4s", formatFindingAge(now, display.CommitDate))
 	blame := padRight(truncateTerminalText(findingBlame(display), 14), 14)
 	title := singleLine(finding.Title)
+	if len(finding.Verifications) > 0 {
+		title = "[" + auditVerificationOutcome(finding) + "] " + title
+	}
 	if selected {
 		return m.style(fmt.Sprintf("> #%s %s %s %s %s%s  %s",
 			id, severity, disposition, age, blame, location, title), "1", "7")
@@ -915,16 +973,26 @@ func (m findingsModel) detailLines(width int) []string {
 		}
 		lines = append(lines, "Location: "+location)
 	}
-	lines = append(lines, "Introduced: "+shortSHA(finding.IntroducedSHA))
+	if finding.ObservedSHA != "" {
+		lines = append(lines, "Observed: "+shortSHA(finding.ObservedSHA), "Scan: "+finding.ScanID, "Assignment: "+shortSHA(finding.TaskID), fmt.Sprintf("Attempt: %d", finding.AttemptID))
+	} else {
+		lines = append(lines, "Introduced: "+shortSHA(finding.IntroducedSHA))
+	}
 	display := m.display[finding.ID]
 	if !display.CommitDate.IsZero() {
 		now := time.Now()
 		if m.now != nil {
 			now = m.now()
 		}
-		lines = append(lines, "Commit age: "+formatFindingAge(now, display.CommitDate))
+		label := "Commit age: "
+		if m.external.snapshot {
+			label = "Finding age: "
+		}
+		lines = append(lines, label+formatFindingAge(now, display.CommitDate))
 	}
-	lines = append(lines, "Blame: "+findingBlame(display))
+	if !m.external.snapshot {
+		lines = append(lines, "Blame: "+findingBlame(display))
+	}
 	if m.review.ID != 0 {
 		identity := m.review.Model
 		if m.review.Harness != "" && m.review.Harness != codexReviewerName {
@@ -944,6 +1012,12 @@ func (m findingsModel) detailLines(width int) []string {
 		lines = append(lines, wrapPrefixed("Reason: ", finding.DismissReason, width)...)
 	case "resolved":
 		lines = append(lines, "Resolved: "+shortSHA(*finding.ResolvedSHA))
+	}
+	if len(finding.Verifications) > 0 {
+		v := finding.Verifications[len(finding.Verifications)-1]
+		lines = append(lines, "", m.style("Latest verification: "+v.Outcome, "1", "36"))
+		lines = append(lines, wrapText(fmt.Sprintf("%s/%s/%s at %s; recheck %s", v.Harness, v.Model, v.Effort, v.CheckedAt.Format(time.RFC3339), shortSHA(v.ScanID)), width)...)
+		lines = append(lines, wrapText(v.Reason, width)...)
 	}
 	lines = append(lines, "", m.style("Description:", "1", "36"))
 	lines = append(lines, wrapText(finding.Description, width)...)
@@ -975,6 +1049,9 @@ func (m findingsModel) footer() string {
 	case findingsConfirmReopen:
 		return fmt.Sprintf("Reopen #%d?  y yes, n no", m.selectedID())
 	default:
+		if m.external.snapshot {
+			return "j/k move | / search | D dismiss | r reopen | n note | R reload | ? help | q quit"
+		}
 		return "↑/↓ j/k move  ←/→ sort  / search  d diff  o open  D dismiss  r reopen  n note  ? help  q quit"
 	}
 }
@@ -1000,6 +1077,9 @@ n             append an audited note
 q             quit
 
 All changes use the same audited finding lifecycle as the singular finding command.`, width)
+	if m.external.snapshot {
+		lines = wrapText("j/k or arrows: select finding; left/right: sort\n/: search; s: status; v: severity; V: verification; c: clear filters\nCtrl+U/Ctrl+D: scroll details\nD: dismiss with reason; r: reopen; n: add note\nR: reload saved findings; ?: help; q: quit\nPreview shows the recorded snapshot source.\nVerification history preserves original findings and manual dispositions.", width)
+	}
 	if len(lines) != 0 {
 		lines[0] = m.style(lines[0], "1", "36")
 	}
@@ -1048,7 +1128,7 @@ func findingDisposition(finding Finding) string {
 func findingSearchText(finding Finding) string {
 	parts := []string{
 		strconv.FormatInt(finding.ID, 10), finding.Severity, findingDisposition(finding),
-		finding.Title, finding.Description, finding.IntroducedSHA, finding.DismissReason,
+		finding.Title, finding.Description, finding.IntroducedSHA, finding.ObservedSHA, finding.ScanID, finding.TaskID, finding.DismissReason,
 	}
 	if finding.ResolvedSHA != nil {
 		parts = append(parts, *finding.ResolvedSHA)
@@ -1058,6 +1138,10 @@ func findingSearchText(finding Finding) string {
 	}
 	if finding.Symbol != nil {
 		parts = append(parts, *finding.Symbol)
+	}
+	if len(finding.Verifications) > 0 {
+		v := finding.Verifications[len(finding.Verifications)-1]
+		parts = append(parts, v.Outcome, v.Model, v.Reason)
 	}
 	return strings.Join(parts, " ")
 }

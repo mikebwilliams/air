@@ -1,4 +1,4 @@
-.TH REPOSE 1 "September 2026" "Repose 0.3-dev" "User Commands"
+.TH REPOSE 1 "September 2026" "Repose 0.5-dev" "User Commands"
 .SH NAME
 repose \- sustained C/C++ repository audits
 .SH SYNOPSIS
@@ -11,8 +11,97 @@ repose \- sustained C/C++ repository audits
 Repose builds a reviewable inventory of a fixed repository snapshot, primarily
 for KiCad. Use a clean, dedicated scan checkout with a compilation database
 configured for that checkout. This release implements inventory building and
-review. Model scanning and semantic indexing are upcoming milestones.
+review, clangd semantic indexing, assignment previews, and durable parallel scanning.
 .SH COMMANDS
+.TP
+.B repose scan create --model MODEL
+Freeze an approved inventory, selected assignments, prompts, goal, and model
+settings. Accepts --inventory ID, --path, --group, --tag, --index, --goal,
+--max-files, --max-bytes, --instructions FILE, --harness, --effort, --binary,
+and --timeout. Defaults to codex/high and a 30 minute per-assignment timeout.
+Gemini requires --effort default. Creation makes no model calls.
+.TP
+.B repose scan run ID
+.br
+.B repose scan resume [ID]
+Execute frozen assignments with --jobs N (default 2, range 1..32).
+Resume without an ID selects the only scan with pending or abandoned work in
+the checkout; --retry-failed also includes scans with failed assignments.
+Completed and invalidated scans are excluded. Multiple candidates are listed
+and require an explicit ID. No eligible scans is an error.
+--timeout DURATION overrides the saved per-assignment timeout for this invocation,
+including retries. It must be positive. Omitting it uses the saved timeout, even
+for older scans; overrides do not change the saved default. New attempts record
+the effective timeout before dispatch, shown by scan attempts and its JSON export.
+--limit N caps total further attempts across all workers, including throttle
+retries; --jobs 32 --limit 32 runs one batch of at most 32 attempts.
+--duration D stops dispatching after D and
+drains active work. Both default to unlimited. --retry-failed retries failures
+while retaining prior attempts. Completed assignments are not repeated.
+One coordinator runs per checkout. Interrupted or abandoned tasks are recovered
+on resume. Changed goals, model settings, or scope require a new scan.
+Codex quota exhaustion pauses dispatch and drains active work. Blocked assignments
+remain pending and can be resumed when capacity is available, without --retry-failed.
+Temporary Codex throttling waits 30s, 1m, then 2m (or a longer provider delay),
+draining active workers and using a single probe before restoring parallel dispatch.
+After three unsuccessful probes, the scan pauses. Cooldowns survive resume;
+all retries count toward --limit. Provider-limit details appear in scan show and
+scan attempts. Other harness errors remain explicit failures.
+.TP
+.B repose scan pause|interrupt ID
+Request a running coordinator to drain active work or cancel it, respectively.
+Ctrl-C and SIGTERM also cancel active work. Completed results remain saved.
+.TP
+.B repose scan list|show|tasks|attempts [ID]
+List scans, inspect a scan's status, list its tasks, or inspect attempt history.
+All except list require a scan ID. --json exports complete records, including
+frozen task prompts or raw attempt outputs. Scan IDs accept hexadecimal prefixes
+of at least four characters or latest.
+.TP
+.B repose scan prompt ID TASK
+Print a frozen assignment prompt. TASK is an ordinal or assignment ID prefix.
+.TP
+.B repose findings
+Open the findings TUI. --scan ID filters a scan; --all includes dismissed findings;
+--json exports instead of opening the terminal. The preview shows source at the
+observed snapshot. Use / to search, s/v to filter status/severity, D to dismiss,
+r to reopen, n to add a note, and R to reload while scanning. V filters the latest
+verification verdict; --verification accepts all, unchecked, confirmed,
+false_positive, or uncertain. Verdicts and their reasoning appear in the preview
+details; prior results remain in the history and JSON export.
+.TP
+.B repose recheck [FINDING_ID...] --model MODEL
+Verify existing findings against their observed snapshot, grouping them by their
+original review assignment. --batch-max (default 5) caps findings per model call;
+smaller batches remain smaller and never combine different source assignments.
+--scan defaults to latest: the newest completed original scan, excluding queued
+reviews and recheck passes. An explicit --scan ID can select a partial scan.
+Optional finding IDs and --path PREFIX narrow scope; dismissed findings are excluded.
+Accepts --harness, --effort (default high), --binary, --timeout (default 30m),
+--jobs (default 2), --limit, --duration, and --retry-failed as for scan execution.
+Jobs count concurrent batches, limit counts batch attempts including retries,
+and timeout applies per batch. --batch-max 1 runs a separate call for each finding.
+--dry-run previews without writes or model calls; --create-only saves the queue
+and prompts without dispatch. Repeating the same source/selection/model resumes
+the matching pass and skips its completed checks. Changing models, selection, or
+batch maximum creates a separate pass. --force creates a fresh pass; resume it by
+its printed ID. Older single-finding passes still resume by ID with frozen inputs.
+Use scan show, tasks, prompt, attempts, pause, interrupt, and resume with the recheck
+ID. Quota handling, cooldowns, and attempt caps apply. --timeout explicitly overrides
+a resumed pass. Frozen selections include findings later dismissed by the user.
+Each finding receives an independent confirmed, false_positive, or uncertain
+result with its own reasoning. Missing, duplicate, or malformed results fail the
+whole batch without publishing partial verdicts; --retry-failed retries that batch.
+Uncertain
+completes the check but leaves evidence inconclusive. Results preserve original
+findings and manual dispositions; no automatic dismissal occurs. Model identity,
+snapshot, raw responses, and verification history remain available for inspection.
+.TP
+.B repose finding show|dismiss|reopen|note ID
+Inspect or triage one finding. Dismiss and note require --reason TEXT.
+Findings preserve the observed commit, scan, assignment, attempt, and model
+provenance. Recheck verdicts supplement original findings. Automatic consolidation
+is not implemented.
 .TP
 .B repose inventory build
 Save an immutable inventory of HEAD, build inputs, tracked files, and policy.
@@ -55,8 +144,9 @@ Defaults to 8 files and 65536 target bytes per assignment; oversized files remai
 flagged singletons. Every selected target appears exactly once. --json exports
 inventory/snapshot IDs, goal, selection, limits, target facts and annotations.
 This command neither saves a scan nor calls a model or validates the checkout.
-Byte counts are target file sizes, not model context limits. Semantic
-relationships and header associations are not inferred.
+Byte counts measure targets, not model context limits. --semantic uses saved
+symbols and include context. --tui opens an assignment browser and automatically
+uses a matching saved index when available.
 .TP
 .B repose inventory browse [ID]
 Open the terminal inventory browser. Accepts the same selection filters as
@@ -68,6 +158,36 @@ t for tag, n for note, x to exclude, i to include, and p to preview assignments.
 Enter submits edits; Escape cancels. Edits affect all paths under the selected
 prefix, including hidden files. Concurrent policy changes require a reload and
 retry. Press ? for all keys and q to quit.
+The s key shows saved semantic facts; p uses semantic planning when a matching
+index is available. The r key reloads both policy and indexing results.
+In the assignment browser, Tab switches panes; t/s/c/d select target ranges,
+symbols, context dependencies, and diagnostics. Enter opens wrapped full details,
+/ searches assignments and symbols, and ? shows plan and assignment IDs, goal,
+limits, and help. Symbols are restricted to overlapping declarations; enclosing
+scopes that extend outside the assignment are labeled. Diagnostics describe
+whole-file parsing. Escape returns from details; q returns to the inventory.
+.TP
+.B repose inventory index [ID]
+Index selected C/C++ files using clangd 21+. Uses one shared process, two workers
+by default, and a private compilation database. Saves per-file results and
+resumes on rerun; interruption retains completed work. The first source command
+variant is used. Headers borrow commands from observed includers. Parse errors
+remain visible as partial results. Index profiles are independent of policy edits.
+Requires a matching clean checkout/build. Only one index coordinator runs per
+checkout; inspection and policy editing remain available.
+.TP
+.B repose inventory index-status [ID]
+Show saved semantic coverage, command provenance, and parse errors for the
+selection. No compiler or model is started.
+.TP
+.B repose inventory symbols [ID]
+Show saved symbol names, kinds and line numbers. JSON includes exact ranges,
+command provenance, includes and diagnostics. Partial results remain labelled.
+.TP
+.B repose inventory includes [ID]
+Show resolved direct include links. Excluded dependencies remain visible as
+context. Includes are observations from the indexed configuration, not a complete
+transitive graph.
 .TP
 .B repose inventory check [ID]
 Validate the checkout commit, tracked cleanliness, and recorded build inputs.
@@ -151,10 +271,46 @@ Question for each preview assignment. Defaults to "Find correctness issues."
 .TP
 .B --max-files N
 Maximum targets per preview assignment. Defaults to 8; must be positive.
+For index, limits further attempts and defaults to 0 (unlimited).
 .TP
 .B --max-bytes N
 Maximum target file bytes per preview assignment. Defaults to 65536; must be
 positive. A larger file stays in a flagged singleton assignment.
+.TP
+.B --semantic
+Use saved symbols and include context for plan. Every selected byte remains
+covered once; oversized functions and partial/unindexed files stay intact with
+warnings. Ranges are zero-based with exclusive ends. Context paths do not count
+toward target limits. No scan is saved or started.
+.TP
+.B --tui
+Open the plan's assignment browser directly. Accepts the same scope, goal, size,
+and index options as plan. Uses a matching saved index when available, otherwise
+whole-file targets. An explicit --semantic still requires an index. Incompatible
+with --json. The displayed plan and semantic results stay fixed until reopened.
+On narrow terminals, Tab switches between assignments and their items.
+.TP
+.B --index ID
+Select a semantic profile matching the inventory snapshot/build. Available on
+index-status, symbols, includes and plan; implies --semantic for plan. Defaults
+to the latest matching profile, including an index still building.
+.TP
+.B --clangd FILE
+Clangd executable for index; defaults to clangd. Requires version 21 or newer.
+.TP
+.B --jobs N
+Concurrent index workers; defaults to 2, accepts 1 through 32.
+.TP
+.B --timeout DURATION
+Initialization and per-file indexing timeout; defaults to 2m.
+.TP
+.B --retry-errors
+Retry partial, failed and unavailable index results.
+.TP
+.B --refresh
+Reparse selected index files while preserving older results. Use after changes
+to transitive generated dependencies, SDKs or system libraries. Direct and
+explicit forced-include fingerprints are checked automatically on rerun.
 .SH INVENTORY IDS
 Use a full ID or an unambiguous hexadecimal prefix of at least four characters.
 Inventory content is immutable. Rebuilding after changing policy creates a new
@@ -168,7 +324,9 @@ version, which can differ after restoring an earlier policy.
 Worktree-local inventory storage, separate from AIR and other linked worktrees.
 .SH LIMITATIONS
 Untracked files are outside the source inventory. Generated and external
-compilation inputs are counted separately. Headers await semantic association.
+compilation inputs are counted separately. Header parsing uses borrowed source
+commands and can be incomplete when include ordering matters. Only one source
+command variant is indexed; full reference graphs are not yet available.
 The build input checks do not establish freshness of generated headers,
 external dependencies, compiler binaries, or an index.
 Inspection uses read-only database connections without schema migration.

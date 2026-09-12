@@ -16,9 +16,10 @@ type findingCommandBuilder func(context.Context, Finding) (*exec.Cmd, error)
 type findingPreviewLoader func(context.Context, Finding) (findingDiffPreview, error)
 
 type findingExternalCommands struct {
-	diff    findingCommandBuilder
-	open    findingCommandBuilder
-	preview findingPreviewLoader
+	snapshot bool
+	diff     findingCommandBuilder
+	open     findingCommandBuilder
+	preview  findingPreviewLoader
 }
 
 func newFindingExternalCommands(repository *GitRepository, commandContext commandContextFunc) findingExternalCommands {

@@ -14,11 +14,26 @@ import (
 	"text/tabwriter"
 )
 
-const reposeVersion = "0.3-dev"
+const reposeVersion = "0.5-dev"
 
 const reposeHelp = `Repose — sustained C/C++ repository audits
 
 Usage:
+  repose scan create --model MODEL [--harness codex|claude|gemini] [--effort LEVEL]
+                     [--inventory ID] [--path PREFIX] [--goal TEXT] [--timeout DURATION] [--repo DIR]
+  repose scan run ID [--jobs N] [--limit N] [--duration DURATION]
+                     [--retry-failed] [--timeout DURATION] [--repo DIR]
+  repose scan resume [ID] [--jobs N] [--limit N] [--duration DURATION]
+                          [--retry-failed] [--timeout DURATION] [--repo DIR]
+  repose scan list|show|tasks|attempts [ID] [--json] [--repo DIR]
+  repose scan prompt ID TASK [--repo DIR]
+  repose scan pause|interrupt ID [--repo DIR]
+  repose recheck [FINDING_ID...] --model MODEL [--scan ID|latest] [--path PREFIX]
+                 [--harness codex|claude|gemini] [--effort LEVEL] [--timeout DURATION]
+                 [--jobs N] [--limit N] [--duration DURATION] [--retry-failed]
+                 [--dry-run|--create-only] [--force] [--json] [--repo DIR]
+  repose findings [--scan ID] [--verification VERDICT] [--all] [--json] [--repo DIR]
+  repose finding show|dismiss|reopen|note ID [--reason TEXT] [--repo DIR]
   repose inventory build [--repo DIR] [--compile-commands FILE] [--policy FILE]
   repose inventory list [--repo DIR]
   repose inventory show [ID] [--repo DIR]
@@ -31,7 +46,13 @@ Usage:
   repose inventory annotate PREFIX... [--tag TAG] [--note TEXT] [--repo DIR]
   repose inventory plan [ID] [--path PREFIX] [--group NAME] [--tag TAG]
                         [--goal TEXT] [--max-files N] [--max-bytes N] [--repo DIR]
+                        [--semantic] [--index ID] [--tui]
   repose inventory browse [ID] [--path PREFIX] [--repo DIR]
+  repose inventory index [ID] [--path PREFIX] [--jobs N] [--max-files N]
+                         [--timeout DURATION] [--retry-errors] [--refresh] [--repo DIR]
+  repose inventory index-status [ID] [--path PREFIX] [--index ID] [--repo DIR]
+  repose inventory symbols [ID] [--path PREFIX] [--index ID] [--repo DIR]
+  repose inventory includes [ID] [--path PREFIX] [--index ID] [--repo DIR]
   repose inventory check [ID] [--repo DIR]
   repose inventory approve ID [--repo DIR]
   repose inventory exclude PREFIX... --reason TEXT [--repo DIR]
@@ -49,7 +70,7 @@ Build uses a clean, dedicated checkout. It inherits the current policy and build
 path; the first build defaults to build/compile_commands.json. --policy replaces
 the saved policy after a successful build.
 --compile-commands is relative to the checkout; --repo and --policy are relative
-to the current directory. No compiler, model, or repository script is executed.
+to the current directory. Inventory build executes no compiler or model.
 
 Files default to in-scope code. Status: included, excluded, all, missing-command,
 or header-unmapped. Path prefixes match exact files or directory descendants.
@@ -66,11 +87,28 @@ Defaults: 8 files / 65536 target bytes, goal: Find correctness issues.
 Each selected file appears once; oversized files remain flagged singletons.
 The preview uses saved facts, without validating the live checkout, and neither
 saves a scan nor invokes a model. Byte limits are not model context limits.
+Plan --semantic uses saved symbol boundaries and resolved includes; --index ID
+selects a semantic profile and implies --semantic. Missing/partial files remain
+whole and flagged. Byte ranges cover all selected contents, including gaps.
+Plan --tui opens an assignment browser, using a saved index when available.
+Tab switches panes; t/s/c/d select targets, symbols, context, or diagnostics.
+Enter opens full details; / searches assignments and symbols; ? shows plan IDs
+and help. --tui accepts the same goal, scope, and limits; it conflicts with --json.
+
+Index runs clangd 21+ (override with --clangd FILE), using one shared process and
+two file workers by default. It validates the snapshot/build, saves each result,
+and resumes completed work on rerun. --max-files limits further attempts; Ctrl-C
+leaves completed results saved. --retry-errors retries gaps; --refresh reparses
+the selection. One source command variant is indexed; headers borrow commands
+from observed includers. Index-status, symbols, and includes read saved facts.
+They accept the same selection filters as files. Indexing is independent of
+policy edits; transitive/environment changes require --refresh. No models run.
 
 Browse opens the terminal inventory browser; ? shows keys. Current is editable,
 while explicit IDs and latest open read-only. Edits affect all paths under the
 selected prefix, including files hidden by display filters. The browser opens
-a write connection only when saving an edit.
+a write connection only when saving an edit. The p key opens an assignment
+browser for the selected scope; q returns to the inventory.
 
 Exclude/include derive a new current inventory using the saved map. Old versions
 remain unchanged. Excluded files remain available as context. Changes are shown
@@ -78,8 +116,44 @@ in a short preview; --json includes the full change list. Exclusions lists defau
 rules and explicit overrides with matched/effective C/C++ file counts.
 Policy export writes editable JSON; policy import replaces the current policy.
 
-Inventory building and review are implemented. Model scans and semantic indexing
-are the next milestones; see docs/repose-design.md.
+Scan create freezes an approved inventory, subset, goal, model settings, source
+prompts, and semantic plan. --instructions FILE freezes additional project guidance.
+It requires --model; runner defaults to codex, effort to high, timeout to 30m.
+Gemini requires --effort default. --binary selects a runner executable.
+Creation makes no model calls. Run/resume share one coordinator lock per checkout.
+Run/resume --timeout DURATION overrides the saved per-assignment timeout for that
+invocation only; omitting it uses the saved limit. Durations must be positive.
+New attempts record their effective timeout before dispatch; scan attempts shows it.
+Resume without an ID selects the only scan with pending or abandoned work;
+--retry-failed also includes failed work. Completed and invalidated scans are
+excluded. Multiple candidates are listed for an explicit choice. With no eligible
+scans, resume reports an error.
+--limit caps total attempts across workers, including throttle retries, per run.
+--jobs 32 --limit 32 runs one batch of at most 32 attempts. --duration drains
+active work when time expires. Pause drains; interrupt and Ctrl-C cancel active
+workers. Resume recovers unfinished attempts and preserves completed assignments.
+Failed work is retried only with --retry-failed. Raw outputs, errors, usage and
+findings are retained per attempt. Findings refer to the observed snapshot.
+Codex quota exhaustion pauses dispatch and drains active work; blocked tasks remain
+pending for resume. Temporary throttling uses shared cooldowns and single probes
+(30s, 1m, 2m, or a longer provider delay), then pauses after three failed probes.
+Cooldowns survive resume. Scan show/attempts retain provider-limit details.
+Findings opens the triage TUI; --json exports instead. R reloads, D dismisses,
+r reopens, n adds a note. The preview shows source at the observed snapshot.
+Recheck verifies existing findings at their observed snapshot with an explicit
+model. --scan defaults to the newest completed original scan. Optional finding IDs
+and --path restrict scope; dismissed findings are excluded. Findings are grouped
+by original assignment; --batch-max caps each batch (default 5). Smaller batches
+stay small. Each finding receives an independent verdict and reasoning.
+--dry-run only previews; --create-only saves prompts and a queue without model calls.
+Repeating the same selection/model/batch maximum resumes its saved pass; --force
+creates a fresh pass (resume it by ID). Rechecks share scan pause/interrupt/resume,
+quota handling, and timeouts. --jobs counts parallel batches, --limit counts batch
+attempts, and --timeout applies per batch. Verdicts are confirmed, false_positive, or
+uncertain, with reasoning and full history. Original findings and manual decisions
+are preserved. Findings V filters latest verdicts; --verification also filters CLI
+output (all, unchecked, confirmed, false_positive, uncertain).
+Cross-scan deduplication and token/cost budgets remain future work.
 `
 
 func runReposeCLI(ctx context.Context, args []string, environment cliEnvironment) error {
@@ -94,6 +168,23 @@ func runReposeCLI(ctx context.Context, args []string, environment cliEnvironment
 		fmt.Fprintf(environment.Stdout, "repose %s\n", reposeVersion)
 		return nil
 	}
+	if args[0] == "scan" {
+		if containsHelpFlag(args[1:]) {
+			fmt.Fprint(environment.Stdout, reposeHelp)
+			return nil
+		}
+		return runAuditCLI(ctx, args[1:], environment)
+	}
+	if args[0] == "recheck" {
+		if containsHelpFlag(args[1:]) {
+			fmt.Fprint(environment.Stdout, reposeHelp)
+			return nil
+		}
+		return runAuditRecheckCLI(ctx, args[1:], environment)
+	}
+	if args[0] == "findings" || args[0] == "finding" {
+		return runAuditFindingsCLI(ctx, args, environment)
+	}
 	if args[0] != "inventory" {
 		return fmt.Errorf("unknown command %q; run repose help", args[0])
 	}
@@ -107,6 +198,8 @@ func runReposeCLI(ctx context.Context, args []string, environment cliEnvironment
 func runInventoryCLI(ctx context.Context, args []string, environment cliEnvironment) error {
 	command := args[0]
 	switch command {
+	case "index", "index-status", "symbols", "includes":
+		return runSemanticCLI(ctx, args, environment)
 	case "tree", "groups", "inspect", "group", "annotate", "plan", "browse":
 		return runInventoryWorkspaceCLI(ctx, args, environment)
 	case "exclude", "include", "exclusions", "policy":
@@ -393,8 +486,8 @@ func printInventorySummary(output io.Writer, record InventoryRecord) error {
 	}
 	fmt.Fprintf(output, "Files:     %d tracked; %d in scope (%d sources, %d headers); %d excluded\n", len(inventory.Files), total.included, total.sources, total.headers, total.excluded)
 	fmt.Fprintf(output, "Commands:  %d entries; %d external and %d untracked input files outside the inventory\n", len(inventory.Commands), len(external), len(untracked))
-	fmt.Fprintf(output, "Coverage:  %d in-scope sources without commands; %d headers awaiting semantic association\n", total.missing, unmappedHeaders)
-	fmt.Fprintln(output, "Compiler associations are inventory facts; semantic indexing and model review have not run.")
+	fmt.Fprintf(output, "Coverage:  %d in-scope sources without commands; %d headers without direct compilation commands\n", total.missing, unmappedHeaders)
+	fmt.Fprintln(output, "Use inventory index-status for saved semantic coverage. Inventory approval does not run a model.")
 	if unmatched := inventoryUnmatchedPrefixes(inventory); len(unmatched) > 0 {
 		fmt.Fprintf(output, "Retained policy prefixes without matches in this snapshot: %s\n", strings.Join(unmatched, ", "))
 	}

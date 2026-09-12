@@ -159,17 +159,23 @@ type ReviewIdentity struct {
 }
 
 type Finding struct {
-	ID            int64      `json:"id"`
-	IntroducedSHA string     `json:"introduced_sha"`
-	ResolvedSHA   *string    `json:"resolved_sha,omitempty"`
-	DismissedAt   *time.Time `json:"dismissed_at,omitempty"`
-	DismissReason string     `json:"dismiss_reason,omitempty"`
-	Severity      string     `json:"severity"`
-	Title         string     `json:"title"`
-	Description   string     `json:"description"`
-	File          *string    `json:"file,omitempty"`
-	Line          *int       `json:"line,omitempty"`
-	Symbol        *string    `json:"symbol,omitempty"`
+	ID            int64               `json:"id"`
+	IntroducedSHA string              `json:"introduced_sha,omitempty"`
+	ObservedSHA   string              `json:"observed_sha,omitempty"`
+	ObservedAt    *time.Time          `json:"observed_at,omitempty"`
+	ScanID        string              `json:"scan_id,omitempty"`
+	TaskID        string              `json:"task_id,omitempty"`
+	AttemptID     int64               `json:"attempt_id,omitempty"`
+	ResolvedSHA   *string             `json:"resolved_sha,omitempty"`
+	DismissedAt   *time.Time          `json:"dismissed_at,omitempty"`
+	DismissReason string              `json:"dismiss_reason,omitempty"`
+	Severity      string              `json:"severity"`
+	Title         string              `json:"title"`
+	Description   string              `json:"description"`
+	File          *string             `json:"file,omitempty"`
+	Line          *int                `json:"line,omitempty"`
+	Symbol        *string             `json:"symbol,omitempty"`
+	Verifications []auditVerification `json:"verifications,omitempty"`
 }
 
 type FindingEvent struct {

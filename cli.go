@@ -30,6 +30,7 @@ type cliEnvironment struct {
 	Now             func() time.Time
 	FindingsUI      findingsUIRunner
 	InventoryUI     inventoryUIRunner
+	AuditRunner     auditRunner
 	ExternalCommand commandContextFunc
 	ElapsedNow      func() time.Time
 }
