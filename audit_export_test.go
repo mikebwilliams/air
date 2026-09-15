@@ -149,7 +149,9 @@ func decodeAuditHTMLExport(t *testing.T, output string) htmlExportReport {
 func TestAuditExportReadOnlyV4AndValidation(t *testing.T) {
 	repo, store, _, _ := auditRecheckFixture(t)
 	ctx := context.Background()
-	if _, err := store.db.ExecContext(ctx, `DROP TABLE audit_recheck_results;
+	if _, err := store.db.ExecContext(ctx, `DROP INDEX audit_finding_tags_by_tag;
+		DROP TABLE audit_finding_tags;
+		DROP TABLE audit_recheck_results;
 		DROP INDEX audit_recheck_identity;
 		ALTER TABLE audit_scans DROP COLUMN kind;
 		ALTER TABLE audit_scans DROP COLUMN recheck_key;

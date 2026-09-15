@@ -6,9 +6,24 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"regexp"
+	"sort"
 	"strings"
 	"time"
 )
+
+const reposeFindingTagsSchemaSQL = `
+CREATE TABLE audit_finding_tags (
+    finding_id INTEGER NOT NULL REFERENCES audit_findings(id) ON DELETE CASCADE,
+    tag TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    PRIMARY KEY (finding_id, tag)
+);
+CREATE INDEX audit_finding_tags_by_tag ON audit_finding_tags(tag, finding_id);
+PRAGMA user_version = 7;
+`
+
+var findingTagPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9._:/-]{0,63}$`)
 
 type auditFindingStore struct {
 	reader               *inventoryStore
@@ -65,7 +80,192 @@ func (s *auditFindingStore) AllFindings(ctx context.Context) ([]Finding, error) 
 	if err := s.loadVerifications(ctx, findings); err != nil {
 		return nil, err
 	}
+	if err := s.loadTags(ctx, findings); err != nil {
+		return nil, err
+	}
 	return findings, nil
+}
+
+func (s *auditFindingStore) loadTags(ctx context.Context, findings []Finding) error {
+	if len(findings) == 0 {
+		return nil
+	}
+	var version int
+	if err := s.reader.db.QueryRowContext(ctx, "PRAGMA user_version").Scan(&version); err != nil {
+		return err
+	}
+	if version < 7 {
+		return nil
+	}
+	query := `SELECT t.finding_id,t.tag FROM audit_finding_tags t JOIN audit_findings f ON f.id=t.finding_id`
+	args := []any{}
+	if s.scanID != "" {
+		query += " WHERE f.scan_id=?"
+		args = append(args, s.scanID)
+	}
+	query += " ORDER BY t.finding_id,t.tag"
+	rows, err := s.reader.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	byID := make(map[int64]*Finding, len(findings))
+	for i := range findings {
+		byID[findings[i].ID] = &findings[i]
+	}
+	for rows.Next() {
+		var id int64
+		var tag string
+		if err := rows.Scan(&id, &tag); err != nil {
+			return err
+		}
+		if finding := byID[id]; finding != nil {
+			finding.Tags = append(finding.Tags, tag)
+		}
+	}
+	return rows.Err()
+}
+
+func normalizeFindingTag(value string) (string, error) {
+	tag := strings.ToLower(strings.TrimSpace(value))
+	if !findingTagPattern.MatchString(tag) {
+		return "", fmt.Errorf("invalid tag %q: use 1-64 lowercase letters, digits, '.', '_', ':', '/', or '-' and start with a letter or digit", value)
+	}
+	return tag, nil
+}
+
+func normalizeFindingTags(values []string) ([]string, error) {
+	tags := make([]string, 0, len(values))
+	seen := make(map[string]bool, len(values))
+	for _, value := range values {
+		tag, err := normalizeFindingTag(value)
+		if err != nil {
+			return nil, err
+		}
+		if seen[tag] {
+			return nil, fmt.Errorf("tag %q was supplied more than once", tag)
+		}
+		seen[tag] = true
+		tags = append(tags, tag)
+	}
+	sort.Strings(tags)
+	return tags, nil
+}
+
+func findingHasTags(finding Finding, tags []string) bool {
+	for _, wanted := range tags {
+		found := false
+		for _, tag := range finding.Tags {
+			if tag == wanted {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return false
+		}
+	}
+	return true
+}
+
+func (s *auditFindingStore) editFindingTags(ctx context.Context, ids []int64, tags []string, add bool, now time.Time) (int, error) {
+	if len(ids) == 0 || len(tags) == 0 {
+		return 0, errors.New("at least one finding ID and tag are required")
+	}
+	normalized, err := normalizeFindingTags(tags)
+	if err != nil {
+		return 0, err
+	}
+	seen := make(map[int64]bool, len(ids))
+	for _, id := range ids {
+		if id < 1 {
+			return 0, errors.New("finding IDs must be positive")
+		}
+		if seen[id] {
+			return 0, fmt.Errorf("finding #%d was supplied more than once", id)
+		}
+		seen[id] = true
+	}
+	writer, err := openInventoryStore(ctx, s.databasePath, false)
+	if err != nil {
+		return 0, err
+	}
+	defer writer.Close()
+	tx, err := writer.db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback()
+	check, err := tx.PrepareContext(ctx, "SELECT scan_id FROM audit_findings WHERE id=?")
+	if err != nil {
+		return 0, err
+	}
+	defer check.Close()
+	for _, id := range ids {
+		var scanID string
+		if err := check.QueryRowContext(ctx, id).Scan(&scanID); errors.Is(err, sql.ErrNoRows) {
+			return 0, fmt.Errorf("finding #%d not found", id)
+		} else if err != nil {
+			return 0, err
+		}
+		if s.scanID != "" && scanID != s.scanID {
+			return 0, fmt.Errorf("finding #%d is outside the selected scan", id)
+		}
+	}
+	statement := "INSERT OR IGNORE INTO audit_finding_tags(finding_id,tag,created_at) VALUES(?,?,?)"
+	action := "tagged"
+	if !add {
+		statement = "DELETE FROM audit_finding_tags WHERE finding_id=? AND tag=?"
+		action = "untagged"
+	}
+	edit, err := tx.PrepareContext(ctx, statement)
+	if err != nil {
+		return 0, err
+	}
+	defer edit.Close()
+	event, err := tx.PrepareContext(ctx, "INSERT INTO audit_finding_events(finding_id,action,note,created_at) VALUES(?,?,?,?)")
+	if err != nil {
+		return 0, err
+	}
+	defer event.Close()
+	createdAt := formatTime(now)
+	changes := 0
+	for _, id := range ids {
+		for _, tag := range normalized {
+			var result sql.Result
+			if add {
+				result, err = edit.ExecContext(ctx, id, tag, createdAt)
+			} else {
+				result, err = edit.ExecContext(ctx, id, tag)
+			}
+			if err != nil {
+				return 0, err
+			}
+			changed, err := result.RowsAffected()
+			if err != nil {
+				return 0, err
+			}
+			if changed == 0 {
+				continue
+			}
+			if _, err := event.ExecContext(ctx, id, action, tag, createdAt); err != nil {
+				return 0, err
+			}
+			changes++
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, err
+	}
+	return changes, nil
+}
+
+func (s *auditFindingStore) TagFindings(ctx context.Context, ids []int64, tags []string, now time.Time) (int, error) {
+	return s.editFindingTags(ctx, ids, tags, true, now)
+}
+
+func (s *auditFindingStore) UntagFindings(ctx context.Context, ids []int64, tags []string, now time.Time) (int, error) {
+	return s.editFindingTags(ctx, ids, tags, false, now)
 }
 
 func (s *auditFindingStore) edit(ctx context.Context, id int64, action, note string, now time.Time) error {
@@ -205,7 +405,7 @@ func runAuditFindingsCLI(ctx context.Context, args []string, environment cliEnvi
 	offset := 1
 	if singular {
 		if len(args) < 2 {
-			return errors.New("usage: repose finding <show|dismiss|reopen|note> ID")
+			return errors.New("usage: repose finding <show|dismiss|reopen|note> ID | repose finding <tag|untag> ID... --tag TAG")
 		}
 		command = args[1]
 		offset = 2
@@ -217,14 +417,26 @@ func runAuditFindingsCLI(ctx context.Context, args []string, environment cliEnvi
 	includeAll := flags.Bool("all", false, "include dismissed findings")
 	verification := flags.String("verification", "all", "filter latest verdict: all, unchecked, confirmed, false_positive, uncertain")
 	reason := flags.String("reason", "", "dismissal reason or note text")
+	tagValues := flags.StringArray("tag", nil, "require a tag, or add/remove it for tag actions (repeatable)")
 	if err := flags.Parse(args[offset:]); err != nil {
 		return err
 	}
 	if !validAuditVerificationFilter(*verification) {
 		return errors.New("verification must be all, unchecked, confirmed, false_positive, or uncertain")
 	}
-	if !singular && flags.NArg() != 0 || singular && flags.NArg() != 1 {
-		return errors.New("findings takes no positional arguments; finding actions require one ID")
+	tags, err := normalizeFindingTags(*tagValues)
+	if err != nil {
+		return err
+	}
+	bulkTagAction := singular && (command == "tag" || command == "untag")
+	if !singular && flags.NArg() != 0 || singular && !bulkTagAction && flags.NArg() != 1 || bulkTagAction && flags.NArg() == 0 {
+		return errors.New("findings takes no positional arguments; show/dismiss/reopen/note require one ID; tag/untag require one or more IDs")
+	}
+	if bulkTagAction && len(tags) == 0 {
+		return errors.New("tag and untag require at least one --tag TAG")
+	}
+	if singular && !bulkTagAction && len(tags) > 0 {
+		return errors.New("--tag filters findings lists and supplies tags to tag/untag actions")
 	}
 	repository, err := DiscoverGitRepository(ctx, reposeAbsolutePath(environment.Cwd, *repo))
 	if err != nil {
@@ -246,35 +458,79 @@ func runAuditFindingsCLI(ctx context.Context, args []string, environment cliEnvi
 			return err
 		}
 		store.scanID = scan.ID
+		if scan.Spec.Recheck != nil {
+			store.scanID = scan.Spec.Recheck.SourceScanID
+		}
 	}
 	findings, err := store.AllFindings(ctx)
 	if err != nil {
 		return err
 	}
 	if singular {
-		id, err := parseFindingID(flags.Arg(0))
-		if err != nil {
-			return err
+		ids := make([]int64, 0, flags.NArg())
+		seen := make(map[int64]bool, flags.NArg())
+		available := make(map[int64]bool, len(findings))
+		for _, finding := range findings {
+			available[finding.ID] = true
 		}
-		var found *Finding
-		for i := range findings {
-			if findings[i].ID == id {
-				found = &findings[i]
-				break
+		for _, value := range flags.Args() {
+			id, err := parseFindingID(value)
+			if err != nil {
+				return err
 			}
+			if seen[id] {
+				return fmt.Errorf("finding #%d was supplied more than once", id)
+			}
+			if !available[id] {
+				return fmt.Errorf("finding #%d not found in selected scope", id)
+			}
+			seen[id] = true
+			ids = append(ids, id)
 		}
-		if found == nil {
-			return errors.New("finding not found in selected scope")
-		}
+		id := ids[0]
 		switch command {
 		case "show":
-			return writeInventoryJSON(environment.Stdout, found)
+			for i := range findings {
+				if findings[i].ID == id {
+					return writeInventoryJSON(environment.Stdout, &findings[i])
+				}
+			}
+			return errors.New("finding not found in selected scope")
 		case "dismiss":
 			err = store.DismissFinding(ctx, id, *reason, environmentNow(environment))
 		case "reopen":
 			err = store.ReopenFinding(ctx, id, environmentNow(environment))
 		case "note":
 			err = store.AddFindingNote(ctx, id, *reason, environmentNow(environment))
+		case "tag", "untag":
+			changes := 0
+			if command == "tag" {
+				changes, err = store.TagFindings(ctx, ids, tags, environmentNow(environment))
+			} else {
+				changes, err = store.UntagFindings(ctx, ids, tags, environmentNow(environment))
+			}
+			if err != nil {
+				return err
+			}
+			if *asJSON {
+				updated, err := store.AllFindings(ctx)
+				if err != nil {
+					return err
+				}
+				selected := make([]Finding, 0, len(ids))
+				for _, finding := range updated {
+					if seen[finding.ID] {
+						selected = append(selected, finding)
+					}
+				}
+				return writeInventoryJSON(environment.Stdout, selected)
+			}
+			verb := "Added"
+			if command == "untag" {
+				verb = "Removed"
+			}
+			fmt.Fprintf(environment.Stdout, "%s %d tag assignments across %d findings.\n", verb, changes, len(ids))
+			return nil
 		default:
 			return fmt.Errorf("unknown finding action %q", command)
 		}
@@ -287,7 +543,7 @@ func runAuditFindingsCLI(ctx context.Context, args []string, environment cliEnvi
 	if *asJSON {
 		filtered := []Finding{}
 		for _, f := range findings {
-			if (*includeAll || f.DismissedAt == nil) && (*verification == "all" || auditVerificationOutcome(f) == *verification) {
+			if (*includeAll || f.DismissedAt == nil) && (*verification == "all" || auditVerificationOutcome(f) == *verification) && findingHasTags(f, tags) {
 				filtered = append(filtered, f)
 			}
 		}
@@ -298,6 +554,7 @@ func runAuditFindingsCLI(ctx context.Context, args []string, environment cliEnvi
 	}}
 	model := newFindingsModel(ctx, external, store, findings, auditFindingDisplay(findings), *includeAll, func() time.Time { return environmentNow(environment) })
 	model.verificationFilter = *verification
+	model.tagFilters = tags
 	model.applyFilters(model.selectedID())
 	model.loadDetail()
 	model.prepareInitialPreview()
@@ -314,4 +571,85 @@ func auditFindingDisplay(findings []Finding) map[int64]findingDisplayMetadata {
 		display[f.ID] = metadata
 	}
 	return display
+}
+
+type findingTagCount struct {
+	Tag      string `json:"tag"`
+	Findings int    `json:"findings"`
+}
+
+func runAuditTagsCLI(ctx context.Context, args []string, environment cliEnvironment) error {
+	flags := newFlagSet("tags", environment.Stderr)
+	repo := flags.String("repo", ".", "scan checkout")
+	scanSelector := flags.String("scan", "", "filter to a source scan; latest selects the newest completed original scan")
+	includeAll := flags.Bool("all", false, "include dismissed findings")
+	asJSON := flags.Bool("json", false, "output tag counts as JSON")
+	if err := flags.Parse(args); err != nil {
+		return err
+	}
+	if flags.NArg() != 0 {
+		return errors.New("usage: repose tags [--scan ID|latest] [--all] [--json] [--repo DIR]")
+	}
+	repository, err := DiscoverGitRepository(ctx, reposeAbsolutePath(environment.Cwd, *repo))
+	if err != nil {
+		return err
+	}
+	database, err := reposeDatabasePath(ctx, repository)
+	if err != nil {
+		return err
+	}
+	reader, err := openInventoryReadOnly(ctx, database)
+	if err != nil {
+		return err
+	}
+	defer reader.Close()
+	store := &auditFindingStore{reader: reader, databasePath: database}
+	if *scanSelector != "" {
+		var scan auditScan
+		if *scanSelector == "latest" {
+			scan, err = reader.latestAuditForRecheck(ctx)
+		} else {
+			scan, err = reader.audit(ctx, *scanSelector)
+		}
+		if err != nil {
+			return err
+		}
+		store.scanID = scan.ID
+		if scan.Spec.Recheck != nil {
+			store.scanID = scan.Spec.Recheck.SourceScanID
+		}
+	}
+	findings, err := store.AllFindings(ctx)
+	if err != nil {
+		return err
+	}
+	counts := map[string]int{}
+	for _, finding := range findings {
+		if !*includeAll && finding.DismissedAt != nil {
+			continue
+		}
+		for _, tag := range finding.Tags {
+			counts[tag]++
+		}
+	}
+	tags := make([]string, 0, len(counts))
+	for tag := range counts {
+		tags = append(tags, tag)
+	}
+	sort.Strings(tags)
+	result := make([]findingTagCount, 0, len(tags))
+	for _, tag := range tags {
+		result = append(result, findingTagCount{Tag: tag, Findings: counts[tag]})
+	}
+	if *asJSON {
+		return writeInventoryJSON(environment.Stdout, result)
+	}
+	if len(result) == 0 {
+		fmt.Fprintln(environment.Stdout, "No finding tags in the selected scope.")
+		return nil
+	}
+	for _, entry := range result {
+		fmt.Fprintf(environment.Stdout, "%6d  %s\n", entry.Findings, entry.Tag)
+	}
+	return nil
 }

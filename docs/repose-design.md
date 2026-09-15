@@ -211,8 +211,9 @@ scan rather than changing the meaning of previous completion.
    coordinator, retaining independent confirmed/false-positive/uncertain verdicts
    without changing manual dispositions. Worker and attempt limits count batch
    calls. Matching selections/models/batch maxima resume; explicit fresh passes
-   retain earlier opinions. Schema version 6 stores every batch's verification
-   results atomically with attempt completion; incomplete or malformed responses
+   retain earlier opinions. Schema version 7 stores every batch's verification
+   results atomically with attempt completion and adds normalized user-managed
+   finding tags with audited bulk edits. Incomplete or malformed responses
    fail the batch. Existing single-finding passes still resume by ID with their
    original protocol. The TUI and JSON expose verdicts, reasoning, and history.
    JSON, SARIF, and offline HTML exports retain snapshot provenance and verification

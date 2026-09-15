@@ -32,6 +32,7 @@ func runAuditExportCLI(ctx context.Context, args []string, environment cliEnviro
 	repo := flags.String("repo", ".", "scan checkout")
 	scanSelector := flags.String("scan", "", "source scan; latest selects the newest completed original scan")
 	path := flags.String("path", ".", "filter findings by source path prefix")
+	tagValues := flags.StringArray("tag", nil, "require a finding tag (repeatable; multiple tags use AND)")
 	verification := flags.String("verification", "all", "filter latest verdict: all, unchecked, confirmed, false_positive, uncertain")
 	includeAll := flags.Bool("all", false, "include dismissed findings; HTML includes them and uses this as its initial display")
 	if err := flags.Parse(args); err != nil {
@@ -42,6 +43,10 @@ func runAuditExportCLI(ctx context.Context, args []string, environment cliEnviro
 	}
 	if !validAuditVerificationFilter(*verification) {
 		return errors.New("verification must be all, unchecked, confirmed, false_positive, or uncertain")
+	}
+	tags, err := normalizeFindingTags(*tagValues)
+	if err != nil {
+		return err
 	}
 	selection := inventorySelection{Path: *path, Status: "included"}
 	if err := selection.validate(); err != nil {
@@ -96,6 +101,9 @@ func runAuditExportCLI(ctx context.Context, args []string, environment cliEnviro
 			continue
 		}
 		if *verification != "all" && auditVerificationOutcome(f) != *verification {
+			continue
+		}
+		if !findingHasTags(f, tags) {
 			continue
 		}
 		review, err := store.FindingReview(ctx, f.ID)
@@ -155,7 +163,7 @@ func buildAuditSARIF(findings []auditExportFinding) sarifLog {
 		result.Fingerprints = map[string]string{"repose/finding-id": fmt.Sprintf("%s/%s/%s", f.ObservedSHA, f.ScanID, strconv.FormatInt(f.ID, 10))}
 		result.Properties = sarifProperties{FindingID: f.ID, ObservedSHA: f.ObservedSHA, ObservedAt: f.ObservedAt,
 			ScanID: f.ScanID, TaskID: f.TaskID, AttemptID: f.AttemptID, Disposition: findingDisposition(f.Finding),
-			DismissedAt: f.DismissedAt, DismissReason: f.DismissReason, Review: f.Review, Events: f.Events, Verifications: f.Verifications}
+			DismissedAt: f.DismissedAt, DismissReason: f.DismissReason, Tags: f.Tags, Review: f.Review, Events: f.Events, Verifications: f.Verifications}
 		if f.Symbol != nil {
 			result.Properties.Symbol = *f.Symbol
 		}

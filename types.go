@@ -175,6 +175,7 @@ type Finding struct {
 	File          *string             `json:"file,omitempty"`
 	Line          *int                `json:"line,omitempty"`
 	Symbol        *string             `json:"symbol,omitempty"`
+	Tags          []string            `json:"tags,omitempty"`
 	Verifications []auditVerification `json:"verifications,omitempty"`
 }
 

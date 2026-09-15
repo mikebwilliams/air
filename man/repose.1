@@ -65,10 +65,12 @@ Print a frozen assignment prompt. TASK is an ordinal or assignment ID prefix.
 Open the findings TUI. --scan ID filters a scan; --all includes dismissed findings;
 --json exports instead of opening the terminal. The preview shows source at the
 observed snapshot. Use / to search, s/v to filter status/severity, D to dismiss,
-r to reopen, n to add a note, and R to reload while scanning. V filters the latest
+r to reopen, n to add a note, t/u to add/remove tags, T to apply exact tag filters,
+and R to reload while scanning. V filters the latest
 verification verdict; --verification accepts all, unchecked, confirmed,
 false_positive, or uncertain. Verdicts and their reasoning appear in the preview
-details; prior results remain in the history and JSON export.
+details; prior results remain in the history and JSON export. Repeatable --tag
+filters use AND semantics.
 .TP
 .B repose recheck [FINDING_ID...] --model MODEL
 Verify existing findings against their observed snapshot, grouping them by their
@@ -76,7 +78,8 @@ original review assignment. --batch-max (default 5) caps findings per model call
 smaller batches remain smaller and never combine different source assignments.
 --scan defaults to latest: the newest completed original scan, excluding queued
 reviews and recheck passes. An explicit --scan ID can select a partial scan.
-Optional finding IDs and --path PREFIX narrow scope; dismissed findings are excluded.
+Optional finding IDs, --path PREFIX, and repeatable --tag TAG filters narrow scope;
+multiple tags use AND semantics and dismissed findings are excluded.
 Accepts --harness, --effort (default high), --binary, --timeout (default 30m),
 --jobs (default 2), --limit, --duration, and --retry-failed as for scan execution.
 Jobs count concurrent batches, limit counts batch attempts including retries,
@@ -103,10 +106,21 @@ Findings preserve the observed commit, scan, assignment, attempt, and model
 provenance. Recheck verdicts supplement original findings. Automatic consolidation
 is not implemented.
 .TP
+.B repose finding tag|untag ID... --tag TAG [--tag TAG...]
+Add or remove one or more tags across any number of findings in one atomic edit.
+All IDs and tags are validated before changes are saved. Repeated operations are
+idempotent, and actual changes are retained in each finding's history. Tags are
+normalized to lowercase; category:value namespacing is supported but optional.
+.TP
+.B repose tags
+List tag counts for open findings. --scan ID|latest restricts the source scan;
+--all includes dismissed findings and --json emits structured counts.
+.TP
 .B repose export --format json|sarif|html [-o FILE]
 Export findings as JSON, SARIF, or a self-contained offline HTML viewer.
-Accepts --repo DIR, --scan ID|latest, --path PREFIX, --verification VERDICT, and
---all. Output defaults to stdout; -o/--output writes to a file relative to the
+Accepts --repo DIR, --scan ID|latest, --path PREFIX, --verification VERDICT,
+repeatable --tag TAG filters, and --all. Output defaults to stdout;
+-o/--output writes to a file relative to the
 current directory, and -o - explicitly selects stdout.
 JSON/SARIF export open findings unless --all includes dismissed findings. HTML
 includes all dispositions and initially shows open findings; --all initially

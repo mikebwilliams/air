@@ -309,7 +309,9 @@ func TestAuditRecheckV4DryRunAndMigration(t *testing.T) {
 	repo, store, source, findings := auditRecheckFixture(t)
 	ctx := context.Background()
 	// Reconstruct the previous schema while retaining the actual pilot records.
-	if _, err := store.db.ExecContext(ctx, `DROP TABLE audit_recheck_results;
+	if _, err := store.db.ExecContext(ctx, `DROP INDEX audit_finding_tags_by_tag;
+		DROP TABLE audit_finding_tags;
+		DROP TABLE audit_recheck_results;
 		DROP INDEX audit_recheck_identity;
 		ALTER TABLE audit_scans DROP COLUMN kind;
 		ALTER TABLE audit_scans DROP COLUMN recheck_key;
@@ -344,8 +346,12 @@ func TestAuditRecheckV4DryRunAndMigration(t *testing.T) {
 	if err := runReposeCLI(ctx, append(append([]string{}, args...), "--create-only"), env); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.db.QueryRow("PRAGMA user_version").Scan(&version); err != nil || version != 6 || calls.Load() != 0 {
+	if err := store.db.QueryRow("PRAGMA user_version").Scan(&version); err != nil || version != 7 || calls.Load() != 0 {
 		t.Fatal("create-only did not upgrade safely")
+	}
+	var tagTable int
+	if err := store.db.QueryRow("SELECT count(*) FROM sqlite_master WHERE type='table' AND name='audit_finding_tags'").Scan(&tagTable); err != nil || tagTable != 1 {
+		t.Fatal("finding tag migration was not applied")
 	}
 	var recheck auditScan
 	if err := json.Unmarshal(stdout.Bytes(), &recheck); err != nil || recheck.Counts["pending"] != 3 {
@@ -651,6 +657,8 @@ func TestAuditRecheckV5MigrationPreservesLegacyResume(t *testing.T) {
 	// Restore the previous primary key while retaining a completed verdict and
 	// two pending tasks, then exercise the real writer's upgrade and CLI resume.
 	if _, err := store.db.ExecContext(ctx, `
+		DROP INDEX audit_finding_tags_by_tag;
+		DROP TABLE audit_finding_tags;
 		ALTER TABLE audit_recheck_results RENAME TO recheck_results_saved;
 		DROP INDEX audit_recheck_finding;
 		CREATE TABLE audit_recheck_results (
@@ -701,7 +709,7 @@ func TestAuditRecheckV5MigrationPreservesLegacyResume(t *testing.T) {
 		t.Fatalf("legacy recheck could not resume: %v", err)
 	}
 	var version int
-	if err := store.db.QueryRow("PRAGMA user_version").Scan(&version); err != nil || version != 6 {
+	if err := store.db.QueryRow("PRAGMA user_version").Scan(&version); err != nil || version != 7 {
 		t.Fatal("legacy resume did not upgrade storage")
 	}
 	var after string

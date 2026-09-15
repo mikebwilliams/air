@@ -309,10 +309,26 @@ pruning or token/cost dispatch budget yet.
 The inherited findings TUI now displays observed snapshots, scan/assignment/
 attempt provenance, and snapshot source previews. Use `/` to search, `s`/`v` to
 filter status/severity, `D` to dismiss with a reason, `r` to reopen, `n` to add a
-note, and `R` to reload results while a scan runs. `findings --json` exports saved
-findings; `finding show|dismiss|reopen|note ID` offers CLI access. Findings from
-separate assignments/scans retain separate observations; automatic deduplication
-remains future work.
+note, `t`/`u` to add/remove tags, `T` to filter by exact tags, and `R` to reload
+results while a scan runs. `findings --json` exports saved findings;
+`finding show|dismiss|reopen|note ID` offers single-finding CLI access.
+
+Finding tags are lowercase labels. Simple names such as `crash` and `parser` work;
+`class:ownership` or `triage:high-value` can be used as an optional naming
+convention. One atomic command can edit thousands of findings and multiple tags:
+
+```sh
+.build/repose finding tag 17 23 41 --tag class:ownership --tag triage:high-value --repo kicad-repose
+.build/repose finding untag 17 23 --tag triage:high-value --repo kicad-repose
+.build/repose tags --scan latest --repo kicad-repose
+.build/repose findings --tag class:ownership --tag triage:high-value --json --repo kicad-repose
+```
+
+Every ID and tag is validated before the edit begins, so an invalid item leaves
+the entire list unchanged. Adding an existing tag or removing an absent tag is a
+successful no-op. Repeated `--tag` filters use AND semantics. Tag changes appear
+in finding history. Findings from separate assignments/scans retain separate
+observations; automatic deduplication remains future work.
 
 ## Recheck findings with another model
 
@@ -329,8 +345,9 @@ scan**, ignoring queued pilots and verification passes. Model choice is explicit
 ```
 
 `--scan ID` selects a source scan explicitly, including a partially completed
-scan with findings. Optional positional finding IDs and `--path PREFIX` narrow
-the selection. Dismissed findings are excluded. `--create-only` saves the frozen
+scan with findings. Optional positional finding IDs, `--path PREFIX`, and
+repeatable `--tag TAG` filters narrow the selection. Multiple tags use AND
+semantics. Dismissed findings are excluded. `--create-only` saves the frozen
 prompts and queue without making model calls; `scan prompt RECHECK_ID N` inspects
 them. `--dry-run` neither saves work nor upgrades the database.
 
@@ -374,8 +391,9 @@ inspection also expose verification history:
 .build/repose finding show FINDING_ID --repo kicad-repose
 ```
 
-Schema version 6 supports multiple finding verdicts per attempt. Use the rebuilt
-Repose binary after a writer upgrades the database; older builds cannot open v6.
+Schema version 7 supports multiple finding verdicts per attempt and user-managed
+finding tags. Use the rebuilt Repose binary after a writer upgrades the database;
+older builds cannot open v7.
 Existing inventories, scans, findings, attempts, and earlier verification history
 are preserved by the upgrade.
 
@@ -399,7 +417,8 @@ verification filters work offline.
 `--scan ID` limits the source scan; `--scan latest` selects the newest completed
 original scan. A recheck ID selects findings from its source scan, including all
 their verification history. Omit `--scan` to include findings across original
-scans. `--path PREFIX` and `--verification VERDICT` narrow the exported records;
+scans. `--path PREFIX`, `--verification VERDICT`, and repeatable exact
+`--tag TAG` filters narrow the exported records;
 the HTML filters cannot reveal records excluded by these command-line options.
 
 All formats retain the observed snapshot, scan/assignment/attempt IDs, original

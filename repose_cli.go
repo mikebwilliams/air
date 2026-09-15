@@ -28,14 +28,16 @@ Usage:
   repose scan list|show|tasks|attempts [ID] [--json] [--repo DIR]
   repose scan prompt ID TASK [--repo DIR]
   repose scan pause|interrupt ID [--repo DIR]
-  repose recheck [FINDING_ID...] --model MODEL [--scan ID|latest] [--path PREFIX]
+  repose recheck [FINDING_ID...] --model MODEL [--scan ID|latest] [--path PREFIX] [--tag TAG]
                  [--harness codex|claude|gemini] [--effort LEVEL] [--timeout DURATION]
                  [--jobs N] [--limit N] [--duration DURATION] [--retry-failed]
                  [--dry-run|--create-only] [--force] [--json] [--repo DIR]
-  repose findings [--scan ID] [--verification VERDICT] [--all] [--json] [--repo DIR]
+  repose findings [--scan ID] [--verification VERDICT] [--tag TAG] [--all] [--json] [--repo DIR]
   repose finding show|dismiss|reopen|note ID [--reason TEXT] [--repo DIR]
+  repose finding tag|untag ID... --tag TAG [--tag TAG...] [--repo DIR]
+  repose tags [--scan ID|latest] [--all] [--json] [--repo DIR]
   repose export --format json|sarif|html [-o FILE] [--scan ID|latest]
-                [--path PREFIX] [--verification VERDICT] [--all] [--repo DIR]
+                [--path PREFIX] [--verification VERDICT] [--tag TAG] [--all] [--repo DIR]
   repose inventory build [--repo DIR] [--compile-commands FILE] [--policy FILE]
   repose inventory list [--repo DIR]
   repose inventory show [ID] [--repo DIR]
@@ -141,10 +143,16 @@ pending for resume. Temporary throttling uses shared cooldowns and single probes
 (30s, 1m, 2m, or a longer provider delay), then pauses after three failed probes.
 Cooldowns survive resume. Scan show/attempts retain provider-limit details.
 Findings opens the triage TUI; --json exports instead. R reloads, D dismisses,
-r reopens, n adds a note. The preview shows source at the observed snapshot.
+r reopens, n adds a note, t/u adds/removes tags, and T filters by exact tags.
+The preview shows source at the observed snapshot. Finding tag/untag accepts any
+number of IDs and repeatable --tag values in one atomic edit. Tags are lowercase
+labels; category:value namespacing is supported but optional. Repeated --tag
+filters use AND semantics. The tags command lists counts for open findings;
+--all includes dismissed findings.
 Recheck verifies existing findings at their observed snapshot with an explicit
-model. --scan defaults to the newest completed original scan. Optional finding IDs
-and --path restrict scope; dismissed findings are excluded. Findings are grouped
+model. --scan defaults to the newest completed original scan. Optional finding IDs,
+--path, and repeatable exact --tag filters restrict scope; dismissed findings are
+excluded. Findings are grouped
 by original assignment; --batch-max caps each batch (default 5). Smaller batches
 stay small. Each finding receives an independent verdict and reasoning.
 --dry-run only previews; --create-only saves prompts and a queue without model calls.
@@ -161,7 +169,8 @@ and - or no output file writes to stdout. JSON/SARIF contain open findings by
 default; --all includes dismissed findings. HTML includes all dispositions and
 initially shows open findings; --all initially shows every disposition.
 --scan selects source findings; latest means the newest completed original scan,
-and a recheck ID selects its source scan. --path and --verification narrow scope.
+and a recheck ID selects its source scan. --path, --verification, and repeatable
+exact --tag filters narrow scope.
 Exports retain observed snapshots, assignment/attempt provenance, model identity,
 manual history, and every recheck verdict. HTML shows snapshot source excerpts
 and supports search, sorting, and verdict filters. Export reads saved state without
@@ -204,6 +213,9 @@ func runReposeCLI(ctx context.Context, args []string, environment cliEnvironment
 	}
 	if args[0] == "findings" || args[0] == "finding" {
 		return runAuditFindingsCLI(ctx, args, environment)
+	}
+	if args[0] == "tags" {
+		return runAuditTagsCLI(ctx, args[1:], environment)
 	}
 	if args[0] != "inventory" {
 		return fmt.Errorf("unknown command %q; run repose help", args[0])

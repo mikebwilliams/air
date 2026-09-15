@@ -103,6 +103,9 @@ const (
 	findingsDismiss
 	findingsNote
 	findingsConfirmReopen
+	findingsTag
+	findingsUntag
+	findingsTagFilter
 )
 
 type findingPreviewLoadedMsg struct {
@@ -125,6 +128,11 @@ type findingUIStore interface {
 	FindingReview(context.Context, int64) (FindingReview, error)
 }
 
+type findingTagUIStore interface {
+	TagFindings(context.Context, []int64, []string, time.Time) (int, error)
+	UntagFindings(context.Context, []int64, []string, time.Time) (int, error)
+}
+
 type findingsModel struct {
 	ctx                context.Context
 	external           findingExternalCommands
@@ -140,9 +148,11 @@ type findingsModel struct {
 	statusFilter       string
 	severityFilter     string
 	verificationFilter string
+	tagFilters         []string
 	sortMode           findingSortMode
 	query              string
 	queryBeforeEdit    string
+	tagsBeforeEdit     []string
 	mode               findingsInputMode
 	input              string
 	message            string
@@ -232,7 +242,7 @@ func (m findingsModel) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		m.colorProfile = message.Profile
 		return m, nil
 	case tea.PasteMsg:
-		if m.mode == findingsSearch || m.mode == findingsDismiss || m.mode == findingsNote {
+		if m.mode == findingsSearch || m.mode == findingsDismiss || m.mode == findingsNote || m.mode == findingsTag || m.mode == findingsUntag || m.mode == findingsTagFilter {
 			m.input += message.Content
 			if m.mode == findingsSearch {
 				m.query = m.input
@@ -307,6 +317,7 @@ func (m findingsModel) handleKey(key string) (tea.Model, tea.Cmd) {
 		m.statusFilter = "open"
 		m.severityFilter = "all"
 		m.verificationFilter = "all"
+		m.tagFilters = nil
 		m.applyFilters(m.selectedID())
 		return m, m.refreshSelection()
 	case "V":
@@ -314,6 +325,26 @@ func (m findingsModel) handleKey(key string) (tea.Model, tea.Cmd) {
 			m.verificationFilter = nextValue(m.verificationFilter, []string{"all", "unchecked", "confirmed", "false_positive", "uncertain"})
 			m.applyFilters(m.selectedID())
 			return m, m.refreshSelection()
+		}
+	case "T":
+		if m.external.snapshot {
+			m.mode = findingsTagFilter
+			m.input = strings.Join(m.tagFilters, ",")
+			m.tagsBeforeEdit = append([]string(nil), m.tagFilters...)
+		}
+	case "t":
+		if _, ok := m.store.(findingTagUIStore); ok {
+			if _, selected := m.selectedFinding(); selected {
+				m.mode = findingsTag
+				m.input = ""
+			}
+		}
+	case "u":
+		if _, ok := m.store.(findingTagUIStore); ok {
+			if _, selected := m.selectedFinding(); selected {
+				m.mode = findingsUntag
+				m.input = ""
+			}
 		}
 	case "D":
 		if finding, ok := m.selectedFinding(); ok {
@@ -388,6 +419,14 @@ func (m findingsModel) handleInputKey(key string) (tea.Model, tea.Cmd) {
 			m.input = ""
 			return m, command
 		}
+		if m.mode == findingsTagFilter {
+			m.tagFilters = append([]string(nil), m.tagsBeforeEdit...)
+			m.applyFilters(0)
+			command := m.refreshSelection()
+			m.mode = findingsBrowse
+			m.input = ""
+			return m, command
+		}
 		m.mode = findingsBrowse
 		m.input = ""
 		return m, nil
@@ -403,6 +442,21 @@ func (m findingsModel) handleInputKey(key string) (tea.Model, tea.Cmd) {
 			return m, m.dismissSelected()
 		case findingsNote:
 			return m, m.noteSelected()
+		case findingsTag:
+			return m, m.tagSelected(true)
+		case findingsUntag:
+			return m, m.tagSelected(false)
+		case findingsTagFilter:
+			tags, err := normalizeFindingTags(splitFindingTags(m.input))
+			if err != nil {
+				m.message = err.Error()
+				return m, nil
+			}
+			m.tagFilters = tags
+			m.mode = findingsBrowse
+			m.input = ""
+			m.applyFilters(0)
+			return m, m.refreshSelection()
 		case findingsConfirmReopen:
 			m.message = "Press y to reopen or n to cancel."
 		}
@@ -481,6 +535,51 @@ func (m *findingsModel) noteSelected() tea.Cmd {
 	return m.reload(finding.ID)
 }
 
+func splitFindingTags(value string) []string {
+	return strings.Fields(strings.ReplaceAll(value, ",", " "))
+}
+
+func (m *findingsModel) tagSelected(add bool) tea.Cmd {
+	finding, ok := m.selectedFinding()
+	if !ok {
+		m.mode = findingsBrowse
+		return nil
+	}
+	tags, err := normalizeFindingTags(splitFindingTags(m.input))
+	if err != nil {
+		m.message = err.Error()
+		return nil
+	}
+	if len(tags) == 0 {
+		m.message = "At least one tag is required."
+		return nil
+	}
+	store, ok := m.store.(findingTagUIStore)
+	if !ok {
+		m.message = "Finding tags are unavailable."
+		m.mode = findingsBrowse
+		return nil
+	}
+	changes := 0
+	if add {
+		changes, err = store.TagFindings(m.ctx, []int64{finding.ID}, tags, m.now())
+	} else {
+		changes, err = store.UntagFindings(m.ctx, []int64{finding.ID}, tags, m.now())
+	}
+	if err != nil {
+		m.message = "Tag edit failed: " + err.Error()
+		return nil
+	}
+	m.mode = findingsBrowse
+	m.input = ""
+	verb := "Added"
+	if !add {
+		verb = "Removed"
+	}
+	m.message = fmt.Sprintf("%s %d tag assignments for finding #%d.", verb, changes, finding.ID)
+	return m.reload(finding.ID)
+}
+
 func (m *findingsModel) reopenSelected() tea.Cmd {
 	finding, ok := m.selectedFinding()
 	if !ok {
@@ -525,6 +624,9 @@ func (m *findingsModel) applyFilters(preferredID int64) {
 			continue
 		}
 		if m.verificationFilter != "" && m.verificationFilter != "all" && auditVerificationOutcome(finding) != m.verificationFilter {
+			continue
+		}
+		if !findingHasTags(finding, m.tagFilters) {
 			continue
 		}
 		if query != "" && !strings.Contains(strings.ToLower(findingSearchText(finding)), query) {
@@ -737,6 +839,9 @@ func (m findingsModel) render() string {
 		m.position(), len(m.visible), m.statusFilter, m.severityFilter, m.sortLabel())
 	if m.external.snapshot && m.verificationFilter != "" && m.verificationFilter != "all" {
 		header += "  verification:" + m.verificationFilter
+	}
+	if len(m.tagFilters) > 0 {
+		header += "  tags:" + strings.Join(m.tagFilters, ",")
 	}
 	if m.query != "" {
 		header += "  search:" + strconv.Quote(m.query)
@@ -978,6 +1083,9 @@ func (m findingsModel) detailLines(width int) []string {
 	} else {
 		lines = append(lines, "Introduced: "+shortSHA(finding.IntroducedSHA))
 	}
+	if len(finding.Tags) > 0 {
+		lines = append(lines, "Tags: "+strings.Join(finding.Tags, ", "))
+	}
 	display := m.display[finding.ID]
 	if !display.CommitDate.IsZero() {
 		now := time.Now()
@@ -1046,11 +1154,17 @@ func (m findingsModel) footer() string {
 		return fmt.Sprintf("Dismiss #%d — reason: %s_  (Enter save, Esc cancel)", m.selectedID(), m.input)
 	case findingsNote:
 		return fmt.Sprintf("Note #%d: %s_  (Enter save, Esc cancel)", m.selectedID(), m.input)
+	case findingsTag:
+		return fmt.Sprintf("Tag #%d (comma or space separated): %s_  (Enter save, Esc cancel)", m.selectedID(), m.input)
+	case findingsUntag:
+		return fmt.Sprintf("Untag #%d (comma or space separated): %s_  (Enter save, Esc cancel)", m.selectedID(), m.input)
+	case findingsTagFilter:
+		return "Exact tag filters (comma or space separated): " + m.input + "_  (Enter apply, Esc cancel)"
 	case findingsConfirmReopen:
 		return fmt.Sprintf("Reopen #%d?  y yes, n no", m.selectedID())
 	default:
 		if m.external.snapshot {
-			return "j/k move | / search | D dismiss | r reopen | n note | R reload | ? help | q quit"
+			return "j/k move | / search | t/u tag | T filter | D dismiss | r reopen | n note | R reload | ? | q"
 		}
 		return "↑/↓ j/k move  ←/→ sort  / search  d diff  o open  D dismiss  r reopen  n note  ? help  q quit"
 	}
@@ -1064,10 +1178,12 @@ func (m findingsModel) helpLines(width int) []string {
 PgUp/PgDn     move one page
 g/G           first/last finding
 Ctrl+U/Ctrl+D scroll detail
-/             search title, text, location, SHA, or ID
+/             search title, text, location, tags, SHA, or ID
 s             cycle status: open, all, dismissed, resolved
 v             cycle severity: all, error, warning, info
 c             clear search and restore default filters
+t/u           add/remove tags on the selected finding (Repose)
+T             set exact tag filters (Repose; multiple filters use AND)
 d             open the introducing commit in git difftool
 o             open the finding's file and line in the configured Git editor
 D             dismiss the selected open finding (reason required)
@@ -1078,7 +1194,7 @@ q             quit
 
 All changes use the same audited finding lifecycle as the singular finding command.`, width)
 	if m.external.snapshot {
-		lines = wrapText("j/k or arrows: select finding; left/right: sort\n/: search; s: status; v: severity; V: verification; c: clear filters\nCtrl+U/Ctrl+D: scroll details\nD: dismiss with reason; r: reopen; n: add note\nR: reload saved findings; ?: help; q: quit\nPreview shows the recorded snapshot source.\nVerification history preserves original findings and manual dispositions.", width)
+		lines = wrapText("j/k or arrows: select finding; left/right: sort\n/: search; s: status; v: severity; V: verification; T: exact tag filters; c: clear filters\nCtrl+U/Ctrl+D: scroll details\nt/u: add/remove tags; D: dismiss with reason; r: reopen; n: add note\nR: reload saved findings; ?: help; q: quit\nPreview shows the recorded snapshot source.\nTag changes and verification history preserve original findings and manual dispositions.", width)
 	}
 	if len(lines) != 0 {
 		lines[0] = m.style(lines[0], "1", "36")
@@ -1128,7 +1244,7 @@ func findingDisposition(finding Finding) string {
 func findingSearchText(finding Finding) string {
 	parts := []string{
 		strconv.FormatInt(finding.ID, 10), finding.Severity, findingDisposition(finding),
-		finding.Title, finding.Description, finding.IntroducedSHA, finding.ObservedSHA, finding.ScanID, finding.TaskID, finding.DismissReason,
+		finding.Title, finding.Description, finding.IntroducedSHA, finding.ObservedSHA, finding.ScanID, finding.TaskID, finding.DismissReason, strings.Join(finding.Tags, " "),
 	}
 	if finding.ResolvedSHA != nil {
 		parts = append(parts, *finding.ResolvedSHA)

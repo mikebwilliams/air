@@ -17,6 +17,7 @@ func runAuditRecheckCLI(ctx context.Context, args []string, environment cliEnvir
 	repo := flags.String("repo", ".", "dedicated scan checkout")
 	sourceSelector := flags.String("scan", "latest", "source scan; latest means the newest completed original scan")
 	path := flags.String("path", ".", "filter findings by source path prefix")
+	tagValues := flags.StringArray("tag", nil, "require a finding tag (repeatable; multiple tags use AND)")
 	asJSON := flags.Bool("json", false, "output recheck status as JSON")
 	dryRun := flags.Bool("dry-run", false, "show selected findings without saving or invoking a model")
 	createOnly := flags.Bool("create-only", false, "save the recheck without invoking a model")
@@ -34,6 +35,10 @@ func runAuditRecheckCLI(ctx context.Context, args []string, environment cliEnvir
 	flags.DurationVar(&options.Duration, "duration", 0, "stop dispatching after this duration and drain active work")
 	flags.BoolVar(&options.RetryFailed, "retry-failed", false, "retry failed recheck batches")
 	if err := flags.Parse(args); err != nil {
+		return err
+	}
+	tags, err := normalizeFindingTags(*tagValues)
+	if err != nil {
 		return err
 	}
 	if options.Jobs < 1 || options.Jobs > 32 || options.Limit < 0 || options.Duration < 0 || config.Timeout <= 0 {
@@ -113,7 +118,7 @@ func runAuditRecheckCLI(ctx context.Context, args []string, environment cliEnvir
 	selected := []Finding{}
 	matched := map[int64]bool{}
 	for _, f := range findings {
-		if f.DismissedAt != nil || f.File == nil || !inventoryPrefixMatches(*f.File, selection.Path) || (len(wanted) > 0 && !wanted[f.ID]) {
+		if f.DismissedAt != nil || f.File == nil || !inventoryPrefixMatches(*f.File, selection.Path) || !findingHasTags(f, tags) || (len(wanted) > 0 && !wanted[f.ID]) {
 			continue
 		}
 		matched[f.ID] = true
@@ -121,11 +126,11 @@ func runAuditRecheckCLI(ctx context.Context, args []string, environment cliEnvir
 	}
 	for id := range wanted {
 		if !matched[id] {
-			return fmt.Errorf("finding #%d is dismissed or outside the selected source scan/path", id)
+			return fmt.Errorf("finding #%d is dismissed or outside the selected source scan/path/tag filters", id)
 		}
 	}
 	if len(selected) == 0 {
-		return errors.New("no open findings in the selected source scan/path")
+		return errors.New("no open findings in the selected source scan/path/tag filters")
 	}
 	spec, err := buildAuditRecheckSpec(source, selected, config, *batchMax)
 	if err != nil {

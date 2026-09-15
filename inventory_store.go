@@ -129,7 +129,7 @@ func openInventoryStore(ctx context.Context, filename string, create bool) (*inv
 		}
 		version, application = 1, 1380994899
 	}
-	if (version < 1 || version > 6) || application != 1380994899 {
+	if (version < 1 || version > 7) || application != 1380994899 {
 		return nil, fmt.Errorf("unsupported Repose database (application %d, version %d)", application, version)
 	}
 	if version == 1 {
@@ -162,6 +162,12 @@ func openInventoryStore(ctx context.Context, filename string, create bool) (*inv
 		}
 		version = 6
 	}
+	if version == 6 {
+		if _, err := base.db.ExecContext(ctx, reposeFindingTagsSchemaSQL); err != nil {
+			return nil, fmt.Errorf("upgrade Repose finding tags: %w", err)
+		}
+		version = 7
+	}
 	if _, err := base.db.ExecContext(ctx, "COMMIT"); err != nil {
 		return nil, err
 	}
@@ -184,7 +190,7 @@ func openInventoryReadOnly(ctx context.Context, filename string) (*inventoryStor
 	if err = base.db.QueryRowContext(ctx, "PRAGMA user_version").Scan(&version); err == nil {
 		err = base.db.QueryRowContext(ctx, "PRAGMA application_id").Scan(&application)
 	}
-	if err == nil && ((version < 1 || version > 6) || application != 1380994899) {
+	if err == nil && ((version < 1 || version > 7) || application != 1380994899) {
 		err = fmt.Errorf("unsupported Repose database (application %d, version %d)", application, version)
 	}
 	if err != nil {

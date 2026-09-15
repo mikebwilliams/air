@@ -1900,6 +1900,7 @@ type sarifProperties struct {
 	Disposition   string              `json:"disposition,omitempty"`
 	DismissedAt   *time.Time          `json:"dismissed_at,omitempty"`
 	DismissReason string              `json:"dismiss_reason,omitempty"`
+	Tags          []string            `json:"tags,omitempty"`
 	Review        *htmlExportReview   `json:"review,omitempty"`
 	Events        []htmlExportEvent   `json:"events,omitempty"`
 	Verifications []auditVerification `json:"verifications,omitempty"`
