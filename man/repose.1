@@ -124,8 +124,11 @@ repeatable --tag TAG filters, and --all. Output defaults to stdout;
 current directory, and -o - explicitly selects stdout.
 JSON/SARIF export open findings unless --all includes dismissed findings. HTML
 includes all dispositions and initially shows open findings; --all initially
-shows all of them. Its search, sorting, and status/severity/verdict filters work
-offline. Command-line path and verdict filters restrict the embedded records.
+shows all of them. Its sorting and status/severity/verdict filters work offline,
+along with exact tag filters. Selecting multiple tags requires all of them; tags
+shown on a finding can also be clicked to filter. Text search covers finding text,
+locations, tags, source excerpts, history notes, and recheck reasoning. Multiple
+search terms use AND semantics. Command-line path and verdict filters restrict the embedded records.
 Without --scan, findings from every original scan are eligible. Latest selects
 the newest completed original scan; a recheck ID selects its source scan's
 findings with all their verification history.

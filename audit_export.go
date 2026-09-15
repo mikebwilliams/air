@@ -93,6 +93,7 @@ func runAuditExportCLI(ctx context.Context, args []string, environment cliEnviro
 	}
 	report := auditExportReport{Version: 1, Repository: filepath.Base(repository.WorkTree),
 		GeneratedAt: environmentNow(environment).Format(time.RFC3339), ScanID: store.scanID, Findings: []auditExportFinding{}}
+	selected := make([]Finding, 0, len(findings))
 	for _, f := range findings {
 		if *format != "html" && !*includeAll && f.DismissedAt != nil {
 			continue
@@ -106,15 +107,18 @@ func runAuditExportCLI(ctx context.Context, args []string, environment cliEnviro
 		if !findingHasTags(f, tags) {
 			continue
 		}
-		review, err := store.FindingReview(ctx, f.ID)
-		if err != nil {
-			return err
-		}
-		events, err := store.FindingEvents(ctx, f.ID)
-		if err != nil {
-			return err
-		}
-		report.Findings = append(report.Findings, auditExportFinding{Finding: f, Review: makeHTMLExportReview(review), Events: makeHTMLExportEvents(events)})
+		selected = append(selected, f)
+	}
+	reviews, err := loadAuditExportReviews(ctx, reader, selected)
+	if err != nil {
+		return err
+	}
+	events, err := loadAuditExportEvents(ctx, reader, selected, store.scanID)
+	if err != nil {
+		return err
+	}
+	for _, f := range selected {
+		report.Findings = append(report.Findings, auditExportFinding{Finding: f, Review: reviews[f.ID], Events: events[f.ID]})
 	}
 	if _, err := reader.db.ExecContext(ctx, "COMMIT"); err != nil {
 		return err
@@ -147,6 +151,108 @@ func runAuditExportCLI(ctx context.Context, args []string, environment cliEnviro
 		}
 		return writeJSON(w, report)
 	})
+}
+
+func loadAuditExportReviews(ctx context.Context, reader *inventoryStore, findings []Finding) (map[int64]*htmlExportReview, error) {
+	reviews := make(map[int64]*htmlExportReview, len(findings))
+	if len(findings) == 0 {
+		return reviews, nil
+	}
+	wantedAttempts := make(map[int64]bool, len(findings))
+	wantedScans := make(map[string]bool)
+	for _, finding := range findings {
+		wantedAttempts[finding.AttemptID] = true
+		wantedScans[finding.ScanID] = true
+	}
+	attemptNumbers := make(map[int64]int, len(wantedAttempts))
+	rows, err := reader.db.QueryContext(ctx, "SELECT id,number FROM audit_attempts")
+	if err != nil {
+		return nil, err
+	}
+	for rows.Next() {
+		var id int64
+		var number int
+		if err := rows.Scan(&id, &number); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		if wantedAttempts[id] {
+			attemptNumbers[id] = number
+		}
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	models := make(map[string]auditModelConfig, len(wantedScans))
+	for scanID := range wantedScans {
+		var model auditModelConfig
+		err := reader.db.QueryRowContext(ctx, `SELECT
+			COALESCE(json_extract(document,'$.model.harness'),''),
+			COALESCE(json_extract(document,'$.model.model'),''),
+			COALESCE(json_extract(document,'$.model.effort'),'')
+			FROM audit_scans WHERE id=?`, scanID).Scan(&model.Harness, &model.Model, &model.Effort)
+		if err != nil {
+			return nil, err
+		}
+		models[scanID] = model
+	}
+	for _, finding := range findings {
+		number, ok := attemptNumbers[finding.AttemptID]
+		if !ok {
+			return nil, fmt.Errorf("finding %d references unavailable attempt %d", finding.ID, finding.AttemptID)
+		}
+		if finding.ObservedAt == nil {
+			return nil, fmt.Errorf("finding %d has no observation time", finding.ID)
+		}
+		model := models[finding.ScanID]
+		reviews[finding.ID] = &htmlExportReview{Number: number, Harness: model.Harness, Model: model.Model,
+			ReasoningEffort: model.Effort, ReviewedAt: finding.ObservedAt.Format(time.RFC3339)}
+	}
+	return reviews, nil
+}
+
+func loadAuditExportEvents(ctx context.Context, reader *inventoryStore, findings []Finding, scanID string) (map[int64][]htmlExportEvent, error) {
+	events := make(map[int64][]htmlExportEvent, len(findings))
+	wanted := make(map[int64]bool, len(findings))
+	for _, finding := range findings {
+		wanted[finding.ID] = true
+		events[finding.ID] = []htmlExportEvent{}
+	}
+	if len(findings) == 0 {
+		return events, nil
+	}
+	query := `SELECT e.finding_id,e.action,e.note,e.created_at
+		FROM audit_finding_events e JOIN audit_findings f ON f.id=e.finding_id`
+	args := []any{}
+	if scanID != "" {
+		query += " WHERE f.scan_id=?"
+		args = append(args, scanID)
+	}
+	query += " ORDER BY e.id"
+	rows, err := reader.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var findingID int64
+		var action, note, created string
+		if err := rows.Scan(&findingID, &action, &note, &created); err != nil {
+			return nil, err
+		}
+		if !wanted[findingID] {
+			continue
+		}
+		when, err := time.Parse(time.RFC3339Nano, created)
+		if err != nil {
+			return nil, err
+		}
+		events[findingID] = append(events[findingID], htmlExportEvent{Action: action, Note: note, CreatedAt: when.Format(time.RFC3339)})
+	}
+	return events, rows.Err()
 }
 
 func buildAuditSARIF(findings []auditExportFinding) sarifLog {

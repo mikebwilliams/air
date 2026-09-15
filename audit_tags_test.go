@@ -153,7 +153,7 @@ func TestAuditFindingTagCLIListsAndFilters(t *testing.T) {
 		t.Fatal(err)
 	}
 	html := decodeAuditHTMLExport(t, stdout.String())
-	if len(html.Findings) != 2 || !slices.Equal(html.Findings[0].Tags, []string{"crash", "triage:high-value"}) || !strings.Contains(stdout.String(), "(f.tags||[]).join(' ')") {
+	if len(html.Findings) != 2 || !slices.Equal(html.Findings[0].Tags, []string{"crash", "triage:high-value"}) || !strings.Contains(stdout.String(), "function matchesTags") || !strings.Contains(stdout.String(), "tags (AND)") {
 		t.Fatalf("HTML tags: %+v", html.Findings)
 	}
 	stdout.Reset()

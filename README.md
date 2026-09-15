@@ -411,8 +411,11 @@ report that opens locally in a browser:
 `-o`/`--output` is relative to your current directory. Omit it or use `-o -` for
 stdout. JSON and SARIF export open findings by default; `--all` includes dismissed
 findings. HTML includes every disposition and initially displays open findings;
-`--all` initially shows all of them. Its search, sorting, status, severity, and
-verification filters work offline.
+`--all` initially shows all of them. Its sorting, status, severity, verification,
+and exact tag filters work offline. Select multiple tags to require all of them,
+or click a tag on a finding to add it to the filter. Text search covers titles,
+descriptions, locations, tags, source excerpts, history notes, and recheck
+reasoning; multiple search terms also use AND semantics.
 
 `--scan ID` limits the source scan; `--scan latest` selects the newest completed
 original scan. A recheck ID selects findings from its source scan, including all
