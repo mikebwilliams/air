@@ -413,9 +413,14 @@ stdout. JSON and SARIF export open findings by default; `--all` includes dismiss
 findings. HTML includes every disposition and initially displays open findings;
 `--all` initially shows all of them. Its sorting, status, severity, verification,
 and exact tag filters work offline. Select multiple tags to require all of them,
-or click a tag on a finding to add it to the filter. Text search covers titles,
-descriptions, locations, tags, source excerpts, history notes, and recheck
-reasoning; multiple search terms also use AND semantics.
+or click a tag on a finding to add it to the filter. Tag counts update to show how
+many findings would remain after adding each tag, including the current text,
+status, severity, and verification filters. The **Untagged** pseudo-tag selects
+findings that have no tags. Text search covers titles, descriptions, locations,
+tags, source excerpts, history notes, and recheck reasoning; multiple search terms
+also use AND semantics. A fragment such as `findings.html#1234` opens finding 1234,
+even when the current viewer filters would otherwise hide it. Selecting a finding
+with the mouse or keyboard updates the fragment, and its ID badge is a direct link.
 
 `--scan ID` limits the source scan; `--scan latest` selects the newest completed
 original scan. A recheck ID selects findings from its source scan, including all

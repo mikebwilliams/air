@@ -93,7 +93,7 @@ func TestAuditExportFormatsWithVerificationHistory(t *testing.T) {
 		t.Fatal("SARIF --all lost the manual disposition")
 	}
 	output := export("html", "--scan", source.ID)
-	for _, expected := range []string{"Repose Findings Report", "Source at observed snapshot", `id="search"`, `id="verification"`, `id="tag-filter"`, "function matchesSearch", "function matchesTags", "function renderVerifications", "</html>"} {
+	for _, expected := range []string{"Repose Findings Report", "Source at observed snapshot", `id="search"`, `id="verification"`, `id="tag-filter"`, "function matchesSearch", "function matchesTags", "function revealHashFinding", "function renderVerifications", "</html>"} {
 		if !strings.Contains(output, expected) {
 			t.Errorf("HTML missing %q", expected)
 		}

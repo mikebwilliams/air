@@ -176,8 +176,9 @@ exact --tag filters narrow scope.
 Exports retain observed snapshots, assignment/attempt provenance, model identity,
 manual history, and every recheck verdict. HTML shows snapshot source excerpts
 and supports full-text search, sorting, verdict filters, and exact multi-tag filters.
-Export reads saved state without upgrading the database or invoking models; source
-previews use the observed commit.
+Finding URL fragments such as #1234 provide shareable direct links. Export reads
+saved state without upgrading the database or invoking models; source previews use
+the observed commit.
 Backup creates a consistent, integrity-checked SQLite snapshot without stopping
 active scans and never overwrites an existing file. Its default name is
 repose-backup-YYYYMMDD-HHMMSS.sqlite in the current directory. Backup import

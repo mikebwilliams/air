@@ -126,9 +126,13 @@ JSON/SARIF export open findings unless --all includes dismissed findings. HTML
 includes all dispositions and initially shows open findings; --all initially
 shows all of them. Its sorting and status/severity/verdict filters work offline,
 along with exact tag filters. Selecting multiple tags requires all of them; tags
-shown on a finding can also be clicked to filter. Text search covers finding text,
+shown on a finding can also be clicked to filter. Tag counts show how many findings
+would remain after adding each tag and respect the other active HTML filters. The
+Untagged pseudo-tag selects findings with no tags. Text search covers finding text,
 locations, tags, source excerpts, history notes, and recheck reasoning. Multiple
-search terms use AND semantics. Command-line path and verdict filters restrict the embedded records.
+search terms use AND semantics. Command-line path and verdict filters restrict the
+embedded records. A URL fragment such as #1234 selects and reveals finding 1234;
+mouse and keyboard selection update the fragment, and the detail ID is a link.
 Without --scan, findings from every original scan are eligible. Latest selects
 the newest completed original scan; a recheck ID selects its source scan's
 findings with all their verification history.

@@ -60,7 +60,9 @@ func TestCLIHTMLExportIsSelfContainedAndIncludesFindingHistory(t *testing.T) {
 		"<!doctype html>", "AIR Findings Report", `id="search"`, `aria-label="Text search"`,
 		`id="status"`, `id="severity"`, `id="tag-filter"`, `id="tag-options"`, `id="sort"`,
 		`value="age"`, `value="author"`, `value="title"`, "function matchesSearch",
-		"function matchesTags", "Introducing diff", "</html>",
+		"function matchesTags", "function remainingTagCounts", "function refreshTagOptions",
+		"function revealHashFinding", "window.addEventListener('hashchange'", "finding-link",
+		"Untagged", "Introducing diff", "</html>",
 	} {
 		if !strings.Contains(output, expected) {
 			t.Errorf("HTML export does not contain %q", expected)
