@@ -431,6 +431,33 @@ An unavailable source excerpt is reported without dropping the finding.
 Export opens the database read-only and neither upgrades it nor invokes models.
 It works while scans run and when the checkout differs from the observed snapshot.
 
+## Back up and restore scan state
+
+`backup` creates a consistent snapshot of the worktree-local Repose database:
+
+```sh
+.build/repose backup --repo kicad-repose
+.build/repose backup kicad-audit-before-triage.sqlite --repo kicad-repose
+.build/repose backup import kicad-audit-before-triage.sqlite --repo kicad-repose
+.build/repose backup import --force kicad-audit-before-triage.sqlite --repo kicad-repose
+```
+
+With no path, the output is named
+`repose-backup-YYYYMMDD-HHMMSS.sqlite` in the current directory; a numeric suffix
+avoids collisions. Explicit relative paths also use the current directory. Backup
+uses SQLite's online backup API, so it includes committed WAL state and can run
+while a scan is active. It never overwrites a destination, checks the result, and
+sets mode `0600`. Creating a backup neither upgrades the source schema nor invokes
+a model.
+
+Import accepts supported Repose schema versions and leaves the source backup
+unchanged. Before replacement it checks SQLite integrity and foreign keys,
+validates every inventory document, and verifies that every recorded snapshot is
+available in the target Git repository. Replacing an existing database prompts
+for confirmation unless `--force` is supplied. The replacement is blocked while
+a scan or semantic index coordinator holds its lock, and a failed install restores
+the previous database and SQLite sidecars.
+
 ## Browse in the terminal
 
 ```sh

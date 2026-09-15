@@ -135,6 +135,21 @@ a findings array; SARIF stores provenance and history in result properties. HTML
 shows source excerpts at the observed snapshot, even when the checkout has changed.
 Export reads the database without upgrading it or invoking a model.
 .TP
+.B repose backup [PATH]
+Create a consistent, integrity-checked SQLite snapshot of the worktree-local
+Repose database. With no path, create
+repose-backup-YYYYMMDD-HHMMSS.sqlite in the current directory, adding a numeric
+suffix on collision. The online backup includes committed WAL state and can run
+with an active scan. Existing destinations are never overwritten. The resulting
+file uses mode 0600. Accepts --repo DIR.
+.TP
+.B repose backup import [--force] PATH
+Validate and import a Repose backup. Integrity, foreign keys, inventory document
+hashes, and the availability of recorded Git snapshots are checked before the
+worktree-local database is replaced. Existing state requires confirmation unless
+--force is supplied. Import is blocked while a scan or semantic index coordinator
+is active. The source backup remains unchanged. Accepts --repo DIR.
+.TP
 .B repose inventory build
 Save an immutable inventory of HEAD, build inputs, tracked files, and policy.
 Identical inputs reuse an existing version. Inherits the current policy and

@@ -16,7 +16,7 @@ func acquireScanLock(lockPath string) (*scanLock, error) {
 	file, err := os.OpenFile(lockPath, os.O_CREATE|os.O_EXCL|os.O_RDWR, 0o600)
 	if err != nil {
 		if os.IsExist(err) {
-			return nil, fmt.Errorf("another air scan may already be running; remove %s if it is stale", lockPath)
+			return nil, fmt.Errorf("another scan may already be running; remove %s if it is stale", lockPath)
 		}
 		return nil, fmt.Errorf("open scan lock: %w", err)
 	}

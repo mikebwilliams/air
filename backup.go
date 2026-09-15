@@ -216,6 +216,24 @@ func validateBackupForRepository(ctx context.Context, repository *GitRepository,
 	if err := store.IntegrityCheck(ctx); err != nil {
 		return err
 	}
+	if err := validateBackupForeignKeys(ctx, store); err != nil {
+		return err
+	}
+	startSHA, err := store.Config(ctx, "start_sha")
+	if err != nil {
+		return err
+	}
+	onMaster, err := repository.IsOnMasterFirstParent(ctx, startSHA)
+	if err != nil {
+		return err
+	}
+	if !onMaster {
+		return fmt.Errorf("backup baseline %s is not on the first-parent history of master", shortSHA(startSHA))
+	}
+	return nil
+}
+
+func validateBackupForeignKeys(ctx context.Context, store *Store) error {
 	rows, err := store.db.QueryContext(ctx, `PRAGMA foreign_key_check`)
 	if err != nil {
 		return fmt.Errorf("check backup foreign keys: %w", err)
@@ -231,17 +249,6 @@ func validateBackupForRepository(ctx context.Context, repository *GitRepository,
 	}
 	if invalidForeignKey {
 		return errors.New("backup contains invalid foreign-key references")
-	}
-	startSHA, err := store.Config(ctx, "start_sha")
-	if err != nil {
-		return err
-	}
-	onMaster, err := repository.IsOnMasterFirstParent(ctx, startSHA)
-	if err != nil {
-		return err
-	}
-	if !onMaster {
-		return fmt.Errorf("backup baseline %s is not on the first-parent history of master", shortSHA(startSHA))
 	}
 	return nil
 }
@@ -304,22 +311,26 @@ func unusedTemporaryPath(directory, pattern string) (string, error) {
 }
 
 func replaceAIRDatabase(temporary, destination string, destinationExists bool) error {
+	return replaceSQLiteDatabase(temporary, destination, destinationExists, "AIR", ".reviews-rollback-*.sqlite")
+}
+
+func replaceSQLiteDatabase(temporary, destination string, destinationExists bool, product, rollbackPattern string) error {
 	if !destinationExists {
 		if err := removeSQLiteSidecars(destination); err != nil {
 			return err
 		}
 		if err := os.Rename(temporary, destination); err != nil {
-			return fmt.Errorf("install imported AIR database: %w", err)
+			return fmt.Errorf("install imported %s database: %w", product, err)
 		}
 		return nil
 	}
 
-	rollback, err := unusedTemporaryPath(filepath.Dir(destination), ".reviews-rollback-*.sqlite")
+	rollback, err := unusedTemporaryPath(filepath.Dir(destination), rollbackPattern)
 	if err != nil {
-		return fmt.Errorf("prepare AIR database replacement: %w", err)
+		return fmt.Errorf("prepare %s database replacement: %w", product, err)
 	}
 	if err := os.Rename(destination, rollback); err != nil {
-		return fmt.Errorf("preserve current AIR database during import: %w", err)
+		return fmt.Errorf("preserve current %s database during import: %w", product, err)
 	}
 	movedSidecars := make([]string, 0, len(sqliteSidecarSuffixes))
 	restore := func() error {
@@ -341,20 +352,20 @@ func replaceAIRDatabase(temporary, destination string, destinationExists bool) e
 				continue
 			}
 			_ = restore()
-			return fmt.Errorf("inspect current AIR database sidecar: %w", err)
+			return fmt.Errorf("inspect current %s database sidecar: %w", product, err)
 		}
 		if err := os.Rename(destination+suffix, rollback+suffix); err != nil {
 			restoreErr := restore()
-			return errors.Join(fmt.Errorf("preserve current AIR database sidecar: %w", err), restoreErr)
+			return errors.Join(fmt.Errorf("preserve current %s database sidecar: %w", product, err), restoreErr)
 		}
 		movedSidecars = append(movedSidecars, suffix)
 	}
 	if err := os.Rename(temporary, destination); err != nil {
 		restoreErr := restore()
-		return errors.Join(fmt.Errorf("install imported AIR database: %w", err), restoreErr)
+		return errors.Join(fmt.Errorf("install imported %s database: %w", product, err), restoreErr)
 	}
 	if err := removeDatabaseFiles(rollback); err != nil {
-		return fmt.Errorf("import succeeded but remove replaced AIR database: %w", err)
+		return fmt.Errorf("import succeeded but remove replaced %s database: %w", product, err)
 	}
 	return nil
 }
@@ -364,7 +375,7 @@ var sqliteSidecarSuffixes = []string{"-journal", "-shm", "-wal"}
 func removeSQLiteSidecars(databasePath string) error {
 	for _, suffix := range sqliteSidecarSuffixes {
 		if err := os.Remove(databasePath + suffix); err != nil && !errors.Is(err, os.ErrNotExist) {
-			return fmt.Errorf("remove stale AIR database sidecar: %w", err)
+			return fmt.Errorf("remove stale database sidecar: %w", err)
 		}
 	}
 	return nil
@@ -460,17 +471,17 @@ func (s *Store) Backup(ctx context.Context, destination string) (err error) {
 		return fmt.Errorf("open backup destination: %w", err)
 	}
 	if err := copySQLiteDatabase(ctx, s.db, destinationDB); err != nil {
-		return fmt.Errorf("back up AIR database: %w", err)
+		return fmt.Errorf("back up SQLite database: %w", err)
 	}
 	if err := (&Store{db: destinationDB}).IntegrityCheck(ctx); err != nil {
-		return fmt.Errorf("verify AIR backup: %w", err)
+		return fmt.Errorf("verify SQLite backup: %w", err)
 	}
 	destinationClosed = true
 	if err := destinationDB.Close(); err != nil {
-		return fmt.Errorf("close AIR backup: %w", err)
+		return fmt.Errorf("close SQLite backup: %w", err)
 	}
 	if err := os.Chmod(destination, 0o600); err != nil {
-		return fmt.Errorf("secure AIR backup: %w", err)
+		return fmt.Errorf("secure SQLite backup: %w", err)
 	}
 	complete = true
 	return nil

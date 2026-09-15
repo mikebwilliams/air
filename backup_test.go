@@ -241,7 +241,7 @@ func TestCLIBackupImportRejectsInvalidBackupAndActiveScan(t *testing.T) {
 	if closeErr := lock.Close(); err == nil && closeErr != nil {
 		err = closeErr
 	}
-	if err == nil || !strings.Contains(err.Error(), "another air scan") {
+	if err == nil || !strings.Contains(err.Error(), "another scan") {
 		t.Fatalf("active-scan import error = %v", err)
 	}
 	if got := backupTestConfig(t, ctx, repository.DatabasePath(), "model"); got != "current-model" {

@@ -36,6 +36,8 @@ Usage:
   repose finding show|dismiss|reopen|note ID [--reason TEXT] [--repo DIR]
   repose finding tag|untag ID... --tag TAG [--tag TAG...] [--repo DIR]
   repose tags [--scan ID|latest] [--all] [--json] [--repo DIR]
+  repose backup [PATH] [--repo DIR]
+  repose backup import [--force] PATH [--repo DIR]
   repose export --format json|sarif|html [-o FILE] [--scan ID|latest]
                 [--path PREFIX] [--verification VERDICT] [--tag TAG] [--all] [--repo DIR]
   repose inventory build [--repo DIR] [--compile-commands FILE] [--policy FILE]
@@ -175,6 +177,12 @@ Exports retain observed snapshots, assignment/attempt provenance, model identity
 manual history, and every recheck verdict. HTML shows snapshot source excerpts
 and supports search, sorting, and verdict filters. Export reads saved state without
 upgrading the database or invoking models; source previews use the observed commit.
+Backup creates a consistent, integrity-checked SQLite snapshot without stopping
+active scans and never overwrites an existing file. Its default name is
+repose-backup-YYYYMMDD-HHMMSS.sqlite in the current directory. Backup import
+validates the schema, foreign keys, inventory documents, and repository snapshots,
+then replaces the worktree-local database while scan and index locks are held.
+Replacing existing state prompts unless --force is supplied.
 Cross-scan deduplication and token/cost budgets remain future work.
 `
 
@@ -216,6 +224,13 @@ func runReposeCLI(ctx context.Context, args []string, environment cliEnvironment
 	}
 	if args[0] == "tags" {
 		return runAuditTagsCLI(ctx, args[1:], environment)
+	}
+	if args[0] == "backup" {
+		if containsHelpFlag(args[1:]) {
+			fmt.Fprint(environment.Stdout, reposeHelp)
+			return nil
+		}
+		return runReposeBackupCLI(ctx, args[1:], environment)
 	}
 	if args[0] != "inventory" {
 		return fmt.Errorf("unknown command %q; run repose help", args[0])

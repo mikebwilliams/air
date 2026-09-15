@@ -19,7 +19,7 @@ func acquireScanLock(lockPath string) (*scanLock, error) {
 	}
 	if err := syscall.Flock(int(file.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
 		_ = file.Close()
-		return nil, fmt.Errorf("another air scan is already running")
+		return nil, fmt.Errorf("another scan is already running")
 	}
 	return &scanLock{file: file}, nil
 }
