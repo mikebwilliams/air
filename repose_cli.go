@@ -19,6 +19,7 @@ const reposeVersion = "0.5-dev"
 const reposeHelp = `Repose — sustained C/C++ repository audits
 
 Usage:
+  repose status [--scan ID|latest] [--jobs N] [--json] [--repo DIR]
   repose scan create --model MODEL [--harness codex|claude|gemini] [--effort LEVEL]
                      [--inventory ID] [--path PREFIX] [--goal TEXT] [--timeout DURATION] [--repo DIR]
   repose scan run ID [--jobs N] [--limit N] [--duration DURATION]
@@ -185,6 +186,13 @@ repose-backup-YYYYMMDD-HHMMSS.sqlite in the current directory. Backup import
 validates the schema, foreign keys, inventory documents, and repository snapshots,
 then replaces the worktree-local database while scan and index locks are held.
 Replacing existing state prompts unless --force is supplied.
+Status summarizes the current inventory, findings, scans, assignment progress,
+token usage, and model worker time. --scan restricts every total to one scan;
+a recheck selects findings from its source scan. Remaining-time estimates use
+successful assignment durations. --jobs converts remaining worker time into an
+approximate wall-clock duration without changing or starting a scan.
+Failed assignments remain separate from the estimate until resumed with
+--retry-failed.
 Cross-scan deduplication and token/cost budgets remain future work.
 `
 
@@ -199,6 +207,13 @@ func runReposeCLI(ctx context.Context, args []string, environment cliEnvironment
 		}
 		fmt.Fprintf(environment.Stdout, "repose %s\n", reposeVersion)
 		return nil
+	}
+	if args[0] == "status" {
+		if containsHelpFlag(args[1:]) {
+			fmt.Fprint(environment.Stdout, reposeHelp)
+			return nil
+		}
+		return runReposeStatusCLI(ctx, args[1:], environment)
 	}
 	if args[0] == "scan" {
 		if containsHelpFlag(args[1:]) {

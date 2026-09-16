@@ -217,6 +217,7 @@ prompts, then dispatch a few assignments:
 .build/repose scan prompt SCAN_ID 1 --repo kicad-repose
 .build/repose scan run SCAN_ID --repo kicad-repose --jobs 2 --limit 4
 .build/repose scan show SCAN_ID --repo kicad-repose
+.build/repose status --repo kicad-repose --jobs 2
 .build/repose findings --repo kicad-repose --scan SCAN_ID
 ```
 
@@ -256,6 +257,18 @@ With at least 32 pending assignments, this allows 32 to run in parallel and
 starts no replacement work after the batch. Failed or throttled attempts also
 consume the limit; the run never adds extra retries beyond it. A later
 `scan resume ... --limit 32` permits another batch of up to 32 attempts.
+
+`repose status` gives one read-only operational summary of the current inventory,
+finding and verification counts, scan and assignment states, token usage, and
+recorded model worker time. It estimates remaining worker time from successful
+assignments. Since concurrency is chosen for each invocation and is not part of
+the frozen scan, pass `--jobs N` to also estimate wall-clock time at that
+parallelism. `--scan ID|latest` restricts scan, task, usage, timing, and finding
+totals to one scan; selecting a recheck reports findings from its source scan.
+`--json` emits the same report as structured data. The command does not access a
+model or alter scan state.
+Failed assignments are reported separately and are not included in the remaining
+estimate until `scan resume --retry-failed` returns them to the pending queue.
 
 `--duration 30m` stops dispatching after that interval and lets active work
 finish; it can exceed the interval by an assignment timeout.

@@ -164,44 +164,20 @@ func runAuditCLI(ctx context.Context, args []string, environment cliEnvironment)
 		return nil
 	}
 	if command == "list" {
-		if store.version < 4 {
-			if *asJSON {
-				return writeInventoryJSON(environment.Stdout, []auditScan{})
-			}
-			fmt.Fprintln(environment.Stdout, "No scans.")
-			return nil
-		}
-		rows, err := store.db.QueryContext(ctx, "SELECT id FROM audit_scans ORDER BY rowid DESC")
+		scans, err := store.audits(ctx)
 		if err != nil {
 			return err
 		}
-		ids := []string{}
-		for rows.Next() {
-			var id string
-			if err := rows.Scan(&id); err != nil {
-				rows.Close()
-				return err
-			}
-			ids = append(ids, id)
-		}
-		err = rows.Err()
-		rows.Close()
-		if err != nil {
-			return err
-		}
-		scans := []auditScan{}
-		for _, id := range ids {
-			scan, err := store.audit(ctx, id)
-			if err != nil {
-				return err
-			}
-			scans = append(scans, scan)
+		for _, scan := range scans {
 			if !*asJSON {
 				printAuditStatus(environment.Stdout, scan)
 			}
 		}
 		if *asJSON {
 			return writeInventoryJSON(environment.Stdout, scans)
+		}
+		if len(scans) == 0 {
+			fmt.Fprintln(environment.Stdout, "No scans.")
 		}
 		return nil
 	}

@@ -2,6 +2,9 @@
 .SH NAME
 repose \- sustained C/C++ repository audits
 .SH SYNOPSIS
+.B repose status
+.RI [ OPTIONS ]
+.br
 .B repose inventory
 .I COMMAND
 .RI [ OPTIONS ]
@@ -13,6 +16,17 @@ for KiCad. Use a clean, dedicated scan checkout with a compilation database
 configured for that checkout. This release implements inventory building and
 review, clangd semantic indexing, assignment previews, and durable parallel scanning.
 .SH COMMANDS
+.TP
+.BR "repose status" " [--scan " ID|latest "] [--jobs " N "] [--json]"
+Summarize the current inventory, findings and latest verification outcomes, scan
+and assignment states, token usage, and recorded model worker time. Remaining
+worker time is estimated from successful assignment durations. --jobs, from 1
+through 32, also reports an approximate wall-clock duration at that parallelism;
+it does not start or modify a scan. --scan restricts the report to one scan. A
+selected recheck uses its original source scan for finding totals. Without
+--scan, totals cover all scans and all findings. The command is read-only.
+Failed assignments are reported separately and are excluded from remaining-time
+estimates until resumed with --retry-failed.
 .TP
 .B repose scan create --model MODEL
 Freeze an approved inventory, selected assignments, prompts, goal, and model

@@ -172,6 +172,39 @@ func (s *inventoryStore) audit(ctx context.Context, selector string) (auditScan,
 	return scan, err
 }
 
+func (s *inventoryStore) audits(ctx context.Context) ([]auditScan, error) {
+	if s.version < 4 {
+		return []auditScan{}, nil
+	}
+	rows, err := s.db.QueryContext(ctx, "SELECT id FROM audit_scans ORDER BY rowid DESC")
+	if err != nil {
+		return nil, err
+	}
+	ids := []string{}
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	err = rows.Err()
+	rows.Close()
+	if err != nil {
+		return nil, err
+	}
+	scans := make([]auditScan, 0, len(ids))
+	for _, id := range ids {
+		scan, err := s.audit(ctx, id)
+		if err != nil {
+			return nil, err
+		}
+		scans = append(scans, scan)
+	}
+	return scans, nil
+}
+
 // Select by remaining work rather than status alone: incomplete scans can have
 // only terminal unable-to-assess results, and crashed scans can still be running.
 func (s *inventoryStore) resumableAuditIDs(ctx context.Context, retryFailed bool) ([]string, error) {
