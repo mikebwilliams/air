@@ -39,6 +39,7 @@ func TestReposeDoctorHealthyStateAndJSON(t *testing.T) {
 		"scan state":         "pass",
 		"runner codex":       "pass",
 		"model pricing":      "warn",
+		"reviewer guidance":  "pass",
 	}
 	for name, status := range want {
 		check, found := reposeDoctorCheck(report, name)

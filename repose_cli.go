@@ -27,8 +27,16 @@ Usage:
   repose model show NAME [--json] [--repo DIR]
   repose model set-pricing NAME [PRICING OPTIONS] [--json] [--repo DIR]
   repose model mark-pricing-unknown NAME [--json] [--repo DIR]
+  repose prompt list [--json] [--repo DIR]
+  repose prompt show [--full] scan|recheck [--json] [--repo DIR]
+  repose prompt set (--file FILE|--stdin) scan|recheck [--json] [--repo DIR]
+  repose prompt reset scan|recheck [--json] [--repo DIR]
+  repose hint add TEXT [--json] [--repo DIR]
+  repose hint list [--scan ID|latest] [--json] [--repo DIR]
+  repose hint remove ID [--json] [--repo DIR]
   repose scan create --model MODEL [--harness codex|claude|gemini] [--effort LEVEL]
-                     [--inventory ID] [--path PREFIX] [--goal TEXT] [--timeout DURATION] [--repo DIR]
+                     [--inventory ID] [--path PREFIX] [--goal TEXT] [--hint TEXT]
+                     [--timeout DURATION] [--repo DIR]
   repose scan run ID [--jobs N] [--limit N] [--duration DURATION]
                      [--retry-failed] [--timeout DURATION] [--repo DIR]
   repose scan resume [ID] [--jobs N] [--limit N] [--duration DURATION]
@@ -37,7 +45,7 @@ Usage:
   repose scan prompt ID TASK [--repo DIR]
   repose scan pause|interrupt ID [--repo DIR]
   repose recheck [FINDING_ID...] --model MODEL [--scan ID|latest] [--path PREFIX] [--tag TAG]
-                 [--harness codex|claude|gemini] [--effort LEVEL] [--timeout DURATION]
+                 [--hint TEXT] [--harness codex|claude|gemini] [--effort LEVEL] [--timeout DURATION]
                  [--jobs N] [--limit N] [--duration DURATION] [--retry-failed]
                  [--dry-run|--create-only] [--force] [--json] [--repo DIR]
   repose findings [--scan ID] [--verification VERDICT] [--tag TAG] [--all] [--json] [--repo DIR]
@@ -138,6 +146,13 @@ Policy export writes editable JSON; policy import replaces the current policy.
 
 Scan create freezes an approved inventory, subset, goal, model settings, source
 prompts, and semantic plan. --instructions FILE freezes additional project guidance.
+Prompt set customizes the editable scan or recheck reviewer instructions while
+leaving Repose's safety, scope, and response protocol fixed. Active saved hints
+supplement both kinds. Repeated --hint values add one-off guidance. Prompt text,
+hint IDs and text, source, and a content identity are frozen in every new scan;
+later edits do not change queued work. Prompt show --full displays the current
+effective instructions, hints, and fixed protocol. Hint list --scan ID inspects a
+saved snapshot.
 It requires --model; runner defaults to codex, effort to high, timeout to 30m.
 Gemini requires --effort default. --binary selects a runner executable.
 Creation makes no model calls. Run/resume share one coordinator lock per checkout.
@@ -226,7 +241,7 @@ Cross-scan deduplication and token/cost budgets remain future work.
 Doctor performs a read-only health audit of the repository, Repose state,
 SQLite integrity and foreign keys, saved inventory snapshots, checkout/build
 identity, semantic coverage and clangd identity, saved scan state, runner
-executables, and model pricing coverage. Warnings describe optional or incomplete
+executables, reviewer guidance, hints, and model pricing coverage. Warnings describe optional or incomplete
 capabilities; failed checks produce a nonzero exit status. --json emits the full
 report before the command returns a failed-check error.
 `
@@ -270,6 +285,16 @@ func runReposeCLI(ctx context.Context, args []string, environment cliEnvironment
 			return nil
 		}
 		return runReposeModelCLI(ctx, args[1:], environment)
+	}
+	if args[0] == "prompt" || args[0] == "hint" {
+		if containsHelpFlag(args[1:]) {
+			fmt.Fprint(environment.Stdout, reposeHelp)
+			return nil
+		}
+		if args[0] == "prompt" {
+			return runReposePromptCLI(ctx, args[1:], environment)
+		}
+		return runReposeHintCLI(ctx, args[1:], environment)
 	}
 	if args[0] == "scan" {
 		if containsHelpFlag(args[1:]) {

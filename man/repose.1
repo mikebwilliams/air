@@ -18,6 +18,14 @@ repose \- sustained C/C++ repository audits
 .I COMMAND
 .RI [ OPTIONS ]
 .br
+.B repose prompt
+.I COMMAND
+.RI [ OPTIONS ]
+.br
+.B repose hint
+.I COMMAND
+.RI [ OPTIONS ]
+.br
 .B repose inventory
 .I COMMAND
 .RI [ OPTIONS ]
@@ -35,7 +43,8 @@ Perform a read-only health audit of the Git repository and worktree-local Repose
 state. Checks include SQLite integrity and foreign keys, stored inventory hashes
 and Git snapshots, current checkout and build-input identity, inventory approval,
 semantic-index coverage and its recorded clangd binary, saved scan configuration
-and task state, runner executables, and repository model pricing coverage. Optional
+and task state, runner executables, reviewer guidance and hints, and repository
+model pricing coverage. Optional
 or incomplete capabilities are warnings. Corrupt state, missing snapshots or
 runners required by unfinished scans, and checkout/build drift are failures and
 produce a nonzero exit status. A runner referenced only by historical scans is a
@@ -90,12 +99,42 @@ Record that pricing for an exact model identifier is unknown, overriding a
 built-in entry with the same name. Existing attempts and harness-reported costs
 remain unchanged.
 .TP
+.BR "repose prompt list" " [--json] [--repo " DIR "]"
+List the effective scan and recheck reviewer instruction sources, active hint
+counts, and content identities.
+.TP
+.BR "repose prompt show" " [--full] " scan|recheck " [--json] [--repo " DIR "]"
+Show the editable reviewer instructions. --full includes active hints and
+Repose's fixed read-only, scope, trust-boundary, and response protocol.
+.TP
+.BR "repose prompt set" " (--file " FILE "|--stdin) " scan|recheck
+Save repository reviewer instructions for future work. The editable portion can
+change review priorities and project semantics but cannot replace the fixed
+protocol. --json reports the resulting effective identity.
+.TP
+.BR "repose prompt reset " scan|recheck " [--json] [--repo " DIR "]"
+Remove a repository override and restore built-in reviewer instructions. Active
+hints remain effective.
+.TP
+.BR "repose hint add " TEXT " [--json] [--repo " DIR "]"
+Save a project hint with a stable numeric ID. Active hints supplement both scan
+and recheck prompts.
+.TP
+.BR "repose hint list" " [--scan " ID|latest "] [--json] [--repo " DIR "]"
+List active hints, or the exact hint snapshot frozen in a saved scan.
+.TP
+.BR "repose hint remove " ID " [--json] [--repo " DIR "]"
+Remove an active hint from future work. Saved scan snapshots remain unchanged.
+.TP
 .B repose scan create --model MODEL
 Freeze an approved inventory, selected assignments, prompts, goal, and model
 settings. Accepts --inventory ID, --path, --group, --tag, --index, --goal,
---max-files, --max-bytes, --instructions FILE, --harness, --effort, --binary,
-and --timeout. Defaults to codex/high and a 30 minute per-assignment timeout.
-Gemini requires --effort default. Creation makes no model calls.
+--max-files, --max-bytes, --instructions FILE, repeatable --hint, --harness,
+--effort, --binary, and --timeout. Defaults to codex/high and a 30 minute
+per-assignment timeout.
+Gemini requires --effort default. Creation freezes the effective prompt, saved
+and one-off hints, project guidance, and prompt identity. Later prompt and hint
+edits do not change the scan. Creation makes no model calls.
 .TP
 .B repose scan run ID
 .br
@@ -156,8 +195,9 @@ smaller batches remain smaller and never combine different source assignments.
 reviews and recheck passes. An explicit --scan ID can select a partial scan.
 Optional finding IDs, --path PREFIX, and repeatable --tag TAG filters narrow scope;
 multiple tags use AND semantics and dismissed findings are excluded.
-Accepts --harness, --effort (default high), --binary, --timeout (default 30m),
---jobs (default 2), --limit, --duration, and --retry-failed as for scan execution.
+Accepts repeatable --hint, --harness, --effort (default high), --binary,
+--timeout (default 30m), --jobs (default 2), --limit, --duration, and
+--retry-failed as for scan execution.
 Jobs count concurrent batches, limit counts batch attempts including retries,
 and timeout applies per batch. --batch-max 1 runs a separate call for each finding.
 --dry-run previews without writes or model calls; --create-only saves the queue

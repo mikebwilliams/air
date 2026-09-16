@@ -18,6 +18,7 @@ func runAuditRecheckCLI(ctx context.Context, args []string, environment cliEnvir
 	sourceSelector := flags.String("scan", "latest", "source scan; latest means the newest completed original scan")
 	path := flags.String("path", ".", "filter findings by source path prefix")
 	tagValues := flags.StringArray("tag", nil, "require a finding tag (repeatable; multiple tags use AND)")
+	hintValues := flags.StringArray("hint", nil, "add one-off project guidance to this recheck; repeatable")
 	asJSON := flags.Bool("json", false, "output recheck status as JSON")
 	dryRun := flags.Bool("dry-run", false, "show selected findings without saving or invoking a model")
 	createOnly := flags.Bool("create-only", false, "save the recheck without invoking a model")
@@ -132,7 +133,11 @@ func runAuditRecheckCLI(ctx context.Context, args []string, environment cliEnvir
 	if len(selected) == 0 {
 		return errors.New("no open findings in the selected source scan/path/tag filters")
 	}
-	spec, err := buildAuditRecheckSpec(source, selected, config, *batchMax)
+	prompt, err := resolveReposeReviewerPrompt(ctx, reader, "recheck", (*hintValues)...)
+	if err != nil {
+		return err
+	}
+	spec, err := buildAuditRecheckSpecWithPrompt(source, selected, config, *batchMax, prompt)
 	if err != nil {
 		return err
 	}
@@ -161,7 +166,8 @@ func runAuditRecheckCLI(ctx context.Context, args []string, environment cliEnvir
 				Batches      []auditRecheckBatch `json:"batches"`
 				ExistingID   string              `json:"existing_recheck_id,omitempty"`
 				Force        bool                `json:"force"`
-			}{source.ID, config, ids, *batchMax, spec.Recheck.Batches, existing.ID, *force})
+				Prompt       string              `json:"prompt_identity"`
+			}{source.ID, config, ids, *batchMax, spec.Recheck.Batches, existing.ID, *force, effectiveAuditPromptIdentity(spec)})
 		}
 		fmt.Fprintf(environment.Stdout, "%d findings in %d batches (max %d findings per batch) from scan %s selected for %s/%s/%s. No work saved or started.\n", len(selected), len(spec.Recheck.Batches), *batchMax, source.ID[:12], config.Harness, config.Model, config.Effort)
 		byID := map[int64]Finding{}

@@ -28,6 +28,7 @@ func runAuditCLI(ctx context.Context, args []string, environment cliEnvironment)
 	limits := inventoryPlanLimits{8, 65536}
 	config := auditModelConfig{Harness: "codex", Effort: "high", Timeout: defaultAuditTimeout}
 	goal, instructionsFile, inventoryID, indexID := "Find correctness issues.", "", "current", ""
+	var hintValues []string
 	runOptions := auditRunOptions{Jobs: 2}
 	if command == "create" {
 		flags.StringVar(&inventoryID, "inventory", "current", "approved inventory ID")
@@ -44,6 +45,7 @@ func runAuditCLI(ctx context.Context, args []string, environment cliEnvironment)
 		flags.StringVar(&config.Binary, "binary", "", "runner executable")
 		flags.DurationVar(&config.Timeout, "timeout", config.Timeout, "per-assignment timeout")
 		flags.StringVar(&instructionsFile, "instructions", "", "file of project guidance to freeze in the scan")
+		flags.StringArrayVar(&hintValues, "hint", nil, "add one-off project guidance to this scan; repeatable")
 	}
 	if command == "run" || command == "resume" {
 		flags.IntVar(&runOptions.Jobs, "jobs", 2, "parallel assignments (1..32)")
@@ -137,7 +139,12 @@ func runAuditCLI(ctx context.Context, args []string, environment cliEnvironment)
 				return err
 			}
 		}
+		prompt, err := resolveReposeReviewerPrompt(ctx, store, "scan", hintValues...)
+		if err != nil {
+			return err
+		}
 		spec := auditSpec{Plan: plan, Model: config, PromptVersion: auditPromptVersion}
+		applyReposeReviewerPrompt(&spec, prompt)
 		if instructionsFile != "" {
 			data, err := readLimitedFile(reposeAbsolutePath(environment.Cwd, instructionsFile), 65536)
 			if err != nil {
@@ -313,6 +320,7 @@ func printAuditStatus(output io.Writer, scan auditScan) {
 	}
 	fmt.Fprintf(output, "Scan %s  %s  %s/%s/%s\nInventory %s  observed %s\n%d %s: %d pending, %d running, %d completed, %d unable to assess, %d failed\n", scan.ID[:12], scan.Status, scan.Spec.Model.Harness, scan.Spec.Model.Model, scan.Spec.Model.Effort,
 		shortSHA(scan.Spec.Plan.InventoryID), shortSHA(scan.Spec.Plan.SnapshotSHA), len(scan.Spec.Plan.Assignments), units, scan.Counts["pending"], scan.Counts["running"], scan.Counts["completed"], scan.Counts["unable_to_assess"], scan.Counts["failed"])
+	printReposePromptSnapshot(output, scan.Spec)
 	if scan.Control != "" {
 		fmt.Fprintln(output, "Control requested:", scan.Control)
 	}

@@ -208,6 +208,33 @@ work. See [semantic indexing details](docs/semantic-inventory.md).
 
 ## Run a bounded audit
 
+Repository reviewer instructions and project hints apply to future scans and
+rechecks. The editable instructions describe what the reviewer should prioritize;
+Repose keeps its read-only inspection, assignment scope, trust boundaries, and
+JSON response protocol fixed.
+
+```sh
+.build/repose prompt list --repo kicad-repose
+.build/repose prompt show --full scan --repo kicad-repose
+.build/repose prompt set --file scan-review.txt scan --repo kicad-repose
+.build/repose prompt set --file finding-recheck.txt recheck --repo kicad-repose
+.build/repose hint add "Pay special attention to rollback after partial construction." --repo kicad-repose
+.build/repose hint list --repo kicad-repose
+```
+
+`prompt reset scan|recheck` restores the built-in reviewer instructions. Hints
+have stable numeric IDs and `hint remove ID` removes one from future work. Active
+hints apply to both prompt kinds. Repeatable `--hint TEXT` options on `scan
+create` and `recheck` add one-off hints. `--instructions FILE` remains separate
+scan-specific project guidance.
+
+Each new scan freezes the exact effective prompt, prompt identity, saved and
+one-off hint text, and additional project guidance into its assignments. Later
+prompt edits and hint removal cannot change queued or completed work. Use `scan
+prompt ID TASK` to inspect the complete model input and `hint list --scan ID` to
+inspect the recorded hint snapshot. Repeating a recheck resumes an existing pass
+only when its frozen prompt identity and the rest of its selection match.
+
 Approve the inventory version you reviewed, create a scan, inspect its frozen
 prompts, then dispatch a few assignments:
 
@@ -222,8 +249,8 @@ prompts, then dispatch a few assignments:
 ```
 
 Creation freezes the inventory, selected plan, goal, model/effort/executable,
-default per-assignment timeout, optional `--instructions FILE`, and exact prompts with
-target source text. It makes no model calls. A matching saved semantic index is
+default per-assignment timeout, optional instructions and hints, and exact prompts
+with target source text. It makes no model calls. A matching saved semantic index is
 used automatically; `--index ID` selects one. Scope and size flags match
 `inventory plan`. Oversized assignments must be addressed before scan creation.
 
@@ -281,11 +308,11 @@ long audit:
 It checks SQLite integrity and foreign keys, every saved inventory document and
 Git snapshot, the current checkout and build-input fingerprints, semantic-index
 coverage and its recorded clangd binary, saved scan state, runner executables,
-and repository model pricing coverage. Missing optional coverage and failed or running
-assignments are warnings. Corrupt state, missing snapshots, checkout/build drift,
-and a missing runner required by unfinished work are failures and produce a nonzero exit status;
-JSON is still written first. A missing runner referenced only by historical scans
-is a warning.
+reviewer guidance and hints, and repository model pricing coverage. Missing
+optional coverage and failed or running assignments are warnings. Corrupt state,
+missing snapshots, checkout/build drift, and a missing runner required by
+unfinished work are failures and produce a nonzero exit status; JSON is still
+written first. A missing runner referenced only by historical scans is a warning.
 
 Use `stats` for retained attempt outcomes, timing, tokens, cost, and finding totals,
 or `cost` for the accounting-focused view:
@@ -441,7 +468,8 @@ scan with findings. Optional positional finding IDs, `--path PREFIX`, and
 repeatable `--tag TAG` filters narrow the selection. Multiple tags use AND
 semantics. Dismissed findings are excluded. `--create-only` saves the frozen
 prompts and queue without making model calls; `scan prompt RECHECK_ID N` inspects
-them. `--dry-run` neither saves work nor upgrades the database.
+them. Saved recheck instructions and active hints apply, and repeatable `--hint`
+adds one-off guidance. `--dry-run` neither saves work nor upgrades the database.
 
 Repeating the same source/finding selection, model, effort, executable, batch
 maximum, and prompt identity resumes its saved recheck without repeating completed
@@ -483,9 +511,10 @@ inspection also expose verification history:
 .build/repose finding FINDING_ID --repo kicad-repose
 ```
 
-Schema version 8 supports multiple finding verdicts per attempt, user-managed
-finding tags, and repository model pricing. Use the rebuilt Repose binary after
-a writer upgrades the database; older builds cannot open v8.
+Schema version 9 supports multiple finding verdicts per attempt, user-managed
+finding tags, repository model pricing, and saved reviewer guidance. Use the
+rebuilt Repose binary after a writer upgrades the database; older builds cannot
+open v9.
 Existing inventories, scans, findings, attempts, and earlier verification history
 are preserved by the upgrade.
 

@@ -87,8 +87,26 @@ func inspectReposeDoctor(ctx context.Context, repositoryPath string) doctorRepor
 		inspectReposeDoctorCheckout(ctx, &report, repository, record)
 		inspectReposeDoctorSemantic(ctx, &report, record, store)
 	}
+	inspectReposeDoctorPrompts(ctx, &report, store)
 	inspectReposeDoctorScans(ctx, &report, store)
 	return report
+}
+
+func inspectReposeDoctorPrompts(ctx context.Context, report *doctorReport, store *inventoryStore) {
+	if store.version < 9 {
+		report.add("reviewer guidance", "warn", "built-in prompts are usable; saved prompt and hint storage will be added by the next write")
+		return
+	}
+	details := []string{}
+	for _, kind := range []string{"scan", "recheck"} {
+		prompt, err := resolveReposeReviewerPrompt(ctx, store, kind)
+		if err != nil {
+			report.add("reviewer guidance", "fail", err.Error())
+			return
+		}
+		details = append(details, fmt.Sprintf("%s %s with %d active %s", kind, prompt.Source, len(prompt.Hints), statusPlural(len(prompt.Hints), "hint", "hints")))
+	}
+	report.add("reviewer guidance", "pass", strings.Join(details, "; "))
 }
 
 func inspectReposeDoctorPermissions(report *doctorReport, name, filename string, directory bool) {

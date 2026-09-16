@@ -21,11 +21,15 @@ type auditModelConfig struct {
 }
 
 type auditSpec struct {
-	Plan          inventoryPlan     `json:"plan"`
-	Model         auditModelConfig  `json:"model"`
-	PromptVersion string            `json:"prompt_version"`
-	Instructions  string            `json:"instructions"`
-	Recheck       *auditRecheckSpec `json:"recheck,omitempty"`
+	Plan           inventoryPlan     `json:"plan"`
+	Model          auditModelConfig  `json:"model"`
+	PromptVersion  string            `json:"prompt_version"`
+	PromptIdentity string            `json:"prompt_identity,omitempty"`
+	PromptSource   string            `json:"prompt_source,omitempty"`
+	StaticPrompt   string            `json:"static_prompt,omitempty"`
+	Hints          []ReviewHint      `json:"hints,omitempty"`
+	Instructions   string            `json:"instructions"`
+	Recheck        *auditRecheckSpec `json:"recheck,omitempty"`
 }
 
 type auditScan struct {
