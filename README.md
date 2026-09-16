@@ -342,8 +342,25 @@ The inherited findings TUI now displays observed snapshots, scan/assignment/
 attempt provenance, and snapshot source previews. Use `/` to search, `s`/`v` to
 filter status/severity, `D` to dismiss with a reason, `r` to reopen, `n` to add a
 note, `t`/`u` to add/remove tags, `T` to filter by exact tags, and `R` to reload
-results while a scan runs. `findings --json` exports saved findings;
-`finding show|dismiss|reopen|note ID` offers single-finding CLI access.
+results while a scan runs. Press `o` to open the selected file when the checkout
+still exactly matches its observed snapshot. `findings --json` exports saved
+findings; `finding ID` (or `finding show ID`) displays one finding with its model,
+snapshot provenance, verification results, and audited history. Add `--json` for
+the saved finding record. `finding dismiss|reopen|note ID` updates its disposition
+or history.
+
+`finding list` is the noninteractive counterpart to the TUI. It filters by source
+scan, disposition, severity, latest verification, path, and exact tags, and can
+sort or limit either its table or versioned JSON output. `finding source` always
+reads from the recorded commit, so it remains safe after the checkout moves.
+`finding open` starts the configured Git editor only after verifying both HEAD and
+the target file against that commit:
+
+```sh
+.build/repose finding list --scan latest --tag triage:high-value --sort severity --repo kicad-repose
+.build/repose finding source 1234 --context 30 --repo kicad-repose
+.build/repose finding open 1234 --repo kicad-repose
+```
 
 Finding tags are lowercase labels. Simple names such as `crash` and `parser` work;
 `class:ownership` or `triage:high-value` can be used as an optional naming
@@ -420,7 +437,7 @@ inspection also expose verification history:
 
 ```sh
 .build/repose findings --repo kicad-repose --scan SOURCE_SCAN_ID --verification confirmed
-.build/repose finding show FINDING_ID --repo kicad-repose
+.build/repose finding FINDING_ID --repo kicad-repose
 ```
 
 Schema version 7 supports multiple finding verdicts per attempt and user-managed

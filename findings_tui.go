@@ -1164,7 +1164,7 @@ func (m findingsModel) footer() string {
 		return fmt.Sprintf("Reopen #%d?  y yes, n no", m.selectedID())
 	default:
 		if m.external.snapshot {
-			return "j/k move | / search | t/u tag | T filter | D dismiss | r reopen | n note | R reload | ? | q"
+			return "j/k move | / search | o open | t/u tag | T filter | D dismiss | r reopen | n note | R reload | ? | q"
 		}
 		return "↑/↓ j/k move  ←/→ sort  / search  d diff  o open  D dismiss  r reopen  n note  ? help  q quit"
 	}
@@ -1194,7 +1194,7 @@ q             quit
 
 All changes use the same audited finding lifecycle as the singular finding command.`, width)
 	if m.external.snapshot {
-		lines = wrapText("j/k or arrows: select finding; left/right: sort\n/: search; s: status; v: severity; V: verification; T: exact tag filters; c: clear filters\nCtrl+U/Ctrl+D: scroll details\nt/u: add/remove tags; D: dismiss with reason; r: reopen; n: add note\nR: reload saved findings; ?: help; q: quit\nPreview shows the recorded snapshot source.\nTag changes and verification history preserve original findings and manual dispositions.", width)
+		lines = wrapText("j/k or arrows: select finding; left/right: sort\n/: search; s: status; v: severity; V: verification; T: exact tag filters; c: clear filters\nCtrl+U/Ctrl+D: scroll details\no: open the file and line when the checkout matches the recorded snapshot\nt/u: add/remove tags; D: dismiss with reason; r: reopen; n: add note\nR: reload saved findings; ?: help; q: quit\nPreview shows the recorded snapshot source.\nTag changes and verification history preserve original findings and manual dispositions.", width)
 	}
 	if len(lines) != 0 {
 		lines[0] = m.style(lines[0], "1", "36")

@@ -36,7 +36,13 @@ Usage:
                  [--jobs N] [--limit N] [--duration DURATION] [--retry-failed]
                  [--dry-run|--create-only] [--force] [--json] [--repo DIR]
   repose findings [--scan ID] [--verification VERDICT] [--tag TAG] [--all] [--json] [--repo DIR]
-  repose finding show|dismiss|reopen|note ID [--reason TEXT] [--repo DIR]
+  repose finding list [--scan ID|latest] [--status STATUS] [--severity SEVERITY]
+                       [--verification VERDICT] [--path PREFIX] [--tag TAG]
+                       [--sort SORT] [--limit N] [--all] [--json] [--repo DIR]
+  repose finding [show] ID [--json] [--repo DIR]
+  repose finding dismiss|reopen|note ID [--reason TEXT] [--repo DIR]
+  repose finding source ID [--context N] [--json] [--repo DIR]
+  repose finding open ID [--repo DIR]
   repose finding tag|untag ID... --tag TAG [--tag TAG...] [--repo DIR]
   repose tags [--scan ID|latest] [--all] [--json] [--repo DIR]
   repose backup [PATH] [--repo DIR]
@@ -149,7 +155,13 @@ pending for resume. Temporary throttling uses shared cooldowns and single probes
 Cooldowns survive resume. Scan show/attempts retain provider-limit details.
 Findings opens the triage TUI; --json exports instead. R reloads, D dismisses,
 r reopens, n adds a note, t/u adds/removes tags, and T filters by exact tags.
-The preview shows source at the observed snapshot. Finding tag/untag accepts any
+The preview shows source at the observed snapshot. Finding ID displays its model,
+snapshot provenance, verification results, and audited history; show is an alias.
+Finding list provides a noninteractive filtered table or versioned JSON. Finding
+source reads the exact recorded snapshot even when the checkout has moved. Finding
+open launches the configured Git editor only when HEAD and the target file still
+match that snapshot.
+Finding tag/untag accepts any
 number of IDs and repeatable --tag values in one atomic edit. Tags are lowercase
 labels; category:value namespacing is supported but optional. Repeated --tag
 filters use AND semantics. The tags command lists counts for open findings;
@@ -252,6 +264,10 @@ func runReposeCLI(ctx context.Context, args []string, environment cliEnvironment
 		return runAuditExportCLI(ctx, args[1:], environment)
 	}
 	if args[0] == "findings" || args[0] == "finding" {
+		if containsHelpFlag(args[1:]) {
+			fmt.Fprint(environment.Stdout, reposeHelp)
+			return nil
+		}
 		return runAuditFindingsCLI(ctx, args, environment)
 	}
 	if args[0] == "tags" {

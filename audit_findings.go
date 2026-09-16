@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os/exec"
 	"regexp"
 	"sort"
 	"strings"
@@ -367,6 +368,13 @@ func (s *auditFindingStore) FindingReview(ctx context.Context, id int64) (Findin
 }
 
 func loadAuditFindingPreview(ctx context.Context, repository *GitRepository, f Finding) (findingDiffPreview, error) {
+	return loadAuditFindingSource(ctx, repository, f, 20)
+}
+
+func loadAuditFindingSource(ctx context.Context, repository *GitRepository, f Finding, contextLines int) (findingDiffPreview, error) {
+	if contextLines < 0 {
+		return findingDiffPreview{}, errors.New("source context must not be negative")
+	}
 	if f.File == nil {
 		return findingDiffPreview{Message: "No source location recorded."}, nil
 	}
@@ -391,7 +399,7 @@ func loadAuditFindingPreview(ctx context.Context, repository *GitRepository, f F
 	if target < 0 || target >= len(all) {
 		return findingDiffPreview{}, errors.New("finding line outside snapshot source")
 	}
-	start, end := max(0, target-20), min(len(all), target+21)
+	start, end := max(0, target-contextLines), min(len(all), target+contextLines+1)
 	lines := []string{}
 	for i := start; i < end; i++ {
 		lines = append(lines, fmt.Sprintf("%6d  %s", i+1, inventoryDisplay(all[i])))
@@ -405,10 +413,22 @@ func runAuditFindingsCLI(ctx context.Context, args []string, environment cliEnvi
 	offset := 1
 	if singular {
 		if len(args) < 2 {
-			return errors.New("usage: repose finding <show|dismiss|reopen|note> ID | repose finding <tag|untag> ID... --tag TAG")
+			return errors.New("usage: repose finding <list|show|source|open|dismiss|reopen|note|tag|untag> ...")
 		}
 		command = args[1]
 		offset = 2
+		if command != "" && strings.Trim(command, "0123456789") == "" {
+			command = "show"
+			offset = 1
+		}
+		switch command {
+		case "list":
+			return runAuditFindingListCLI(ctx, args[offset:], environment)
+		case "source":
+			return runAuditFindingSourceCLI(ctx, args[offset:], environment)
+		case "open":
+			return runAuditFindingOpenCLI(ctx, args[offset:], environment)
+		}
 	}
 	flags := newFlagSet("findings", environment.Stderr)
 	repo := flags.String("repo", ".", "scan checkout")
@@ -492,7 +512,10 @@ func runAuditFindingsCLI(ctx context.Context, args []string, environment cliEnvi
 		case "show":
 			for i := range findings {
 				if findings[i].ID == id {
-					return writeInventoryJSON(environment.Stdout, &findings[i])
+					if *asJSON {
+						return writeInventoryJSON(environment.Stdout, &findings[i])
+					}
+					return writeAuditFindingDetail(ctx, environment.Stdout, store, findings[i])
 				}
 			}
 			return errors.New("finding not found in selected scope")
@@ -549,9 +572,19 @@ func runAuditFindingsCLI(ctx context.Context, args []string, environment cliEnvi
 		}
 		return writeInventoryJSON(environment.Stdout, filtered)
 	}
-	external := findingExternalCommands{snapshot: true, preview: func(ctx context.Context, f Finding) (findingDiffPreview, error) {
-		return loadAuditFindingPreview(ctx, repository, f)
-	}}
+	commandContext := environment.ExternalCommand
+	if commandContext == nil {
+		commandContext = exec.CommandContext
+	}
+	external := findingExternalCommands{
+		snapshot: true,
+		open: func(ctx context.Context, f Finding) (*exec.Cmd, error) {
+			return buildAuditFindingOpenCommand(ctx, repository, f, commandContext)
+		},
+		preview: func(ctx context.Context, f Finding) (findingDiffPreview, error) {
+			return loadAuditFindingPreview(ctx, repository, f)
+		},
+	}
 	model := newFindingsModel(ctx, external, store, findings, auditFindingDisplay(findings), *includeAll, func() time.Time { return environmentNow(environment) })
 	model.verificationFilter = *verification
 	model.tagFilters = tags
