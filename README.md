@@ -270,6 +270,25 @@ model or alter scan state.
 Failed assignments are reported separately and are not included in the remaining
 estimate until `scan resume --retry-failed` returns them to the pending queue.
 
+Use `stats` for retained attempt outcomes, timing, tokens, cost, and finding totals,
+or `cost` for the accounting-focused view:
+
+```sh
+.build/repose stats --repo kicad-repose
+.build/repose cost --repo kicad-repose --scan SCAN_ID
+.build/repose stats --repo kicad-repose --model gpt-5.6-luna --since 2026-09-01 --json
+```
+
+Both commands include review and recheck attempts, including failures and retries.
+`--scan ID|latest` selects one frozen pass; `--model` and `--since` filter attempts.
+Current finding counts follow the selected source scan but are not filtered by
+model or date. Harness-reported cost takes precedence. Otherwise Repose estimates
+each attempt separately from its recorded token categories and the built-in model
+price snapshot, preserving a range when cache-write tokens are unavailable.
+Attempts with token usage for an unpriced model and attempts without any accounting
+data are counted explicitly. These token-price totals are API-equivalent estimates;
+they are not a statement of charges against a Codex subscription.
+
 `--duration 30m` stops dispatching after that interval and lets active work
 finish; it can exceed the interval by an assignment timeout.
 

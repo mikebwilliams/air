@@ -5,6 +5,12 @@ repose \- sustained C/C++ repository audits
 .B repose status
 .RI [ OPTIONS ]
 .br
+.B repose stats
+.RI [ OPTIONS ]
+.br
+.B repose cost
+.RI [ OPTIONS ]
+.br
 .B repose inventory
 .I COMMAND
 .RI [ OPTIONS ]
@@ -27,6 +33,21 @@ selected recheck uses its original source scan for finding totals. Without
 --scan, totals cover all scans and all findings. The command is read-only.
 Failed assignments are reported separately and are excluded from remaining-time
 estimates until resumed with --retry-failed.
+.TP
+.BR "repose stats" " [--scan " ID|latest "] [--model " MODEL "] [--since " DATE "] [--json]"
+Aggregate retained review and recheck attempts, outcomes, worker time, token
+usage, estimated cost, and current finding counts. Failed attempts and retries
+remain included. --scan selects one frozen pass. --model and --since filter
+attempts; DATE accepts YYYY-MM-DD or RFC3339. Finding counts follow a selected
+scan's source but are not filtered by model or date. JSON contains totals and
+per-harness/model/effort groups.
+.TP
+.BR "repose cost" " [--scan " ID|latest "] [--model " MODEL "] [--since " DATE "] [--json]"
+Show the accounting-focused form of the stats report. A harness-reported cost
+takes precedence; otherwise each attempt is estimated from its own token usage
+and the built-in model price snapshot. Unknown model pricing and attempts without
+accounting data remain explicit. Token-price results are API-equivalent estimates
+and do not represent Codex subscription charges.
 .TP
 .B repose scan create --model MODEL
 Freeze an approved inventory, selected assignments, prompts, goal, and model

@@ -20,6 +20,8 @@ const reposeHelp = `Repose — sustained C/C++ repository audits
 
 Usage:
   repose status [--scan ID|latest] [--jobs N] [--json] [--repo DIR]
+  repose stats [--scan ID|latest] [--model MODEL] [--since DATE] [--json] [--repo DIR]
+  repose cost [--scan ID|latest] [--model MODEL] [--since DATE] [--json] [--repo DIR]
   repose scan create --model MODEL [--harness codex|claude|gemini] [--effort LEVEL]
                      [--inventory ID] [--path PREFIX] [--goal TEXT] [--timeout DURATION] [--repo DIR]
   repose scan run ID [--jobs N] [--limit N] [--duration DURATION]
@@ -193,6 +195,12 @@ successful assignment durations. --jobs converts remaining worker time into an
 approximate wall-clock duration without changing or starting a scan.
 Failed assignments remain separate from the estimate until resumed with
 --retry-failed.
+Stats aggregates retained review and recheck attempts, outcomes, worker time,
+token usage, estimated cost, and current finding counts. Cost presents the same
+attempt accounting with cost first. --model and --since filter attempts; --scan
+selects one frozen scan. Provider-reported cost takes precedence over token-price
+estimates. Unknown pricing and missing accounting data remain explicit. Built-in
+prices are API-equivalent estimates and do not represent Codex subscription use.
 Cross-scan deduplication and token/cost budgets remain future work.
 `
 
@@ -214,6 +222,13 @@ func runReposeCLI(ctx context.Context, args []string, environment cliEnvironment
 			return nil
 		}
 		return runReposeStatusCLI(ctx, args[1:], environment)
+	}
+	if args[0] == "stats" || args[0] == "cost" {
+		if containsHelpFlag(args[1:]) {
+			fmt.Fprint(environment.Stdout, reposeHelp)
+			return nil
+		}
+		return runReposeStatsCLI(ctx, args[0], args[1:], environment)
 	}
 	if args[0] == "scan" {
 		if containsHelpFlag(args[1:]) {

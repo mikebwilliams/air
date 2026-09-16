@@ -220,7 +220,9 @@ scan rather than changing the meaning of previous completion.
    history. HTML uses source excerpts at the observed snapshot with verdict filters.
    Repose backup creation and validated import preserve the complete worktree-local
    SQLite state, including committed WAL data, across supported schema versions.
-   Duplicate consolidation and pricing estimates remain future work.
+   Stats and cost reports aggregate retained attempts, token categories, timing,
+   provider-reported cost, and per-attempt estimates from the built-in pricing
+   snapshot. Duplicate consolidation remains future work.
 5. **Specialized repeated passes.** Add cross-file task generation, explicit
    prior-evidence inputs, model comparisons, and deeper KiCad-specific questions.
 
