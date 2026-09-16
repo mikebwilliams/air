@@ -360,7 +360,7 @@ func inspectReposeDoctorScans(ctx context.Context, report *doctorReport, store *
 		report.add("scan state", "pass", detail)
 	}
 	inspectReposeDoctorRunners(report, runners)
-	inspectReposeDoctorPricing(report, models)
+	inspectReposeDoctorPricing(ctx, report, store, models)
 }
 
 func validReposeDoctorScanStatus(status string) bool {
@@ -422,12 +422,17 @@ func reposeDoctorMissingRunner(report *doctorReport, name, filename string, runn
 	report.add(name, status, detail)
 }
 
-func inspectReposeDoctorPricing(report *doctorReport, models map[string]bool) {
+func inspectReposeDoctorPricing(ctx context.Context, report *doctorReport, store *inventoryStore, models map[string]bool) {
 	names := make([]string, 0, len(models))
 	unknown := []string{}
 	for name := range models {
 		names = append(names, name)
-		if modelByName(name).Pricing == nil {
+		model, err := reposeModelForAccounting(ctx, store, name)
+		if err != nil {
+			report.add("model pricing", "fail", err.Error())
+			return
+		}
+		if model.Pricing == nil {
 			unknown = append(unknown, name)
 		}
 	}
@@ -437,7 +442,7 @@ func inspectReposeDoctorPricing(report *doctorReport, models map[string]bool) {
 		report.add("model pricing", "warn", fmt.Sprintf("unknown for %s; stats remain available but token-price cost estimates are incomplete", strings.Join(unknown, ", ")))
 		return
 	}
-	report.add("model pricing", "pass", fmt.Sprintf("built-in pricing is available for %s (snapshot %s)", strings.Join(names, ", "), openAIPricingSnapshotDay))
+	report.add("model pricing", "pass", fmt.Sprintf("pricing is available for %s", strings.Join(names, ", ")))
 }
 
 func reposeDoctorCounts(counts map[string]int) string {

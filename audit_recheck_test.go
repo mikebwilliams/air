@@ -311,6 +311,7 @@ func TestAuditRecheckV4DryRunAndMigration(t *testing.T) {
 	// Reconstruct the previous schema while retaining the actual pilot records.
 	if _, err := store.db.ExecContext(ctx, `DROP INDEX audit_finding_tags_by_tag;
 		DROP TABLE audit_finding_tags;
+		DROP TABLE models;
 		DROP TABLE audit_recheck_results;
 		DROP INDEX audit_recheck_identity;
 		ALTER TABLE audit_scans DROP COLUMN kind;
@@ -346,7 +347,7 @@ func TestAuditRecheckV4DryRunAndMigration(t *testing.T) {
 	if err := runReposeCLI(ctx, append(append([]string{}, args...), "--create-only"), env); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.db.QueryRow("PRAGMA user_version").Scan(&version); err != nil || version != 7 || calls.Load() != 0 {
+	if err := store.db.QueryRow("PRAGMA user_version").Scan(&version); err != nil || version != reposeCurrentSchemaVersion || calls.Load() != 0 {
 		t.Fatal("create-only did not upgrade safely")
 	}
 	var tagTable int
@@ -659,6 +660,7 @@ func TestAuditRecheckV5MigrationPreservesLegacyResume(t *testing.T) {
 	if _, err := store.db.ExecContext(ctx, `
 		DROP INDEX audit_finding_tags_by_tag;
 		DROP TABLE audit_finding_tags;
+		DROP TABLE models;
 		ALTER TABLE audit_recheck_results RENAME TO recheck_results_saved;
 		DROP INDEX audit_recheck_finding;
 		CREATE TABLE audit_recheck_results (
@@ -709,7 +711,7 @@ func TestAuditRecheckV5MigrationPreservesLegacyResume(t *testing.T) {
 		t.Fatalf("legacy recheck could not resume: %v", err)
 	}
 	var version int
-	if err := store.db.QueryRow("PRAGMA user_version").Scan(&version); err != nil || version != 7 {
+	if err := store.db.QueryRow("PRAGMA user_version").Scan(&version); err != nil || version != reposeCurrentSchemaVersion {
 		t.Fatal("legacy resume did not upgrade storage")
 	}
 	var after string

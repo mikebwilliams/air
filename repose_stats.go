@@ -218,6 +218,10 @@ func buildReposeStats(ctx context.Context, store *inventoryStore, selector, mode
 			return report, err
 		}
 		key := reposeStatsGroupKey{scan.Spec.Model.Harness, scan.Spec.Model.Model, scan.Spec.Model.Effort}
+		pricedModel, err := reposeModelForAccounting(ctx, store, scan.Spec.Model.Model)
+		if err != nil {
+			return report, fmt.Errorf("load pricing for model %s: %w", scan.Spec.Model.Model, err)
+		}
 		for _, attempt := range attempts {
 			group := groups[key]
 			if group == nil {
@@ -225,7 +229,7 @@ func buildReposeStats(ctx context.Context, store *inventoryStore, selector, mode
 					Attempts: reposeStatsAttemptCounts{Outcomes: map[string]int{}}}
 				groups[key] = group
 			}
-			counts, usage, timing, cost, err := summarizeReposeAccountingAttempt(scan.Spec.Model.Model, kind, attempt, now)
+			counts, usage, timing, cost, err := summarizeReposeAccountingAttempt(pricedModel, kind, attempt, now)
 			if err != nil {
 				return report, fmt.Errorf("account scan %s attempt: %w", shortSHA(scan.ID), err)
 			}
@@ -326,7 +330,7 @@ func loadReposeAccountingAttempts(ctx context.Context, store *inventoryStore, sc
 	return attempts, rows.Err()
 }
 
-func summarizeReposeAccountingAttempt(model, kind string, attempt reposeAccountingAttempt, now time.Time) (reposeStatsAttemptCounts, reposeStatusUsage, reposeStatsTiming, reposeCostSummary, error) {
+func summarizeReposeAccountingAttempt(model Model, kind string, attempt reposeAccountingAttempt, now time.Time) (reposeStatsAttemptCounts, reposeStatusUsage, reposeStatsTiming, reposeCostSummary, error) {
 	counts := reposeStatsAttemptCounts{Total: 1, Outcomes: map[string]int{attempt.Status: 1}}
 	if kind == "recheck" {
 		counts.Rechecks = 1
@@ -367,11 +371,15 @@ func summarizeReposeAccountingAttempt(model, kind string, attempt reposeAccounti
 			usage.ReasoningOutputUnreportedCount = 1
 		}
 	}
-	cost, err := reposeAttemptCost(model, attempt.Usage, attempt.ReportedCostMicrousd)
+	cost, err := reposeAttemptCostForModel(model, attempt.Usage, attempt.ReportedCostMicrousd)
 	return counts, usage, timing, cost, err
 }
 
 func reposeAttemptCost(model string, usage *TokenUsage, reported *int64) (reposeCostSummary, error) {
+	return reposeAttemptCostForModel(modelByName(model), usage, reported)
+}
+
+func reposeAttemptCostForModel(model Model, usage *TokenUsage, reported *int64) (reposeCostSummary, error) {
 	result := reposeCostSummary{}
 	if reported != nil {
 		if *reported < 0 {
@@ -385,7 +393,7 @@ func reposeAttemptCost(model string, usage *TokenUsage, reported *int64) (repose
 		result.UnknownCostAttempts, result.NoAccountingDataAttempts = 1, 1
 		return result, nil
 	}
-	estimate, err := modelByName(model).EstimateCost(*usage)
+	estimate, err := model.EstimateCost(*usage)
 	if err != nil {
 		return result, err
 	}

@@ -23,6 +23,10 @@ Usage:
   repose status [--scan ID|latest] [--jobs N] [--json] [--repo DIR]
   repose stats [--scan ID|latest] [--model MODEL] [--since DATE] [--json] [--repo DIR]
   repose cost [--scan ID|latest] [--model MODEL] [--since DATE] [--json] [--repo DIR]
+  repose model list [--json] [--repo DIR]
+  repose model show NAME [--json] [--repo DIR]
+  repose model set-pricing NAME [PRICING OPTIONS] [--json] [--repo DIR]
+  repose model mark-pricing-unknown NAME [--json] [--repo DIR]
   repose scan create --model MODEL [--harness codex|claude|gemini] [--effort LEVEL]
                      [--inventory ID] [--path PREFIX] [--goal TEXT] [--timeout DURATION] [--repo DIR]
   repose scan run ID [--jobs N] [--limit N] [--duration DURATION]
@@ -212,8 +216,12 @@ Stats aggregates retained review and recheck attempts, outcomes, worker time,
 token usage, estimated cost, and current finding counts. Cost presents the same
 attempt accounting with cost first. --model and --since filter attempts; --scan
 selects one frozen scan. Provider-reported cost takes precedence over token-price
-estimates. Unknown pricing and missing accounting data remain explicit. Built-in
-prices are API-equivalent estimates and do not represent Codex subscription use.
+estimates. Unknown pricing and missing accounting data remain explicit. Model list
+combines built-in prices, repository overrides, and model names observed in saved
+scans. Model set-pricing records short- and long-context USD-per-million-token
+rates; mark-pricing-unknown explicitly overrides any built-in price. Repository
+prices are used immediately by stats, cost, and doctor. Token-price estimates do
+not represent Codex subscription use.
 Cross-scan deduplication and token/cost budgets remain future work.
 Doctor performs a read-only health audit of the repository, Repose state,
 SQLite integrity and foreign keys, saved inventory snapshots, checkout/build
@@ -255,6 +263,13 @@ func runReposeCLI(ctx context.Context, args []string, environment cliEnvironment
 			return nil
 		}
 		return runReposeStatsCLI(ctx, args[0], args[1:], environment)
+	}
+	if args[0] == "model" {
+		if containsHelpFlag(args[1:]) {
+			fmt.Fprint(environment.Stdout, reposeHelp)
+			return nil
+		}
+		return runReposeModelCLI(ctx, args[1:], environment)
 	}
 	if args[0] == "scan" {
 		if containsHelpFlag(args[1:]) {

@@ -46,7 +46,7 @@ func TestInventorySchemaMigrationPreservesDocumentsAndReview(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer store.Close()
-	if store.version != 7 {
+	if store.version != reposeCurrentSchemaVersion {
 		t.Fatal("writer did not upgrade policy storage")
 	}
 	current, err := store.Inventory(ctx, "current")

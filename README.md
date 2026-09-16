@@ -281,7 +281,7 @@ long audit:
 It checks SQLite integrity and foreign keys, every saved inventory document and
 Git snapshot, the current checkout and build-input fingerprints, semantic-index
 coverage and its recorded clangd binary, saved scan state, runner executables,
-and built-in pricing coverage. Missing optional coverage and failed or running
+and repository model pricing coverage. Missing optional coverage and failed or running
 assignments are warnings. Corrupt state, missing snapshots, checkout/build drift,
 and a missing runner required by unfinished work are failures and produce a nonzero exit status;
 JSON is still written first. A missing runner referenced only by historical scans
@@ -300,11 +300,37 @@ Both commands include review and recheck attempts, including failures and retrie
 `--scan ID|latest` selects one frozen pass; `--model` and `--since` filter attempts.
 Current finding counts follow the selected source scan but are not filtered by
 model or date. Harness-reported cost takes precedence. Otherwise Repose estimates
-each attempt separately from its recorded token categories and the built-in model
-price snapshot, preserving a range when cache-write tokens are unavailable.
+each attempt separately from its recorded token categories and the repository
+model registry, preserving a range when cache-write tokens are unavailable.
 Attempts with token usage for an unpriced model and attempts without any accounting
 data are counted explicitly. These token-price totals are API-equivalent estimates;
 they are not a statement of charges against a Codex subscription.
+
+The model registry combines built-in price snapshots, repository overrides, and
+model identifiers observed in saved scans:
+
+```sh
+.build/repose model list --repo kicad-repose
+.build/repose model show gpt-5.6-luna --repo kicad-repose
+.build/repose model mark-pricing-unknown private-model --repo kicad-repose
+```
+
+Use `model set-pricing` for an unrecognized identifier or to override a built-in
+price. Every rate is USD per million tokens; all eight rates are required:
+
+```sh
+.build/repose model set-pricing MODEL --repo kicad-repose \
+  --source manual --as-of 2026-09-16 \
+  --short-input 5 --short-cached-input 0.5 --short-cache-write 6.25 --short-output 30 \
+  --long-input 10 --long-cached-input 1 --long-cache-write 12.5 --long-output 45
+```
+
+Short-context pricing applies through `--long-context-threshold` input tokens,
+which defaults to 272,000. Configured pricing takes precedence over the built-in
+entry with the same exact name and is used immediately by `stats`, `cost`, and
+`doctor`. `mark-pricing-unknown` also overrides a built-in entry. This changes
+estimates produced from retained usage; it does not rewrite attempts or recorded
+harness-reported costs. List, show, and both mutations support `--json`.
 
 `--duration 30m` stops dispatching after that interval and lets active work
 finish; it can exceed the interval by an assignment timeout.
@@ -457,9 +483,9 @@ inspection also expose verification history:
 .build/repose finding FINDING_ID --repo kicad-repose
 ```
 
-Schema version 7 supports multiple finding verdicts per attempt and user-managed
-finding tags. Use the rebuilt Repose binary after a writer upgrades the database;
-older builds cannot open v7.
+Schema version 8 supports multiple finding verdicts per attempt, user-managed
+finding tags, and repository model pricing. Use the rebuilt Repose binary after
+a writer upgrades the database; older builds cannot open v8.
 Existing inventories, scans, findings, attempts, and earlier verification history
 are preserved by the upgrade.
 

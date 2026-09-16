@@ -16,26 +16,26 @@ const (
 // Model is the complete AIR configuration for a model identifier. A nil
 // Pricing value explicitly means that AIR does not know how to price it.
 type Model struct {
-	Name    string
-	Pricing *ModelPricing
+	Name    string        `json:"name"`
+	Pricing *ModelPricing `json:"pricing,omitempty"`
 }
 
 // ModelPricing stores an immutable pricing snapshot. Rates use nanodollars per
 // token so all published per-million-token decimal prices remain exact.
 type ModelPricing struct {
-	ServiceTier            string
-	Source                 string
-	AsOf                   string
-	LongContextInputTokens int64
-	ShortContext           TokenPrices
-	LongContext            TokenPrices
+	ServiceTier            string      `json:"service_tier"`
+	Source                 string      `json:"source"`
+	AsOf                   string      `json:"as_of"`
+	LongContextInputTokens int64       `json:"long_context_input_tokens"`
+	ShortContext           TokenPrices `json:"short_context"`
+	LongContext            TokenPrices `json:"long_context"`
 }
 
 type TokenPrices struct {
-	InputNanousdPerToken       int64
-	CachedInputNanousdPerToken int64
-	CacheWriteNanousdPerToken  int64
-	OutputNanousdPerToken      int64
+	InputNanousdPerToken       int64 `json:"input_nanousd_per_token"`
+	CachedInputNanousdPerToken int64 `json:"cached_input_nanousd_per_token"`
+	CacheWriteNanousdPerToken  int64 `json:"cache_write_nanousd_per_token"`
+	OutputNanousdPerToken      int64 `json:"output_nanousd_per_token"`
 }
 
 type CostEstimate struct {

@@ -14,6 +14,10 @@ repose \- sustained C/C++ repository audits
 .B repose cost
 .RI [ OPTIONS ]
 .br
+.B repose model
+.I COMMAND
+.RI [ OPTIONS ]
+.br
 .B repose inventory
 .I COMMAND
 .RI [ OPTIONS ]
@@ -31,7 +35,7 @@ Perform a read-only health audit of the Git repository and worktree-local Repose
 state. Checks include SQLite integrity and foreign keys, stored inventory hashes
 and Git snapshots, current checkout and build-input identity, inventory approval,
 semantic-index coverage and its recorded clangd binary, saved scan configuration
-and task state, runner executables, and built-in model pricing coverage. Optional
+and task state, runner executables, and repository model pricing coverage. Optional
 or incomplete capabilities are warnings. Corrupt state, missing snapshots or
 runners required by unfinished scans, and checkout/build drift are failures and
 produce a nonzero exit status. A runner referenced only by historical scans is a
@@ -59,9 +63,32 @@ per-harness/model/effort groups.
 .BR "repose cost" " [--scan " ID|latest "] [--model " MODEL "] [--since " DATE "] [--json]"
 Show the accounting-focused form of the stats report. A harness-reported cost
 takes precedence; otherwise each attempt is estimated from its own token usage
-and the built-in model price snapshot. Unknown model pricing and attempts without
+and the repository model registry. Unknown model pricing and attempts without
 accounting data remain explicit. Token-price results are API-equivalent estimates
 and do not represent Codex subscription charges.
+.TP
+.BR "repose model list" " [--json] [--repo " DIR "]"
+List built-in models, repository pricing overrides, and otherwise-unknown model
+identifiers observed in saved scans. The text form shows pricing status, origin,
+and the number of scans using each exact identifier.
+.TP
+.BR "repose model show " NAME " [--json] [--repo " DIR "]"
+Show one model's origin, observed scan count, pricing metadata, long-context
+threshold, and short- and long-context token rates.
+.TP
+.BR "repose model set-pricing " NAME " [" OPTIONS "]"
+Store repository pricing for an exact model identifier. All of --short-input,
+--short-cached-input, --short-cache-write, --short-output, --long-input,
+--long-cached-input, --long-cache-write, and --long-output are required and use
+USD per million tokens. --service-tier defaults to standard, --source to manual,
+--as-of to the current date, and --long-context-threshold to 272000 input tokens.
+Configured pricing overrides a built-in entry with the same name and is used by
+stats, cost, and doctor. --json writes the resulting registry entry.
+.TP
+.BR "repose model mark-pricing-unknown " NAME " [--json] [--repo " DIR "]"
+Record that pricing for an exact model identifier is unknown, overriding a
+built-in entry with the same name. Existing attempts and harness-reported costs
+remain unchanged.
 .TP
 .B repose scan create --model MODEL
 Freeze an approved inventory, selected assignments, prompts, goal, and model

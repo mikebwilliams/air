@@ -29,7 +29,7 @@ PRAGMA application_id = 1380994899;
 PRAGMA user_version = 1;
 `
 
-const reposeCurrentSchemaVersion = 7
+const reposeCurrentSchemaVersion = 8
 
 const reposePolicySchemaSQL = `
 CREATE TABLE inventory_state (
@@ -169,6 +169,12 @@ func openInventoryStore(ctx context.Context, filename string, create bool) (*inv
 			return nil, fmt.Errorf("upgrade Repose finding tags: %w", err)
 		}
 		version = 7
+	}
+	if version == 7 {
+		if _, err := base.db.ExecContext(ctx, reposeModelSchemaSQL); err != nil {
+			return nil, fmt.Errorf("upgrade Repose model storage: %w", err)
+		}
+		version = 8
 	}
 	if _, err := base.db.ExecContext(ctx, "COMMIT"); err != nil {
 		return nil, err
