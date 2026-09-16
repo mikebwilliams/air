@@ -29,6 +29,8 @@ PRAGMA application_id = 1380994899;
 PRAGMA user_version = 1;
 `
 
+const reposeCurrentSchemaVersion = 7
+
 const reposePolicySchemaSQL = `
 CREATE TABLE inventory_state (
     singleton INTEGER PRIMARY KEY CHECK(singleton = 1),
@@ -129,7 +131,7 @@ func openInventoryStore(ctx context.Context, filename string, create bool) (*inv
 		}
 		version, application = 1, 1380994899
 	}
-	if (version < 1 || version > 7) || application != 1380994899 {
+	if (version < 1 || version > reposeCurrentSchemaVersion) || application != 1380994899 {
 		return nil, fmt.Errorf("unsupported Repose database (application %d, version %d)", application, version)
 	}
 	if version == 1 {
@@ -190,7 +192,7 @@ func openInventoryReadOnly(ctx context.Context, filename string) (*inventoryStor
 	if err = base.db.QueryRowContext(ctx, "PRAGMA user_version").Scan(&version); err == nil {
 		err = base.db.QueryRowContext(ctx, "PRAGMA application_id").Scan(&application)
 	}
-	if err == nil && ((version < 1 || version > 7) || application != 1380994899) {
+	if err == nil && ((version < 1 || version > reposeCurrentSchemaVersion) || application != 1380994899) {
 		err = fmt.Errorf("unsupported Repose database (application %d, version %d)", application, version)
 	}
 	if err != nil {

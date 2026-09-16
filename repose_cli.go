@@ -19,6 +19,7 @@ const reposeVersion = "0.5-dev"
 const reposeHelp = `Repose — sustained C/C++ repository audits
 
 Usage:
+  repose doctor [--json] [--repo DIR]
   repose status [--scan ID|latest] [--jobs N] [--json] [--repo DIR]
   repose stats [--scan ID|latest] [--model MODEL] [--since DATE] [--json] [--repo DIR]
   repose cost [--scan ID|latest] [--model MODEL] [--since DATE] [--json] [--repo DIR]
@@ -214,6 +215,12 @@ selects one frozen scan. Provider-reported cost takes precedence over token-pric
 estimates. Unknown pricing and missing accounting data remain explicit. Built-in
 prices are API-equivalent estimates and do not represent Codex subscription use.
 Cross-scan deduplication and token/cost budgets remain future work.
+Doctor performs a read-only health audit of the repository, Repose state,
+SQLite integrity and foreign keys, saved inventory snapshots, checkout/build
+identity, semantic coverage and clangd identity, saved scan state, runner
+executables, and model pricing coverage. Warnings describe optional or incomplete
+capabilities; failed checks produce a nonzero exit status. --json emits the full
+report before the command returns a failed-check error.
 `
 
 func runReposeCLI(ctx context.Context, args []string, environment cliEnvironment) error {
@@ -227,6 +234,13 @@ func runReposeCLI(ctx context.Context, args []string, environment cliEnvironment
 		}
 		fmt.Fprintf(environment.Stdout, "repose %s\n", reposeVersion)
 		return nil
+	}
+	if args[0] == "doctor" {
+		if containsHelpFlag(args[1:]) {
+			fmt.Fprint(environment.Stdout, reposeHelp)
+			return nil
+		}
+		return runReposeDoctorCLI(ctx, args[1:], environment)
 	}
 	if args[0] == "status" {
 		if containsHelpFlag(args[1:]) {

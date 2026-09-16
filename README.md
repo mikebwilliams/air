@@ -270,6 +270,23 @@ model or alter scan state.
 Failed assignments are reported separately and are not included in the remaining
 estimate until `scan resume --retry-failed` returns them to the pending queue.
 
+`repose doctor` performs a broader read-only health check before or during a
+long audit:
+
+```sh
+.build/repose doctor --repo kicad-repose
+.build/repose doctor --repo kicad-repose --json
+```
+
+It checks SQLite integrity and foreign keys, every saved inventory document and
+Git snapshot, the current checkout and build-input fingerprints, semantic-index
+coverage and its recorded clangd binary, saved scan state, runner executables,
+and built-in pricing coverage. Missing optional coverage and failed or running
+assignments are warnings. Corrupt state, missing snapshots, checkout/build drift,
+and a missing runner required by unfinished work are failures and produce a nonzero exit status;
+JSON is still written first. A missing runner referenced only by historical scans
+is a warning.
+
 Use `stats` for retained attempt outcomes, timing, tokens, cost, and finding totals,
 or `cost` for the accounting-focused view:
 

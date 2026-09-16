@@ -212,7 +212,7 @@ func openReposeBackupReadOnly(ctx context.Context, filename string) (*inventoryS
 	if err = database.QueryRowContext(ctx, "PRAGMA user_version").Scan(&version); err == nil {
 		err = database.QueryRowContext(ctx, "PRAGMA application_id").Scan(&application)
 	}
-	if err == nil && ((version < 1 || version > 7) || application != 1380994899) {
+	if err == nil && ((version < 1 || version > reposeCurrentSchemaVersion) || application != 1380994899) {
 		err = fmt.Errorf("unsupported Repose database (application %d, version %d)", application, version)
 	}
 	if err != nil {
