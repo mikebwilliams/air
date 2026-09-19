@@ -367,6 +367,7 @@ func reposeFindingHelpCommands() []cliCommandSpec {
 				cliHelpOption{"--verification VERDICT", "Filter by all, unchecked, confirmed, false_positive, or uncertain."},
 				cliHelpOption{"--path PREFIX", "Restrict findings to a repository path prefix."},
 				cliHelpOption{"--tag TAG", "Require an exact tag; repeatable with AND semantics."},
+				cliHelpOption{"--search TEXT", "Search title, description, location, tags, provenance, verdict, or ID."},
 				cliHelpOption{"--sort SORT", "Sort by id, age, file, scan, severity, status, title, or verification."},
 				cliHelpOption{"--limit N", "Return at most N findings; zero is unlimited."},
 				cliHelpOption{"--all", "Include every disposition; conflicts with --status."},

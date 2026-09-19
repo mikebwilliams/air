@@ -56,6 +56,20 @@ func TestAuditFindingListFiltersAndReportsScope(t *testing.T) {
 	if strings.Contains(output, "not actionable") {
 		t.Fatalf("default list included dismissed finding:\n%s", output)
 	}
+
+	stdout.Reset()
+	if err := runReposeCLI(ctx, []string{
+		"finding", "list", "--scan", scan.ID, "--all", "--search", "  NOT ACTIONABLE  ", "--json",
+	}, environment); err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &report); err != nil {
+		t.Fatalf("decode searched list: %v\n%s", err, stdout.String())
+	}
+	if report.Search != "NOT ACTIONABLE" || report.Total != 1 || len(report.Findings) != 1 ||
+		report.Findings[0].ID != findings[1].ID {
+		t.Fatalf("finding search report = %+v", report)
+	}
 }
 
 func TestAuditFindingListRejectsInvalidOptions(t *testing.T) {

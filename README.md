@@ -428,7 +428,9 @@ the saved finding record. `finding dismiss|reopen|note ID` updates its dispositi
 or history.
 
 `finding list` is the noninteractive counterpart to the TUI. It filters by source
-scan, disposition, severity, latest verification, path, and exact tags, and can
+scan, disposition, severity, latest verification, path, exact tags, and the same
+case-insensitive text search as the TUI. Search covers finding text, location,
+tags, provenance, latest verdict, and ID. Filters combine, and the command can
 sort or limit either its table or versioned JSON output. `finding source` always
 reads from the recorded commit, so it remains safe after the checkout moves.
 `finding open` starts the configured Git editor only after verifying both HEAD and
@@ -436,6 +438,7 @@ the target file against that commit:
 
 ```sh
 .build/repose finding list --scan latest --tag triage:high-value --sort severity --repo kicad-repose
+.build/repose finding list --scan latest --search 'use after free' --repo kicad-repose
 .build/repose finding source 1234 --context 30 --repo kicad-repose
 .build/repose finding open 1234 --repo kicad-repose
 ```

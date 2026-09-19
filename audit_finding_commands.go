@@ -35,6 +35,7 @@ type auditFindingListOutput struct {
 	Verification string                 `json:"verification"`
 	Path         string                 `json:"path"`
 	Tags         []string               `json:"tags,omitempty"`
+	Search       string                 `json:"search,omitempty"`
 	Sort         string                 `json:"sort"`
 	Total        int                    `json:"total"`
 	Findings     []auditFindingListItem `json:"findings"`
@@ -120,6 +121,7 @@ func runAuditFindingListCLI(ctx context.Context, args []string, environment cliE
 	verification := flags.String("verification", "all", "filter latest verdict: all, unchecked, confirmed, false_positive, uncertain")
 	pathPrefix := flags.String("path", ".", "filter by repository path prefix")
 	tagValues := flags.StringArray("tag", nil, "require a finding tag (repeatable; multiple tags use AND)")
+	search := flags.String("search", "", "search finding text, location, tags, provenance, or ID")
 	sortName := flags.String("sort", "id", "sort by id, age, file, scan, severity, status, title, or verification")
 	limit := flags.Int("limit", 0, "maximum findings to return; zero means unlimited")
 	asJSON := flags.Bool("json", false, "write machine-readable JSON")
@@ -127,7 +129,7 @@ func runAuditFindingListCLI(ctx context.Context, args []string, environment cliE
 		return err
 	}
 	if flags.NArg() != 0 {
-		return errors.New("usage: repose finding list [--scan ID|latest] [--status STATUS] [--severity SEVERITY] [--verification VERDICT] [--path PREFIX] [--tag TAG] [--sort SORT] [--limit N] [--all] [--json] [--repo DIR]")
+		return errors.New("usage: repose finding list [--scan ID|latest] [--status STATUS] [--severity SEVERITY] [--verification VERDICT] [--path PREFIX] [--tag TAG] [--search TEXT] [--sort SORT] [--limit N] [--all] [--json] [--repo DIR]")
 	}
 	visited := visitedFlagNames(flags)
 	if *includeAll && visited["status"] {
@@ -139,6 +141,7 @@ func runAuditFindingListCLI(ctx context.Context, args []string, environment cliE
 	*status = strings.ToLower(strings.TrimSpace(*status))
 	*severity = strings.ToLower(strings.TrimSpace(*severity))
 	*verification = strings.ToLower(strings.TrimSpace(*verification))
+	*search = strings.TrimSpace(*search)
 	*sortName = strings.ToLower(strings.TrimSpace(*sortName))
 	if *status != "open" && *status != "dismissed" && *status != "all" {
 		return fmt.Errorf("invalid --status %q; expected open, dismissed, or all", *status)
@@ -188,7 +191,7 @@ func runAuditFindingListCLI(ctx context.Context, args []string, environment cliE
 	if err != nil {
 		return err
 	}
-	findings, total := selectAuditFindingList(all, *status, *severity, *verification, selection.Path, tags, *sortName, *limit)
+	findings, total := selectAuditFindingList(all, *status, *severity, *verification, selection.Path, tags, *search, *sortName, *limit)
 	items := make([]auditFindingListItem, 0, len(findings))
 	for _, finding := range findings {
 		items = append(items, auditFindingListItem{
@@ -198,7 +201,7 @@ func runAuditFindingListCLI(ctx context.Context, args []string, environment cliE
 	if *asJSON {
 		return writeInventoryJSON(environment.Stdout, auditFindingListOutput{
 			Version: 1, ScanID: store.scanID, Status: *status, Severity: *severity,
-			Verification: *verification, Path: selection.Path, Tags: tags, Sort: *sortName,
+			Verification: *verification, Path: selection.Path, Tags: tags, Search: *search, Sort: *sortName,
 			Total: total, Findings: items,
 		})
 	}
@@ -236,9 +239,11 @@ func selectAuditFindingList(
 	all []Finding,
 	status, severity, verification, pathPrefix string,
 	tags []string,
+	search string,
 	sortName string,
 	limit int,
 ) ([]Finding, int) {
+	query := strings.ToLower(strings.TrimSpace(search))
 	selected := make([]Finding, 0, len(all))
 	for _, finding := range all {
 		if status != "all" && findingDisposition(finding) != status {
@@ -254,6 +259,9 @@ func selectAuditFindingList(
 			continue
 		}
 		if !findingHasTags(finding, tags) {
+			continue
+		}
+		if query != "" && !strings.Contains(strings.ToLower(findingSearchText(finding)), query) {
 			continue
 		}
 		selected = append(selected, finding)

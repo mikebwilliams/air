@@ -179,6 +179,14 @@ false_positive, or uncertain. Verdicts and their reasoning appear in the preview
 details; prior results remain in the history and JSON export. Repeatable --tag
 filters use AND semantics.
 .TP
+.B repose finding list
+List findings without opening the TUI. --search TEXT performs the same
+case-insensitive search as the TUI across finding text, location, tags,
+provenance, latest verification, and ID. It combines with --scan ID|latest,
+--status STATUS, --severity SEVERITY, --verification VERDICT, --path PREFIX,
+and repeatable --tag TAG filters. --sort selects the ordering, --limit is applied
+after filtering, and --json emits the filtered records with their query scope.
+.TP
 .B repose recheck [FINDING_ID...] --model MODEL
 Verify existing findings against their observed snapshot, grouping them by their
 original review assignment. --batch-max (default 5) caps findings per model call;
