@@ -257,8 +257,12 @@ func loadReposeBackupTestFindings(t *testing.T, repository *GitRepository, scanI
 
 func TestReposeBackupHelpAndArgumentValidation(t *testing.T) {
 	output, err := executeReposeTest(t, t.TempDir(), "backup", "--help")
-	if err != nil || !strings.Contains(output, "repose backup [PATH]") || !strings.Contains(output, "repose backup import [--force]") {
+	if err != nil || !strings.Contains(output, "repose backup [PATH]") || !strings.Contains(output, "repose backup import [OPTIONS]") {
 		t.Fatalf("backup help = %q, %v", output, err)
+	}
+	output, err = executeReposeTest(t, t.TempDir(), "backup", "import", "--help")
+	if err != nil || !strings.Contains(output, "repose backup import [OPTIONS] PATH") || !strings.Contains(output, "--force") {
+		t.Fatalf("backup import help = %q, %v", output, err)
 	}
 	for _, args := range [][]string{{"backup", "one", "two"}, {"backup", "import"}, {"backup", "import", "one", "two"}} {
 		if _, err := executeReposeTest(t, t.TempDir(), args...); err == nil {

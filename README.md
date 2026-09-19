@@ -26,6 +26,14 @@ make test
 .build/repose help
 ```
 
+Help is command-aware. Use either form to see one command's exact arguments and
+options without opening repository state:
+
+```sh
+.build/repose help inventory plan
+.build/repose scan create --help
+```
+
 `make install` installs `repose` and its manual page under `/usr/local` by default.
 Override `PREFIX` or use `DESTDIR` for a staged installation.
 
@@ -561,6 +569,15 @@ Export opens the database read-only and neither upgrades it nor invokes models.
 It works while scans run and when the checkout differs from the observed snapshot.
 
 ## Back up and restore scan state
+
+Print the absolute path of the worktree-local SQLite database with:
+
+```sh
+.build/repose db path --repo kicad-repose
+```
+
+This works before Repose has created any state and does not open or create the
+database, which makes scripts independent of Git worktree layout.
 
 `backup` creates a consistent snapshot of the worktree-local Repose database:
 

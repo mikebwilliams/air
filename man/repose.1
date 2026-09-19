@@ -2,41 +2,33 @@
 .SH NAME
 repose \- sustained C/C++ repository audits
 .SH SYNOPSIS
-.B repose doctor
-.RI [ OPTIONS ]
-.br
-.B repose status
-.RI [ OPTIONS ]
-.br
-.B repose stats
-.RI [ OPTIONS ]
-.br
-.B repose cost
-.RI [ OPTIONS ]
-.br
-.B repose model
+.B repose
 .I COMMAND
 .RI [ OPTIONS ]
 .br
-.B repose prompt
-.I COMMAND
-.RI [ OPTIONS ]
+.B repose help
+.RI [ COMMAND
+.RI [ SUBCOMMAND ]]
 .br
-.B repose hint
-.I COMMAND
-.RI [ OPTIONS ]
+.B repose
+.RB [ \-h | \-\-help ]
 .br
-.B repose inventory
-.I COMMAND
-.RI [ OPTIONS ]
-.br
-.B repose version
+.B repose
+.B \-\-version
 .SH DESCRIPTION
 Repose builds a reviewable inventory of a fixed repository snapshot, primarily
 for KiCad. Use a clean, dedicated scan checkout with a compilation database
 configured for that checkout. This release implements inventory building and
 review, clangd semantic indexing, assignment previews, and durable parallel scanning.
 .SH COMMANDS
+.TP
+.BR "repose help" " [" COMMAND " [" SUBCOMMAND "]]"
+Show categorized global help or focused help for a command or nested subcommand.
+The equivalent -h and --help flags can appear anywhere before -- in a command.
+.TP
+.BR "repose db path" " [--repo " DIR "]"
+Print the absolute path of the worktree-local Repose SQLite database. This works
+before Repose has created any state and does not open or create the database.
 .TP
 .BR "repose doctor" " [--json] [--repo " DIR "]"
 Perform a read-only health audit of the Git repository and worktree-local Repose
@@ -391,6 +383,12 @@ without accessing source or build files.
 .B repose version
 Print the Repose version.
 .SH OPTIONS
+.TP
+.BR \-h , " " \-\-help
+Show global, command, or nested subcommand help without opening repository state.
+Use
+.B \-\-
+to stop help-flag recognition when a positional value begins with a hyphen.
 .TP
 .B --repo DIR
 Dedicated scan checkout, relative to the current directory. Defaults to the

@@ -104,9 +104,9 @@ func TestReposeRejectsBadPolicyBeforeCreatingState(t *testing.T) {
 
 func TestReposeEntryPointExposesInventoryInsteadOfCommitReview(t *testing.T) {
 	directory := t.TempDir()
-	for _, args := range [][]string{nil, {"--help"}, {"inventory", "--help"}, {"inventory", "build", "--help"}} {
+	for _, args := range [][]string{nil, {"--help"}} {
 		output, err := executeReposeTest(t, directory, args...)
-		if err != nil || !strings.Contains(output, "repose inventory build") || strings.Contains(output, "air scan") {
+		if err != nil || !strings.Contains(output, "Repository inventory:") || !strings.Contains(output, "inventory  Build, inspect") || strings.Contains(output, "air scan") {
 			t.Fatalf("help = %s, %v", output, err)
 		}
 	}
