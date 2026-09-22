@@ -173,7 +173,8 @@ Open the findings TUI. --scan ID filters a scan; --all includes dismissed findin
 --json exports instead of opening the terminal. The preview shows source at the
 observed snapshot. Use / to search, s/v to filter status/severity, D to dismiss,
 r to reopen, n to add a note, t/u to add/remove tags, T to apply exact tag filters,
-and R to reload while scanning. V filters the latest
+f to create a new fix from the selected finding, F to add it to the newest pending
+fix, and R to reload while scanning. V filters the latest
 verification verdict; --verification accepts all, unchecked, confirmed,
 false_positive, or uncertain. Verdicts and their reasoning appear in the preview
 details; prior results remain in the history and JSON export. Repeatable --tag
@@ -233,6 +234,33 @@ Inspect or triage one finding. Dismiss and note require --reason TEXT.
 Findings preserve the observed commit, scan, assignment, attempt, and model
 provenance. Recheck verdicts supplement original findings. Automatic consolidation
 is not implemented.
+.TP
+.B repose fix create FINDING_ID [FINDING_ID...]
+Create one pending fix containing the supplied findings in argument order. Every
+ID is validated before the entry is saved. The CLI intentionally has no append
+command; delete and recreate a pending fix to correct its list. In the findings
+TUI, f creates a new fix and F appends to the newest pending fix for fast triage.
+.TP
+.B repose fix list|show|delete [FIX_ID]
+List fixes in execution order, inspect one fix and its retained attempts, or
+delete a pending fix. Running and terminal fixes retain their audit history and
+cannot be deleted. These commands accept --json and --repo DIR.
+.TP
+.B repose fix run --worktree DIR --model MODEL
+Run pending fixes sequentially in a development checkout that is separate from
+the dedicated scan checkout. Each fix is one Codex call over its complete finding
+list. The development checkout must contain the findings' observed commits;
+current code may have moved or accumulated changes from earlier fixes. Codex may
+edit and run local tests but does not commit. Repose records the starting HEAD,
+worktree, model settings, transcript, structured result, token usage, timing, and
+errors for every attempt. Completed fixes add an audited history event to their
+findings but do not dismiss or resolve them.
+.br
+--effort defaults to high, --timeout to 1h, and --limit bounds the number of fix
+entries attempted. A structured unable_to_fix result is retained and execution
+continues. A model-process or malformed-response failure stops the queue because
+partial edits may remain. Inspect the development checkout, then use
+--retry-failed to retry the failed entry before later pending work.
 .TP
 .B repose finding tag|untag ID... --tag TAG [--tag TAG...]
 Add or remove one or more tags across any number of findings in one atomic edit.

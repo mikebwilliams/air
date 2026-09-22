@@ -59,6 +59,11 @@ func TestFindingAuthorBackfillMigratesAndResumes(t *testing.T) {
 	repository, store, scan, _, findings := auditTagFixture(t)
 	ctx := context.Background()
 	if _, err := store.db.ExecContext(ctx, `
+		DROP INDEX audit_fix_findings_by_finding;
+		DROP INDEX audit_fixes_by_status;
+		DROP TABLE audit_fix_attempts;
+		DROP TABLE audit_fix_findings;
+		DROP TABLE audit_fixes;
 		DROP INDEX audit_finding_attributions_author;
 		DROP TABLE audit_finding_attributions;
 		PRAGMA user_version=9;`); err != nil {

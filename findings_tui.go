@@ -133,6 +133,11 @@ type findingTagUIStore interface {
 	UntagFindings(context.Context, []int64, []string, time.Time) (int, error)
 }
 
+type findingFixUIStore interface {
+	CreateFix(context.Context, []int64, time.Time) (auditFix, error)
+	AddFindingToLatestFix(context.Context, int64, time.Time) (auditFix, bool, error)
+}
+
 type findingsModel struct {
 	ctx                context.Context
 	external           findingExternalCommands
@@ -332,6 +337,10 @@ func (m findingsModel) handleKey(key string) (tea.Model, tea.Cmd) {
 			m.input = strings.Join(m.tagFilters, ",")
 			m.tagsBeforeEdit = append([]string(nil), m.tagFilters...)
 		}
+	case "f":
+		m.queueSelectedFix(false)
+	case "F":
+		m.queueSelectedFix(true)
 	case "t":
 		if _, ok := m.store.(findingTagUIStore); ok {
 			if _, selected := m.selectedFinding(); selected {
@@ -380,6 +389,41 @@ func (m findingsModel) handleKey(key string) (tea.Model, tea.Cmd) {
 		}
 	}
 	return m, nil
+}
+
+func (m *findingsModel) queueSelectedFix(previous bool) {
+	finding, selected := m.selectedFinding()
+	if !selected {
+		return
+	}
+	store, ok := m.store.(findingFixUIStore)
+	if !ok {
+		m.message = "Fix queue is unavailable."
+		return
+	}
+	now := time.Now()
+	if m.now != nil {
+		now = m.now()
+	}
+	if !previous {
+		fix, err := store.CreateFix(m.ctx, []int64{finding.ID}, now)
+		if err != nil {
+			m.message = "Creating fix failed: " + err.Error()
+			return
+		}
+		m.message = fmt.Sprintf("Created fix #%d with finding #%d.", fix.ID, finding.ID)
+		return
+	}
+	fix, added, err := store.AddFindingToLatestFix(m.ctx, finding.ID, now)
+	if err != nil {
+		m.message = "Adding to fix failed: " + err.Error()
+		return
+	}
+	if !added {
+		m.message = fmt.Sprintf("Finding #%d is already in fix #%d.", finding.ID, fix.ID)
+		return
+	}
+	m.message = fmt.Sprintf("Added finding #%d to fix #%d (%d findings).", finding.ID, fix.ID, len(fix.Findings))
 }
 
 type findingExternalFinishedMsg struct {
@@ -1170,7 +1214,7 @@ func (m findingsModel) footer() string {
 		return fmt.Sprintf("Reopen #%d?  y yes, n no", m.selectedID())
 	default:
 		if m.external.snapshot {
-			return "j/k move | / search | o open | t/u tag | T filter | D dismiss | r reopen | n note | R reload | ? | q"
+			return "j/k move | / search | f new fix | F previous fix | t/u tag | D dismiss | n note | ? | q"
 		}
 		return "↑/↓ j/k move  ←/→ sort  / search  d diff  o open  D dismiss  r reopen  n note  ? help  q quit"
 	}
@@ -1190,6 +1234,7 @@ v             cycle severity: all, error, warning, info
 c             clear search and restore default filters
 t/u           add/remove tags on the selected finding (Repose)
 T             set exact tag filters (Repose; multiple filters use AND)
+f/F           create a new fix / add to the newest pending fix (Repose)
 d             open the introducing commit in git difftool
 o             open the finding's file and line in the configured Git editor
 D             dismiss the selected open finding (reason required)
@@ -1200,7 +1245,7 @@ q             quit
 
 All changes use the same audited finding lifecycle as the singular finding command.`, width)
 	if m.external.snapshot {
-		lines = wrapText("j/k or arrows: select finding; left/right: sort\n/: search; s: status; v: severity; V: verification; T: exact tag filters; c: clear filters\nCtrl+U/Ctrl+D: scroll details\no: open the file and line when the checkout matches the recorded snapshot\nt/u: add/remove tags; D: dismiss with reason; r: reopen; n: add note\nR: reload saved findings; ?: help; q: quit\nPreview shows the recorded snapshot source.\nTag changes and verification history preserve original findings and manual dispositions.", width)
+		lines = wrapText("j/k or arrows: select finding; left/right: sort\n/: search; s: status; v: severity; V: verification; T: exact tag filters; c: clear filters\nCtrl+U/Ctrl+D: scroll details\no: open the file and line when the checkout matches the recorded snapshot\nf: create a new fix; F: add to the newest pending fix\nt/u: add/remove tags; D: dismiss with reason; r: reopen; n: add note\nR: reload saved findings; ?: help; q: quit\nPreview shows the recorded snapshot source.\nFix queue changes, tags, and verification history preserve original findings and manual dispositions.", width)
 	}
 	if len(lines) != 0 {
 		lines[0] = m.style(lines[0], "1", "36")

@@ -27,6 +27,7 @@ find concrete correctness problems.
 | Task | A bounded responsibility within a scan, referencing inventory entities with durable status |
 | Attempt | One execution of a task, retaining output, failures, usage, timing, and provenance |
 | Finding | Defect observed at the scan snapshot, with one or more evidence records from tasks and scans |
+| Fix | An ordered group of findings queued for one writable model pass in a separate development checkout |
 
 Inventory entities and scan assignments have different lifetimes. File/class
 review, ownership/lifecycle review, and reader/writer consistency review can
@@ -96,7 +97,8 @@ versions without migration; writers upgrade older Repose databases transactional
 Later migrations add recheck batches, finding tags, model pricing, prompt
 configuration, and schema version 10 line attribution. Attribution is stored
 separately from immutable finding claims and can be resumed or retried without
-rewriting model output.
+rewriting model output. Schema version 11 adds the fix queue, ordered fix/finding
+membership, and retained fix attempts.
 
 New exclusions require a reason and a matching C/C++ file/directory prefix.
 Inclusion overrides follow the same ordered policy. Exclusions remove direct
@@ -229,7 +231,17 @@ scan rather than changing the meaning of previous completion.
    Stats and cost reports aggregate retained attempts, token categories, timing,
    provider-reported cost, and per-attempt estimates from the built-in pricing
    snapshot. Duplicate consolidation remains future work.
-5. **Specialized repeated passes.** Add cross-file task generation, explicit
+5. **Fix queue — initial integration implemented.** Pending fixes contain an
+   immutable ordered finding list. The TUI creates a fix with `f` and appends to
+   the newest pending fix with `F`; the CLI creates the complete list at once and
+   deletes pending entries for correction. A single coordinator runs fixes by ID
+   in a separate development checkout. Each fix receives the current worktree,
+   can see edits from prior fixes, runs in Codex's writable sandbox, and retains
+   its prompt response, usage, timing, and outcome. Repose never commits or marks
+   findings resolved. Structured inability moves to the next fix; a process or
+   response failure stops dispatch because partial edits may remain. Retry is
+   explicit and attempt history is append-only.
+6. **Specialized repeated passes.** Add cross-file task generation, explicit
    prior-evidence inputs, model comparisons, and deeper KiCad-specific questions.
 
 The inherited AIR code remains available during extraction. Its scan commands

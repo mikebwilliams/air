@@ -113,6 +113,28 @@ var reposeCLICommands = []cliCommandSpec{
 		Run:         runReposeFindingCommand,
 	},
 	{
+		Name: "fix", Category: reposeCategoryFindings,
+		Summary:     "Queue related findings and fix them sequentially.",
+		Description: "Create durable ordered fix entries from one or more findings, inspect or delete pending entries, and run Codex against a separate development checkout one entry at a time.",
+		Usage:       []string{"repose fix COMMAND [ARGUMENTS]"},
+		Children: []cliCommandSpec{
+			{Name: "create", Summary: "Create one pending fix from an ordered finding list.", Usage: []string{"repose fix create FINDING_ID [FINDING_ID ...] [OPTIONS]"}, Options: reposeJSONHelpOptions()},
+			{Name: "list", Summary: "List the fix queue in execution order.", Usage: []string{"repose fix list [OPTIONS]"}, Options: reposeJSONHelpOptions()},
+			{Name: "show", Summary: "Show a fix, its findings, and retained attempts.", Usage: []string{"repose fix show FIX_ID [OPTIONS]"}, Options: reposeJSONHelpOptions()},
+			{Name: "delete", Summary: "Delete a pending fix so it can be recreated.", Usage: []string{"repose fix delete FIX_ID [OPTIONS]"}, Options: reposeJSONHelpOptions()},
+			{Name: "run", Summary: "Run pending fixes sequentially in a development checkout.", Usage: []string{"repose fix run --worktree DIR --model MODEL [OPTIONS]"}, Options: reposeRepoHelpOptions(
+				cliHelpOption{"--worktree DIR", "Required development checkout to edit; must differ from the scan checkout."},
+				cliHelpOption{"--model MODEL", "Required Codex model identifier."},
+				cliHelpOption{"--effort LEVEL", "Reasoning effort (default: high)."},
+				cliHelpOption{"--binary PATH", "Override the Codex executable."},
+				cliHelpOption{"--timeout DURATION", "Per-fix timeout (default: 1h)."},
+				cliHelpOption{"--limit N", "Attempt at most N queue entries; zero is unlimited."},
+				cliHelpOption{"--retry-failed", "Retry failed entries after inspecting partial workspace edits."},
+			)},
+		},
+		Run: runReposeFixCLI,
+	},
+	{
 		Name: "tags", Category: reposeCategoryFindings,
 		Summary:     "List finding tags and their counts.",
 		Description: "Count exact tags on open findings in the selected source scan. Include dismissed findings with --all.",

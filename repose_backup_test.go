@@ -80,7 +80,7 @@ func TestReposeBackupPreservesOlderReadableSchema(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.db.ExecContext(ctx, "DROP INDEX audit_finding_tags_by_tag; DROP TABLE audit_finding_tags; DROP INDEX audit_finding_attributions_author; DROP TABLE audit_finding_attributions; DROP TABLE models; DROP TABLE config; PRAGMA user_version=6"); err != nil {
+	if _, err := store.db.ExecContext(ctx, "DROP INDEX audit_fix_findings_by_finding; DROP INDEX audit_fixes_by_status; DROP TABLE audit_fix_attempts; DROP TABLE audit_fix_findings; DROP TABLE audit_fixes; DROP INDEX audit_finding_tags_by_tag; DROP TABLE audit_finding_tags; DROP INDEX audit_finding_attributions_author; DROP TABLE audit_finding_attributions; DROP TABLE models; DROP TABLE config; PRAGMA user_version=6"); err != nil {
 		t.Fatal(err)
 	}
 	if err := store.Close(); err != nil {

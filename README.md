@@ -94,6 +94,23 @@ work by file:
 repose finding backfill-authors --jobs 8
 ```
 
+Related findings can be grouped into durable fixes and applied sequentially to
+a separate development checkout. The finding TUI uses `f` to create a new fix
+from the selected finding and `F` to add the selection to the newest pending
+fix. The CLI creates a fix from an ordered list; delete and recreate a pending
+fix to change that list:
+
+```bash
+repose fix create 123 456 789
+repose fix list
+repose fix run --worktree ../development-checkout --model gpt-5.6-sol --effort xhigh
+```
+
+Each fix is one Codex call, and `fix run` handles entries one at a time in queue
+order. Repose retains attempts and token usage, does not commit changes, and
+does not mark findings resolved. A model-process failure stops the queue so the
+development checkout can be inspected before `--retry-failed`.
+
 Run `repose status` for current progress, `repose doctor` for a read-only health
 check, `repose help` or `repose COMMAND --help` for command documentation, and
 `man repose` for the complete reference. The

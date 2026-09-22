@@ -60,6 +60,10 @@ func TestReposeHelpWorksWithoutRepositoryState(t *testing.T) {
 			contains: []string{"repose finding source ID [OPTIONS]", "--context N", "recorded snapshot"},
 		},
 		{
+			name: "fix run", args: []string{"fix", "run", "--help"},
+			contains: []string{"repose fix run --worktree DIR --model MODEL [OPTIONS]", "--retry-failed", "development checkout"},
+		},
+		{
 			name: "model pricing", args: []string{"model", "set-pricing", "--help"},
 			contains: []string{"repose model set-pricing NAME [OPTIONS]", "--short-cached-input PRICE", "--long-output PRICE"},
 		},
@@ -134,6 +138,7 @@ func TestReposeHelpRegistryIsComplete(t *testing.T) {
 		"recheck":   nil,
 		"findings":  nil,
 		"finding":   {"list", "show", "dismiss", "reopen", "note", "source", "open", "tag", "untag", "backfill-authors"},
+		"fix":       {"create", "list", "show", "delete", "run"},
 		"tags":      nil,
 		"stats":     nil,
 		"cost":      nil,

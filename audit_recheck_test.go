@@ -311,6 +311,11 @@ func TestAuditRecheckV4DryRunAndMigration(t *testing.T) {
 	// Reconstruct the previous schema while retaining the actual pilot records.
 	if _, err := store.db.ExecContext(ctx, `DROP INDEX audit_finding_tags_by_tag;
 		DROP TABLE audit_finding_tags;
+		DROP INDEX audit_fix_findings_by_finding;
+		DROP INDEX audit_fixes_by_status;
+		DROP TABLE audit_fix_attempts;
+		DROP TABLE audit_fix_findings;
+		DROP TABLE audit_fixes;
 		DROP INDEX audit_finding_attributions_author;
 		DROP TABLE audit_finding_attributions;
 		DROP TABLE config;
@@ -663,6 +668,11 @@ func TestAuditRecheckV5MigrationPreservesLegacyResume(t *testing.T) {
 	if _, err := store.db.ExecContext(ctx, `
 		DROP INDEX audit_finding_tags_by_tag;
 		DROP TABLE audit_finding_tags;
+		DROP INDEX audit_fix_findings_by_finding;
+		DROP INDEX audit_fixes_by_status;
+		DROP TABLE audit_fix_attempts;
+		DROP TABLE audit_fix_findings;
+		DROP TABLE audit_fixes;
 		DROP INDEX audit_finding_attributions_author;
 		DROP TABLE audit_finding_attributions;
 		DROP TABLE config;
