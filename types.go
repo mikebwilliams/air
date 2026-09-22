@@ -176,7 +176,21 @@ type Finding struct {
 	Line          *int                `json:"line,omitempty"`
 	Symbol        *string             `json:"symbol,omitempty"`
 	Tags          []string            `json:"tags,omitempty"`
+	Attribution   *FindingAttribution `json:"attribution,omitempty"`
 	Verifications []auditVerification `json:"verifications,omitempty"`
+}
+
+// FindingAttribution records Git's attribution for the exact source line at
+// the snapshot where Repose observed a finding. Unavailable records are kept so
+// a large backfill is resumable and can selectively retry failures later.
+type FindingAttribution struct {
+	Status       string     `json:"status"`
+	CommitSHA    string     `json:"commit_sha,omitempty"`
+	Author       string     `json:"author,omitempty"`
+	AuthorEmail  string     `json:"author_email,omitempty"`
+	AuthoredAt   *time.Time `json:"authored_at,omitempty"`
+	OriginalLine int        `json:"original_line,omitempty"`
+	Error        string     `json:"error,omitempty"`
 }
 
 type FindingEvent struct {

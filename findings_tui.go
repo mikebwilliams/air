@@ -816,9 +816,6 @@ func (m findingsModel) View() tea.View {
 }
 
 func (m findingsModel) sortLabel() string {
-	if m.external.snapshot && m.sortMode == findingsSortAuthor {
-		return "scan"
-	}
 	return string(m.sortMode)
 }
 
@@ -1094,12 +1091,21 @@ func (m findingsModel) detailLines(width int) []string {
 		}
 		label := "Commit age: "
 		if m.external.snapshot {
-			label = "Finding age: "
+			label = "Line age: "
 		}
 		lines = append(lines, label+formatFindingAge(now, display.CommitDate))
 	}
 	if !m.external.snapshot {
 		lines = append(lines, "Blame: "+findingBlame(display))
+	} else if finding.Attribution != nil {
+		if finding.Attribution.Status == attributionStatusAttributed {
+			lines = append(lines, "Author: "+finding.Attribution.Author, "Blamed commit: "+shortSHA(finding.Attribution.CommitSHA))
+			if finding.Attribution.AuthoredAt != nil {
+				lines = append(lines, "Blamed commit date: "+finding.Attribution.AuthoredAt.Format(time.RFC3339))
+			}
+		} else if finding.Attribution.Error != "" {
+			lines = append(lines, "Author: unavailable ("+finding.Attribution.Error+")")
+		}
 	}
 	if m.review.ID != 0 {
 		identity := m.review.Model
@@ -1254,6 +1260,13 @@ func findingSearchText(finding Finding) string {
 	}
 	if finding.Symbol != nil {
 		parts = append(parts, *finding.Symbol)
+	}
+	if finding.Attribution != nil {
+		parts = append(parts, finding.Attribution.Author, finding.Attribution.AuthorEmail,
+			finding.Attribution.CommitSHA, finding.Attribution.Error)
+		if finding.Attribution.AuthoredAt != nil {
+			parts = append(parts, finding.Attribution.AuthoredAt.Format(time.RFC3339))
+		}
 	}
 	if len(finding.Verifications) > 0 {
 		v := finding.Verifications[len(finding.Verifications)-1]

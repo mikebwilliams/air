@@ -73,6 +73,7 @@ type auditOutput struct {
 	Findings     []NewFinding         `json:"findings"`
 	Recheck      *auditRecheckOutput  `json:"recheck,omitempty"`
 	RecheckBatch []auditRecheckOutput `json:"recheck_batch,omitempty"`
+	Attributions []FindingAttribution `json:"-"`
 }
 
 type auditInvocation struct {

@@ -48,7 +48,7 @@ func TestAuditFindingListFiltersAndReportsScope(t *testing.T) {
 		t.Fatal(err)
 	}
 	output := stdout.String()
-	for _, want := range []string{"1 of 2 open findings", "VERIFICATION", "SCAN", "LOCATION", "Fixture finding"} {
+	for _, want := range []string{"1 of 2 open findings", "VERIFICATION", "LINE AGE", "AUTHOR", "AIR Test", "LOCATION", "Fixture finding"} {
 		if !strings.Contains(output, want) {
 			t.Errorf("text list missing %q:\n%s", want, output)
 		}
@@ -80,7 +80,7 @@ func TestAuditFindingListRejectsInvalidOptions(t *testing.T) {
 		{[]string{"--all", "--status", "all"}, "cannot be used together"},
 		{[]string{"--status", "resolved"}, "invalid --status"},
 		{[]string{"--verification", "maybe"}, "verification must be"},
-		{[]string{"--sort", "author"}, "invalid --sort"},
+		{[]string{"--sort", "bogus"}, "invalid --sort"},
 		{[]string{"--limit", "-1"}, "must not be negative"},
 		{[]string{"--path", "../outside"}, "invalid --path"},
 		{[]string{"unexpected"}, "usage: repose finding list"},

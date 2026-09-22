@@ -367,8 +367,8 @@ func reposeFindingHelpCommands() []cliCommandSpec {
 				cliHelpOption{"--verification VERDICT", "Filter by all, unchecked, confirmed, false_positive, or uncertain."},
 				cliHelpOption{"--path PREFIX", "Restrict findings to a repository path prefix."},
 				cliHelpOption{"--tag TAG", "Require an exact tag; repeatable with AND semantics."},
-				cliHelpOption{"--search TEXT", "Search title, description, location, tags, provenance, verdict, or ID."},
-				cliHelpOption{"--sort SORT", "Sort by id, age, file, scan, severity, status, title, or verification."},
+				cliHelpOption{"--search TEXT", "Search title, description, location, author, tags, provenance, verdict, or ID."},
+				cliHelpOption{"--sort SORT", "Sort by id, age, file, author, scan, severity, status, title, or verification."},
 				cliHelpOption{"--limit N", "Return at most N findings; zero is unlimited."},
 				cliHelpOption{"--all", "Include every disposition; conflicts with --status."},
 			),
@@ -381,6 +381,7 @@ func reposeFindingHelpCommands() []cliCommandSpec {
 		{Name: "open", Summary: "Open the finding in the configured Git editor.", Description: "Open the live checkout file only when HEAD and that file match the finding's recorded snapshot.", Usage: []string{"repose finding open ID [OPTIONS]"}, Options: reposeRepoHelpOptions()},
 		{Name: "tag", Summary: "Add tags to one or more findings atomically.", Usage: []string{"repose finding tag ID... --tag TAG [--tag TAG...] [OPTIONS]"}, Options: reposeJSONHelpOptions(cliHelpOption{"--scan ID", "Restrict IDs to one scan."}, cliHelpOption{"--tag TAG", "Tag to add; repeatable and at least one is required."})},
 		{Name: "untag", Summary: "Remove tags from one or more findings atomically.", Usage: []string{"repose finding untag ID... --tag TAG [--tag TAG...] [OPTIONS]"}, Options: reposeJSONHelpOptions(cliHelpOption{"--scan ID", "Restrict IDs to one scan."}, cliHelpOption{"--tag TAG", "Tag to remove; repeatable and at least one is required."})},
+		{Name: "backfill-authors", Summary: "Compute missing line authors and ages for existing findings.", Description: "Use git blame at each finding's recorded snapshot and save its author, commit, and line age. Completed groups survive interruption; rerunning resumes missing work.", Usage: []string{"repose finding backfill-authors [OPTIONS]"}, Options: reposeJSONHelpOptions(cliHelpOption{"--scan ID|latest", "Restrict work to one original source scan."}, cliHelpOption{"--jobs N", "Run 1 through 32 Git blame workers (default: 8)."}, cliHelpOption{"--limit N", "Process at most N findings; zero is unlimited."}, cliHelpOption{"--retry-errors", "Retry attributions previously recorded as unavailable."})},
 	}
 }
 

@@ -84,6 +84,9 @@ func (s *auditFindingStore) AllFindings(ctx context.Context) ([]Finding, error) 
 	if err := s.loadTags(ctx, findings); err != nil {
 		return nil, err
 	}
+	if err := s.loadAttributions(ctx, findings); err != nil {
+		return nil, err
+	}
 	return findings, nil
 }
 
@@ -413,7 +416,7 @@ func runAuditFindingsCLI(ctx context.Context, args []string, environment cliEnvi
 	offset := 1
 	if singular {
 		if len(args) < 2 {
-			return errors.New("usage: repose finding <list|show|source|open|dismiss|reopen|note|tag|untag> ...")
+			return errors.New("usage: repose finding <list|show|source|open|dismiss|reopen|note|tag|untag|backfill-authors> ...")
 		}
 		command = args[1]
 		offset = 2
@@ -428,6 +431,8 @@ func runAuditFindingsCLI(ctx context.Context, args []string, environment cliEnvi
 			return runAuditFindingSourceCLI(ctx, args[offset:], environment)
 		case "open":
 			return runAuditFindingOpenCLI(ctx, args[offset:], environment)
+		case "backfill-authors":
+			return runAuditFindingBackfillAuthorsCLI(ctx, args[offset:], environment)
 		}
 	}
 	flags := newFlagSet("findings", environment.Stderr)
@@ -597,9 +602,12 @@ func runAuditFindingsCLI(ctx context.Context, args []string, environment cliEnvi
 func auditFindingDisplay(findings []Finding) map[int64]findingDisplayMetadata {
 	display := map[int64]findingDisplayMetadata{}
 	for _, f := range findings {
-		metadata := findingDisplayMetadata{Blame: shortSHA(f.ScanID)}
-		if f.ObservedAt != nil {
-			metadata.CommitDate = *f.ObservedAt
+		metadata := findingDisplayMetadata{}
+		if f.Attribution != nil && f.Attribution.Status == attributionStatusAttributed {
+			metadata.Blame = f.Attribution.Author
+			if f.Attribution.AuthoredAt != nil {
+				metadata.CommitDate = *f.Attribution.AuthoredAt
+			}
 		}
 		display[f.ID] = metadata
 	}

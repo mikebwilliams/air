@@ -181,11 +181,23 @@ filters use AND semantics.
 .TP
 .B repose finding list
 List findings without opening the TUI. --search TEXT performs the same
-case-insensitive search as the TUI across finding text, location, tags,
+case-insensitive search as the TUI across finding text, location, line author, tags,
 provenance, latest verification, and ID. It combines with --scan ID|latest,
 --status STATUS, --severity SEVERITY, --verification VERDICT, --path PREFIX,
 and repeatable --tag TAG filters. --sort selects the ordering, --limit is applied
 after filtering, and --json emits the filtered records with their query scope.
+.TP
+.B repose finding backfill-authors
+Compute Git line attribution for findings that predate automatic capture.
+The author, blamed commit, and line age are taken from each finding's exact
+observed snapshot, file, and line. Line age is a Git blame estimate: it dates
+the last change to that line and does not prove when the defect became faulty.
+Work is grouped by snapshot and file and runs with --jobs workers (default 8,
+maximum 32). --scan ID|latest restricts the source scan, and --limit bounds the
+number of selected findings. Completed groups are committed independently, so
+rerunning resumes missing work after interruption. Failures are retained as
+unavailable attribution; use --retry-errors to try them again. The command
+upgrades older writable databases to the current schema before starting.
 .TP
 .B repose recheck [FINDING_ID...] --model MODEL
 Verify existing findings against their observed snapshot, grouping them by their
@@ -253,7 +265,7 @@ Without --scan, findings from every original scan are eligible. Latest selects
 the newest completed original scan; a recheck ID selects its source scan's
 findings with all their verification history.
 All formats retain observed snapshots, assignment/attempt provenance, review model,
-manual history, and independent recheck verdicts. JSON has a versioned report with
+line author and age attribution, manual history, and independent recheck verdicts. JSON has a versioned report with
 a findings array; SARIF stores provenance and history in result properties. HTML
 shows source excerpts at the observed snapshot, even when the checkout has changed.
 Export reads the database without upgrading it or invoking a model.

@@ -85,6 +85,15 @@ repose recheck --model gpt-5.6-sol --effort xhigh --jobs 8 --batch-max 5
 repose export --format html -o findings.html
 ```
 
+Repose records the Git author and blamed-commit age of each finding's exact
+source line. Databases created before line attribution can fill existing
+findings without rerunning the scan; the command is resumable and groups blame
+work by file:
+
+```bash
+repose finding backfill-authors --jobs 8
+```
+
 Run `repose status` for current progress, `repose doctor` for a read-only health
 check, `repose help` or `repose COMMAND --help` for command documentation, and
 `man repose` for the complete reference. The

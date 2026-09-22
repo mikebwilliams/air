@@ -16,8 +16,8 @@ import (
 )
 
 const (
-	auditFindingAgeWidth      = 4
-	auditFindingScanWidth     = 12
+	auditFindingAgeWidth      = 8
+	auditFindingAuthorWidth   = 18
 	auditFindingLocationWidth = 34
 )
 
@@ -66,6 +66,16 @@ func writeAuditFindingDetail(ctx context.Context, output io.Writer, store *audit
 	fmt.Fprintln(output, "Location: "+findingLocation(finding))
 	fmt.Fprintln(output, "Observed: "+finding.ObservedSHA)
 	fmt.Fprintf(output, "Scan: %s\nAssignment: %s\nAttempt: %d\n", finding.ScanID, finding.TaskID, finding.AttemptID)
+	if finding.Attribution != nil {
+		if finding.Attribution.Status == attributionStatusAttributed {
+			fmt.Fprintf(output, "Author: %s\nBlamed commit: %s\n", finding.Attribution.Author, finding.Attribution.CommitSHA)
+			if finding.Attribution.AuthoredAt != nil {
+				fmt.Fprintf(output, "Blamed commit date: %s\n", finding.Attribution.AuthoredAt.Format(time.RFC3339))
+			}
+		} else if finding.Attribution.Error != "" {
+			fmt.Fprintf(output, "Author: unavailable (%s)\n", finding.Attribution.Error)
+		}
+	}
 	identity := review.Model
 	if review.Harness != "" {
 		identity = review.Harness + "/" + identity
@@ -121,8 +131,8 @@ func runAuditFindingListCLI(ctx context.Context, args []string, environment cliE
 	verification := flags.String("verification", "all", "filter latest verdict: all, unchecked, confirmed, false_positive, uncertain")
 	pathPrefix := flags.String("path", ".", "filter by repository path prefix")
 	tagValues := flags.StringArray("tag", nil, "require a finding tag (repeatable; multiple tags use AND)")
-	search := flags.String("search", "", "search finding text, location, tags, provenance, or ID")
-	sortName := flags.String("sort", "id", "sort by id, age, file, scan, severity, status, title, or verification")
+	search := flags.String("search", "", "search finding text, location, author, tags, provenance, or ID")
+	sortName := flags.String("sort", "id", "sort by id, age, file, author, scan, severity, status, title, or verification")
 	limit := flags.Int("limit", 0, "maximum findings to return; zero means unlimited")
 	asJSON := flags.Bool("json", false, "write machine-readable JSON")
 	if err := flags.Parse(args); err != nil {
@@ -153,7 +163,7 @@ func runAuditFindingListCLI(ctx context.Context, args []string, environment cliE
 		return errors.New("verification must be all, unchecked, confirmed, false_positive, or uncertain")
 	}
 	if !validAuditFindingSort(*sortName) {
-		return fmt.Errorf("invalid --sort %q; expected id, age, file, scan, severity, status, title, or verification", *sortName)
+		return fmt.Errorf("invalid --sort %q; expected id, age, file, author, scan, severity, status, title, or verification", *sortName)
 	}
 	if *limit < 0 {
 		return errors.New("--limit must not be negative")
@@ -228,7 +238,7 @@ func resolveAuditFindingScan(ctx context.Context, reader *inventoryStore, select
 
 func validAuditFindingSort(value string) bool {
 	switch value {
-	case "id", "age", "file", "scan", "severity", "status", "title", "verification":
+	case "id", "age", "file", "author", "scan", "severity", "status", "title", "verification":
 		return true
 	default:
 		return false
@@ -313,21 +323,22 @@ func writeAuditFindingList(output io.Writer, findings []auditFindingListItem, to
 		idWidth = max(idWidth, len(strconv.FormatInt(finding.ID, 10))+1)
 	}
 	fmt.Fprintf(output, "%-*s  %-8s  %-9s  %-14s  %-*s  %-*s  %-*s  %s\n",
-		idWidth, "ID", "SEVERITY", "STATUS", "VERIFICATION", auditFindingAgeWidth, "AGE",
-		auditFindingScanWidth, "SCAN", auditFindingLocationWidth, "LOCATION", "TITLE / TAGS")
+		idWidth, "ID", "SEVERITY", "STATUS", "VERIFICATION", auditFindingAgeWidth, "LINE AGE",
+		auditFindingAuthorWidth, "AUTHOR", auditFindingLocationWidth, "LOCATION", "TITLE / TAGS")
 	for _, finding := range findings {
-		age := time.Time{}
-		if finding.ObservedAt != nil {
-			age = *finding.ObservedAt
-		}
+		age := findingAttributionTime(finding.Finding)
 		title := singleLine(finding.Title)
 		if len(finding.Tags) > 0 {
 			title += "  [" + strings.Join(finding.Tags, ", ") + "]"
 		}
+		author := "(unknown)"
+		if finding.Attribution != nil && finding.Attribution.Status == attributionStatusAttributed {
+			author = finding.Attribution.Author
+		}
 		fmt.Fprintf(output, "%-*s  %-8s  %-9s  %-14s  %-*s  %-*s  %-*s  %s\n",
 			idWidth, "#"+strconv.FormatInt(finding.ID, 10), finding.Severity, finding.Status,
 			finding.Verification, auditFindingAgeWidth, formatFindingAge(now, age),
-			auditFindingScanWidth, truncateTerminalText(finding.ScanID, auditFindingScanWidth),
+			auditFindingAuthorWidth, truncateTerminalText(author, auditFindingAuthorWidth),
 			auditFindingLocationWidth, findingLocation(finding.Finding), title)
 	}
 }

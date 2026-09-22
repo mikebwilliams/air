@@ -91,8 +91,12 @@ document reuses its ID and approval while making it current; `latest` remains
 the most recently created document. Older storage migrates on write without
 rewriting inventory documents or approvals. Schema version 3 adds semantic
 profiles and immutable per-file results. Version 4 adds scan, task, attempt,
-finding, and lifecycle event tables. Inspection supports versions 1 through 4
-without migration; writers upgrade older Repose databases transactionally.
+finding, and lifecycle event tables. Inspection accepts supported historical
+versions without migration; writers upgrade older Repose databases transactionally.
+Later migrations add recheck batches, finding tags, model pricing, prompt
+configuration, and schema version 10 line attribution. Attribution is stored
+separately from immutable finding claims and can be resumed or retried without
+rewriting model output.
 
 New exclusions require a reason and a matching C/C++ file/directory prefix.
 Inclusion overrides follow the same ordered policy. Exclusions remove direct
@@ -216,6 +220,8 @@ scan rather than changing the meaning of previous completion.
    finding tags with audited bulk edits. Incomplete or malformed responses
    fail the batch. Existing single-finding passes still resume by ID with their
    original protocol. The TUI and JSON expose verdicts, reasoning, and history.
+   New findings retain Git blame author and age attribution for their exact observed line;
+   `finding backfill-authors` fills older databases in resumable file groups.
    JSON, SARIF, and offline HTML exports retain snapshot provenance and verification
    history. HTML uses source excerpts at the observed snapshot with verdict filters.
    Repose backup creation and validated import preserve the complete worktree-local

@@ -133,7 +133,7 @@ func TestReposeHelpRegistryIsComplete(t *testing.T) {
 		"scan":      {"create", "run", "resume", "list", "show", "tasks", "attempts", "prompt", "pause", "interrupt"},
 		"recheck":   nil,
 		"findings":  nil,
-		"finding":   {"list", "show", "dismiss", "reopen", "note", "source", "open", "tag", "untag"},
+		"finding":   {"list", "show", "dismiss", "reopen", "note", "source", "open", "tag", "untag", "backfill-authors"},
 		"tags":      nil,
 		"stats":     nil,
 		"cost":      nil,

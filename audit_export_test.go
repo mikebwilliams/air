@@ -93,10 +93,13 @@ func TestAuditExportFormatsWithVerificationHistory(t *testing.T) {
 		t.Fatal("SARIF --all lost the manual disposition")
 	}
 	output := export("html", "--scan", source.ID)
-	for _, expected := range []string{"Repose Findings Report", "Source at observed snapshot", `id="search"`, `id="verification"`, `id="tag-filter"`, "function matchesSearch", "function matchesTags", "function revealHashFinding", "function renderVerifications", "</html>"} {
+	for _, expected := range []string{"Repose Findings Report", "Source at observed snapshot", "Line age", `id="search"`, `id="verification"`, `id="tag-filter"`, `value="author"`, "function matchesSearch", "function matchesTags", "function revealHashFinding", "function renderVerifications", "</html>"} {
 		if !strings.Contains(output, expected) {
 			t.Errorf("HTML missing %q", expected)
 		}
+	}
+	if strings.Contains(output, `querySelector('[value=author]').remove()`) {
+		t.Fatal("HTML snapshot report removes author sorting")
 	}
 	if strings.Contains(output, unsafe) || strings.Contains(output, "<script src=") || strings.Contains(output, "<link rel=") {
 		t.Fatal("HTML export is unsafe or depends on external resources")
@@ -106,7 +109,7 @@ func TestAuditExportFormatsWithVerificationHistory(t *testing.T) {
 		t.Fatalf("HTML must retain all dispositions: %+v", html)
 	}
 	for _, f := range html.Findings {
-		if f.IntroducedSHA != "" || f.Author != "" || f.CommitDate != "" || f.ObservedSHA != source.Spec.Plan.SnapshotSHA || f.ObservedAt == nil || f.Review == nil || len(f.Verifications) != 2 || len(f.Diff.Lines) == 0 || f.Diff.Error != "" || !strings.HasPrefix(f.Diff.HunkHeader, "Snapshot ") {
+		if f.IntroducedSHA != "" || f.Author != "AIR Test" || f.BlamedSHA == "" || f.CommitDate != "" || f.ObservedSHA != source.Spec.Plan.SnapshotSHA || f.ObservedAt == nil || f.Review == nil || len(f.Verifications) != 2 || len(f.Diff.Lines) == 0 || f.Diff.Error != "" || !strings.HasPrefix(f.Diff.HunkHeader, "Snapshot ") {
 			t.Fatalf("HTML lost snapshot source or verification: %+v", f)
 		}
 		if strings.Contains(strings.Join(f.Diff.Lines, "\n"), "replacement contents from the live checkout") {
@@ -151,6 +154,8 @@ func TestAuditExportReadOnlyV4AndValidation(t *testing.T) {
 	ctx := context.Background()
 	if _, err := store.db.ExecContext(ctx, `DROP INDEX audit_finding_tags_by_tag;
 		DROP TABLE audit_finding_tags;
+		DROP INDEX audit_finding_attributions_author;
+		DROP TABLE audit_finding_attributions;
 		DROP TABLE config;
 		DROP TABLE models;
 		DROP TABLE audit_recheck_results;

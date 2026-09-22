@@ -84,6 +84,7 @@ func runAudit(ctx context.Context, store *inventoryStore, repository *GitReposit
 	type finished struct {
 		task       auditTask
 		invocation auditInvocation
+		output     *auditOutput
 		err        error
 	}
 	results := make(chan finished, options.Jobs)
@@ -126,15 +127,9 @@ func runAudit(ctx context.Context, store *inventoryStore, repository *GitReposit
 	processResult := func(result finished) error {
 		active--
 		status := "completed"
-		var output *auditOutput
-		if result.err == nil {
-			parsed, parseErr := parseAuditTaskOutput([]byte(result.invocation.StructuredOutput), result.task.Input)
-			if parseErr != nil {
-				result.err = parseErr
-			} else {
-				output = &parsed
-				status = parsed.Status
-			}
+		output := result.output
+		if output != nil {
+			status = output.Status
 		}
 		var providerLimit *auditProviderLimit
 		if result.err != nil {
@@ -253,7 +248,19 @@ func runAudit(ctx context.Context, store *inventoryStore, repository *GitReposit
 				go func(task auditTask) {
 					defer workers.Done()
 					invocation, err := runner(workContext, modelConfig, task.Input.Prompt)
-					results <- finished{task, invocation, err}
+					var output *auditOutput
+					if err == nil {
+						parsed, parseErr := parseAuditTaskOutput([]byte(invocation.StructuredOutput), task.Input)
+						if parseErr != nil {
+							err = parseErr
+						} else {
+							output = &parsed
+							if scan.Spec.Recheck == nil && len(output.Findings) > 0 {
+								attributeAuditOutput(repository, scan.Spec.Plan.SnapshotSHA, output)
+							}
+						}
+					}
+					results <- finished{task: task, invocation: invocation, output: output, err: err}
 				}(*task)
 				continue
 			}

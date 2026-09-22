@@ -406,7 +406,7 @@ func (s *inventoryStore) finishAuditTask(ctx context.Context, scan auditScan, ta
 			}
 		}
 	} else if output != nil && (status == "completed" || status == "unable_to_assess") {
-		for _, finding := range output.Findings {
+		for index, finding := range output.Findings {
 			data, err := json.Marshal(finding)
 			if err != nil {
 				return err
@@ -421,6 +421,11 @@ func (s *inventoryStore) finishAuditTask(ctx context.Context, scan auditScan, ta
 			}
 			if _, err = tx.ExecContext(ctx, "INSERT INTO audit_finding_events(finding_id,action,note,created_at) VALUES(?,'observed',?,?)", id, "Scan "+scan.ID+", assignment "+task.ID, formatTime(now)); err != nil {
 				return err
+			}
+			if index < len(output.Attributions) {
+				if err = insertFindingAttribution(ctx, tx, id, output.Attributions[index], now); err != nil {
+					return err
+				}
 			}
 		}
 	}

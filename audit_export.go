@@ -269,7 +269,8 @@ func buildAuditSARIF(findings []auditExportFinding) sarifLog {
 		result.Fingerprints = map[string]string{"repose/finding-id": fmt.Sprintf("%s/%s/%s", f.ObservedSHA, f.ScanID, strconv.FormatInt(f.ID, 10))}
 		result.Properties = sarifProperties{FindingID: f.ID, ObservedSHA: f.ObservedSHA, ObservedAt: f.ObservedAt,
 			ScanID: f.ScanID, TaskID: f.TaskID, AttemptID: f.AttemptID, Disposition: findingDisposition(f.Finding),
-			DismissedAt: f.DismissedAt, DismissReason: f.DismissReason, Tags: f.Tags, Review: f.Review, Events: f.Events, Verifications: f.Verifications}
+			DismissedAt: f.DismissedAt, DismissReason: f.DismissReason, Tags: f.Tags, Review: f.Review, Events: f.Events,
+			Verifications: f.Verifications, Attribution: f.Attribution}
 		if f.Symbol != nil {
 			result.Properties.Symbol = *f.Symbol
 		}

@@ -1904,6 +1904,7 @@ type sarifProperties struct {
 	Review        *htmlExportReview   `json:"review,omitempty"`
 	Events        []htmlExportEvent   `json:"events,omitempty"`
 	Verifications []auditVerification `json:"verifications,omitempty"`
+	Attribution   *FindingAttribution `json:"attribution,omitempty"`
 }
 
 func buildSARIF(findings []Finding) sarifLog {
@@ -1917,7 +1918,7 @@ func buildSARIF(findings []Finding) sarifLog {
 				"air/finding-id": strconv.FormatInt(finding.ID, 10),
 			},
 			Properties: sarifProperties{
-				FindingID: finding.ID, IntroducedBy: finding.IntroducedSHA,
+				FindingID: finding.ID, IntroducedBy: finding.IntroducedSHA, Attribution: finding.Attribution,
 			},
 		}
 		if finding.Symbol != nil {
