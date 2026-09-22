@@ -396,7 +396,7 @@ func reposeFindingHelpCommands() []cliCommandSpec {
 			),
 		},
 		{Name: "show", Summary: "Show one finding's provenance and complete history.", Usage: []string{"repose finding show ID [OPTIONS]", "repose finding ID [OPTIONS]"}, Options: reposeJSONHelpOptions(cliHelpOption{"--scan ID", "Restrict lookup to one scan; a recheck selects its source scan."})},
-		{Name: "dismiss", Summary: "Dismiss an open finding with a recorded reason.", Usage: []string{"repose finding dismiss ID --reason TEXT [OPTIONS]"}, Options: reposeRepoHelpOptions(cliHelpOption{"--reason TEXT", "Required dismissal reason stored in finding history."})},
+		{Name: "dismiss", Summary: "Dismiss one or more open findings atomically.", Usage: []string{"repose finding dismiss ID... --reason TEXT [OPTIONS]"}, Options: reposeRepoHelpOptions(cliHelpOption{"--reason TEXT", "Required shared dismissal reason stored in each finding's history."}, cliHelpOption{"--ignore-closed", "Skip IDs that are already dismissed; other validation remains atomic."})},
 		{Name: "reopen", Summary: "Return a dismissed finding to open.", Usage: []string{"repose finding reopen ID [OPTIONS]"}, Options: reposeRepoHelpOptions()},
 		{Name: "note", Summary: "Add a note to a finding's history.", Usage: []string{"repose finding note ID --reason TEXT [OPTIONS]"}, Options: reposeRepoHelpOptions(cliHelpOption{"--reason TEXT", "Note text to store in finding history."})},
 		{Name: "source", Summary: "Show source from the exact recorded snapshot.", Usage: []string{"repose finding source ID [OPTIONS]"}, Options: reposeJSONHelpOptions(cliHelpOption{"--context N", "Lines before and after the finding (default: 20; maximum: 1000)."})},

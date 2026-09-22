@@ -273,7 +273,7 @@ func (s *auditFindingStore) UntagFindings(ctx context.Context, ids []int64, tags
 }
 
 func (s *auditFindingStore) edit(ctx context.Context, id int64, action, note string, now time.Time) error {
-	if (action == "dismissed" || action == "note") && strings.TrimSpace(note) == "" {
+	if action == "note" && strings.TrimSpace(note) == "" {
 		return errors.New("a reason or note is required")
 	}
 	writer, err := openInventoryStore(ctx, s.databasePath, false)
@@ -297,9 +297,7 @@ func (s *auditFindingStore) edit(ctx context.Context, id int64, action, note str
 	if n != 1 {
 		return errors.New("finding not found")
 	}
-	if action == "dismissed" {
-		result, err = tx.ExecContext(ctx, "UPDATE audit_findings SET dismissed_at=?,dismiss_reason=? WHERE id=? AND dismissed_at IS NULL", formatTime(now), note, id)
-	} else if action == "reopened" {
+	if action == "reopened" {
 		result, err = tx.ExecContext(ctx, "UPDATE audit_findings SET dismissed_at=NULL,dismiss_reason='' WHERE id=? AND dismissed_at IS NOT NULL", id)
 	}
 	if err != nil {
@@ -319,7 +317,93 @@ func (s *auditFindingStore) edit(ctx context.Context, id int64, action, note str
 }
 
 func (s *auditFindingStore) DismissFinding(ctx context.Context, id int64, note string, now time.Time) error {
-	return s.edit(ctx, id, "dismissed", note, now)
+	_, err := s.DismissFindings(ctx, []int64{id}, note, false, now)
+	return err
+}
+
+func (s *auditFindingStore) DismissFindings(ctx context.Context, ids []int64, note string, ignoreClosed bool, now time.Time) (int, error) {
+	if len(ids) == 0 {
+		return 0, errors.New("at least one finding ID is required")
+	}
+	if strings.TrimSpace(note) == "" {
+		return 0, errors.New("a dismissal reason is required")
+	}
+	seen := make(map[int64]bool, len(ids))
+	for _, id := range ids {
+		if id < 1 {
+			return 0, errors.New("finding IDs must be positive")
+		}
+		if seen[id] {
+			return 0, fmt.Errorf("finding #%d was supplied more than once", id)
+		}
+		seen[id] = true
+	}
+	writer, err := openInventoryStore(ctx, s.databasePath, false)
+	if err != nil {
+		return 0, err
+	}
+	defer writer.Close()
+	tx, err := writer.db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback()
+	check, err := tx.PrepareContext(ctx, "SELECT scan_id,dismissed_at FROM audit_findings WHERE id=?")
+	if err != nil {
+		return 0, err
+	}
+	defer check.Close()
+	openIDs := make([]int64, 0, len(ids))
+	for _, id := range ids {
+		var scanID string
+		var dismissed sql.NullString
+		if err := check.QueryRowContext(ctx, id).Scan(&scanID, &dismissed); errors.Is(err, sql.ErrNoRows) {
+			return 0, fmt.Errorf("finding #%d not found", id)
+		} else if err != nil {
+			return 0, err
+		}
+		if s.scanID != "" && scanID != s.scanID {
+			return 0, fmt.Errorf("finding #%d is outside the selected scan", id)
+		}
+		if dismissed.Valid {
+			if ignoreClosed {
+				continue
+			}
+			return 0, fmt.Errorf("finding #%d is already dismissed", id)
+		}
+		openIDs = append(openIDs, id)
+	}
+	stamp := formatTime(now)
+	update, err := tx.PrepareContext(ctx, "UPDATE audit_findings SET dismissed_at=?,dismiss_reason=? WHERE id=? AND dismissed_at IS NULL")
+	if err != nil {
+		return 0, err
+	}
+	defer update.Close()
+	event, err := tx.PrepareContext(ctx, "INSERT INTO audit_finding_events(finding_id,action,note,created_at) VALUES(?,'dismissed',?,?)")
+	if err != nil {
+		return 0, err
+	}
+	defer event.Close()
+	for _, id := range openIDs {
+		result, err := update.ExecContext(ctx, stamp, note, id)
+		if err != nil {
+			return 0, err
+		}
+		changed, err := result.RowsAffected()
+		if err != nil {
+			return 0, err
+		}
+		if changed != 1 {
+			return 0, errors.New("finding disposition changed; no findings were dismissed")
+		}
+		if _, err := event.ExecContext(ctx, id, note, stamp); err != nil {
+			return 0, err
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, err
+	}
+	return len(openIDs), nil
 }
 func (s *auditFindingStore) ReopenFinding(ctx context.Context, id int64, now time.Time) error {
 	return s.edit(ctx, id, "reopened", "", now)
@@ -442,6 +526,7 @@ func runAuditFindingsCLI(ctx context.Context, args []string, environment cliEnvi
 	includeAll := flags.Bool("all", false, "include dismissed findings")
 	verification := flags.String("verification", "all", "filter latest verdict: all, unchecked, confirmed, false_positive, uncertain")
 	reason := flags.String("reason", "", "dismissal reason or note text")
+	ignoreClosed := flags.Bool("ignore-closed", false, "skip already-dismissed findings in a dismissal batch")
 	tagValues := flags.StringArray("tag", nil, "require a tag, or add/remove it for tag actions (repeatable)")
 	if err := flags.Parse(args[offset:]); err != nil {
 		return err
@@ -454,14 +539,19 @@ func runAuditFindingsCLI(ctx context.Context, args []string, environment cliEnvi
 		return err
 	}
 	bulkTagAction := singular && (command == "tag" || command == "untag")
-	if !singular && flags.NArg() != 0 || singular && !bulkTagAction && flags.NArg() != 1 || bulkTagAction && flags.NArg() == 0 {
-		return errors.New("findings takes no positional arguments; show/dismiss/reopen/note require one ID; tag/untag require one or more IDs")
+	bulkDismissAction := singular && command == "dismiss"
+	bulkAction := bulkTagAction || bulkDismissAction
+	if !singular && flags.NArg() != 0 || singular && !bulkAction && flags.NArg() != 1 || bulkAction && flags.NArg() == 0 {
+		return errors.New("findings takes no positional arguments; show/reopen/note require one ID; dismiss/tag/untag require one or more IDs")
 	}
 	if bulkTagAction && len(tags) == 0 {
 		return errors.New("tag and untag require at least one --tag TAG")
 	}
 	if singular && !bulkTagAction && len(tags) > 0 {
 		return errors.New("--tag filters findings lists and supplies tags to tag/untag actions")
+	}
+	if *ignoreClosed && (!singular || command != "dismiss") {
+		return errors.New("--ignore-closed is only valid for finding dismiss")
 	}
 	repository, err := DiscoverGitRepository(ctx, reposeAbsolutePath(environment.Cwd, *repo))
 	if err != nil {
@@ -525,7 +615,17 @@ func runAuditFindingsCLI(ctx context.Context, args []string, environment cliEnvi
 			}
 			return errors.New("finding not found in selected scope")
 		case "dismiss":
-			err = store.DismissFinding(ctx, id, *reason, environmentNow(environment))
+			changes := 0
+			changes, err = store.DismissFindings(ctx, ids, *reason, *ignoreClosed, environmentNow(environment))
+			if err == nil && *ignoreClosed {
+				fmt.Fprintf(environment.Stdout, "Dismissed %d %s; skipped %d already dismissed.\n",
+					changes, statusPlural(changes, "finding", "findings"), len(ids)-changes)
+				return nil
+			}
+			if err == nil && len(ids) > 1 {
+				fmt.Fprintf(environment.Stdout, "Dismissed %d findings.\n", changes)
+				return nil
+			}
 		case "reopen":
 			err = store.ReopenFinding(ctx, id, environmentNow(environment))
 		case "note":

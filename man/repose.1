@@ -229,11 +229,18 @@ completes the check but leaves evidence inconclusive. Results preserve original
 findings and manual dispositions; no automatic dismissal occurs. Model identity,
 snapshot, raw responses, and verification history remain available for inspection.
 .TP
-.B repose finding show|dismiss|reopen|note ID
-Inspect or triage one finding. Dismiss and note require --reason TEXT.
+.B repose finding show|reopen|note ID
+Inspect or triage one finding. Note requires --reason TEXT.
 Findings preserve the observed commit, scan, assignment, attempt, and model
 provenance. Recheck verdicts supplement original findings. Automatic consolidation
 is not implemented.
+.TP
+.B repose finding dismiss ID... --reason TEXT
+Dismiss one or more open findings with the same recorded reason. Every ID and
+disposition is validated before any finding is changed. The dismissal and one
+history event per finding are committed atomically. --ignore-closed skips IDs
+that are already dismissed while retaining atomic validation for missing,
+duplicate, invalid, or out-of-scope IDs.
 .TP
 .B repose fix create FINDING_ID [FINDING_ID...]
 Create one pending fix containing the supplied findings in argument order. Every

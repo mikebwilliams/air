@@ -60,6 +60,10 @@ func TestReposeHelpWorksWithoutRepositoryState(t *testing.T) {
 			contains: []string{"repose finding source ID [OPTIONS]", "--context N", "recorded snapshot"},
 		},
 		{
+			name: "bulk finding dismiss", args: []string{"finding", "dismiss", "--help"},
+			contains: []string{"repose finding dismiss ID... --reason TEXT [OPTIONS]", "one or more open findings atomically", "shared dismissal reason", "--ignore-closed"},
+		},
+		{
 			name: "fix run", args: []string{"fix", "run", "--help"},
 			contains: []string{"repose fix run --worktree DIR --model MODEL [OPTIONS]", "--retry-failed", "development checkout"},
 		},

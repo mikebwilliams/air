@@ -111,6 +111,13 @@ order. Repose retains attempts and token usage, does not commit changes, and
 does not mark findings resolved. A model-process failure stops the queue so the
 development checkout can be inspected before `--retry-failed`.
 
+Dismiss several findings with one shared audited reason:
+
+```bash
+repose finding dismiss 123 456 789 --reason "Addressed together in fix #4"
+repose finding dismiss 123 456 789 --reason "Duplicate report" --ignore-closed
+```
+
 Run `repose status` for current progress, `repose doctor` for a read-only health
 check, `repose help` or `repose COMMAND --help` for command documentation, and
 `man repose` for the complete reference. The

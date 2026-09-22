@@ -127,6 +127,100 @@ func TestAuditFindingDetailAliasAndJSON(t *testing.T) {
 	}
 }
 
+func TestAuditFindingBulkDismissIsAtomic(t *testing.T) {
+	repository, _, scan, backend, findings := auditTagFixture(t)
+	ctx := context.Background()
+	now := time.Date(2026, 9, 22, 14, 0, 0, 0, time.UTC)
+	first, second, remaining := findings[0].ID, findings[1].ID, findings[2].ID
+	if _, err := backend.DismissFindings(ctx, []int64{first, 9999999}, "must be atomic", false, now); err == nil {
+		t.Fatal("bulk dismissal accepted a missing finding")
+	}
+	loaded, err := backend.AllFindings(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, finding := range loaded {
+		if finding.DismissedAt != nil {
+			t.Fatalf("failed bulk dismissal changed finding #%d", finding.ID)
+		}
+	}
+
+	var stdout bytes.Buffer
+	environment := cliEnvironment{Cwd: repository.WorkTree, Stdout: &stdout, Stderr: io.Discard, Now: func() time.Time { return now }}
+	args := []string{"finding", "dismiss", strconv.FormatInt(first, 10), strconv.FormatInt(second, 10),
+		"--scan", scan.ID, "--reason", "Addressed together in fix #4"}
+	if err := runReposeCLI(ctx, args, environment); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(stdout.String(), "Dismissed 2 findings") {
+		t.Fatalf("bulk dismissal output = %q", stdout.String())
+	}
+	loaded, err = backend.AllFindings(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	byID := make(map[int64]Finding, len(loaded))
+	for _, finding := range loaded {
+		byID[finding.ID] = finding
+	}
+	if byID[first].DismissedAt == nil || byID[second].DismissedAt == nil || byID[remaining].DismissedAt != nil ||
+		byID[first].DismissReason != "Addressed together in fix #4" || byID[second].DismissReason != "Addressed together in fix #4" {
+		t.Fatalf("bulk dismissal state = %+v", loaded)
+	}
+	for _, id := range []int64{first, second} {
+		events, err := backend.FindingEvents(ctx, id)
+		if err != nil || len(events) == 0 || events[len(events)-1].Action != "dismissed" || events[len(events)-1].Note != "Addressed together in fix #4" {
+			t.Fatalf("finding #%d events = %+v, err=%v", id, events, err)
+		}
+	}
+	if _, err := backend.DismissFindings(ctx, []int64{remaining, first}, "must roll back", false, now.Add(time.Minute)); err == nil {
+		t.Fatal("bulk dismissal accepted an already dismissed finding")
+	}
+	loaded, err = backend.AllFindings(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, finding := range loaded {
+		if finding.ID == remaining && finding.DismissedAt != nil {
+			t.Fatal("validation failure partially dismissed the remaining finding")
+		}
+	}
+
+	firstEvents, err := backend.FindingEvents(ctx, first)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stdout.Reset()
+	args = []string{"finding", "dismiss", strconv.FormatInt(remaining, 10), strconv.FormatInt(first, 10),
+		"--scan", scan.ID, "--reason", "Only close open findings", "--ignore-closed"}
+	if err := runReposeCLI(ctx, args, environment); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(stdout.String(), "Dismissed 1 finding; skipped 1 already dismissed") {
+		t.Fatalf("ignore-closed output = %q", stdout.String())
+	}
+	loaded, err = backend.AllFindings(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	byID = make(map[int64]Finding, len(loaded))
+	for _, finding := range loaded {
+		byID[finding.ID] = finding
+	}
+	if byID[remaining].DismissedAt == nil || byID[remaining].DismissReason != "Only close open findings" ||
+		byID[first].DismissReason != "Addressed together in fix #4" {
+		t.Fatalf("ignore-closed state = %+v", loaded)
+	}
+	afterFirstEvents, err := backend.FindingEvents(ctx, first)
+	if err != nil || len(afterFirstEvents) != len(firstEvents) {
+		t.Fatalf("ignored finding received an event: before=%+v after=%+v err=%v", firstEvents, afterFirstEvents, err)
+	}
+	remainingEvents, err := backend.FindingEvents(ctx, remaining)
+	if err != nil || len(remainingEvents) == 0 || remainingEvents[len(remainingEvents)-1].Note != "Only close open findings" {
+		t.Fatalf("dismissed finding events = %+v, err=%v", remainingEvents, err)
+	}
+}
+
 func TestAuditFindingSourceReadsRecordedSnapshot(t *testing.T) {
 	repository, _, _, _, findings := auditTagFixture(t)
 	ctx := context.Background()
